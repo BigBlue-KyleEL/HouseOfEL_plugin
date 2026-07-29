@@ -1,0 +1,25 @@
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+.gradletasknamecache
+
+# IDE
+.idea/
+*.iml
+.vscode/
+out/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Local secrets / config (e.g. Gemini API key files) - tighten this once
+# the actual config file names exist in Phase 0-D / the LLM module
+local.properties
+.env
+*.env
+secrets.yml
