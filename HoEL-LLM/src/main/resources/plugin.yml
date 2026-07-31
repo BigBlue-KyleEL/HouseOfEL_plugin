@@ -1,0 +1,6 @@
+name: HoEL-LLM
+version: 0.1.0
+main: com.houseofel.llm.HoELLLM
+api-version: '1.13'
+author: Kyle
+description: House of EL - Gemini API / LLM dialogue bridge module (empty shell, Phase 0)

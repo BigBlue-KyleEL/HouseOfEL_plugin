@@ -1,0 +1,6 @@
+name: HoEL-Builder
+version: 0.1.0
+main: com.houseofel.builder.HoELBuilder
+api-version: '1.13'
+author: Kyle
+description: House of EL - Builder/Gatherer companion NPC module (empty shell, Phase 0)

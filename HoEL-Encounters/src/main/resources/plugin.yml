@@ -1,0 +1,6 @@
+name: HoEL-Encounters
+version: 0.1.0
+main: com.houseofel.encounters.HoELEncounters
+api-version: '1.13'
+author: Kyle
+description: House of EL - Combat/encounter module (empty shell, Phase 0)
