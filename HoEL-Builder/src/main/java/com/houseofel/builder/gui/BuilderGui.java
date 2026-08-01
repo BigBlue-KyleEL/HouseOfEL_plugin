@@ -1,5 +1,6 @@
 package com.houseofel.builder.gui;
 
+import com.houseofel.builder.region.RegionSelectionService;
 import net.citizensnpcs.api.npc.NPC;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
@@ -20,8 +21,8 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * Task-configuration GUI for a Helper NPC: task-type and target selection only.
- * No job dispatch yet — selections just live in memory per NPC for this session.
+ * Task-configuration GUI for a Helper NPC: task-type and target selection.
+ * Picking both hands the player a Surveyor's Rod and closes the GUI — no dispatch logic here.
  */
 public final class BuilderGui implements Listener {
 
@@ -41,6 +42,10 @@ public final class BuilderGui implements Listener {
             this.icon = icon;
             this.slot = slot;
         }
+
+        public String label() {
+            return label;
+        }
     }
 
     public enum Target {
@@ -58,9 +63,18 @@ public final class BuilderGui implements Listener {
             this.icon = icon;
             this.slot = slot;
         }
+
+        public String label() {
+            return label;
+        }
     }
 
     private final Map<UUID, Selection> selections = new HashMap<>();
+    private final RegionSelectionService regionService;
+
+    public BuilderGui(RegionSelectionService regionService) {
+        this.regionService = regionService;
+    }
 
     public void open(Player player, NPC npc) {
         Selection selection = selections.computeIfAbsent(npc.getUniqueId(), id -> new Selection());
@@ -94,11 +108,13 @@ public final class BuilderGui implements Listener {
 
         Selection selection = selections.computeIfAbsent(holder.npcId(), id -> new Selection());
         int slot = event.getSlot();
+        Player player = (Player) event.getWhoClicked();
 
         for (TaskType type : TaskType.values()) {
             if (type.slot == slot) {
                 selection.taskType = (selection.taskType == type) ? null : type;
                 render(event.getInventory(), selection);
+                maybeHandOff(player, holder.npcId(), selection);
                 return;
             }
         }
@@ -106,9 +122,19 @@ public final class BuilderGui implements Listener {
             if (target.slot == slot) {
                 selection.target = (selection.target == target) ? null : target;
                 render(event.getInventory(), selection);
+                maybeHandOff(player, holder.npcId(), selection);
                 return;
             }
         }
+    }
+
+    private void maybeHandOff(Player player, UUID npcId, Selection selection) {
+        if (selection.taskType == null || selection.target == null) {
+            return;
+        }
+        selections.remove(npcId);
+        player.closeInventory();
+        regionService.beginJob(player, selection.taskType, selection.target);
     }
 
     private void render(Inventory inventory, Selection selection) {

@@ -8,7 +8,7 @@ depend: [Citizens]
 commands:
   builder:
     description: Manage Helper (builder/gatherer) NPCs
-    usage: /builder spawn
+    usage: /builder spawn|confirm|cancel
 permissions:
   houseofel.builder.spawn:
     description: Allows spawning a Helper NPC
