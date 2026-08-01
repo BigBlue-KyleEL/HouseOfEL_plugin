@@ -3,4 +3,13 @@ version: 0.1.0
 main: com.houseofel.builder.HoELBuilder
 api-version: '1.13'
 author: Kyle
-description: House of EL - Builder/Gatherer companion NPC module (empty shell, Phase 0)
+description: House of EL - Builder module (Helper NPC builder/gatherer companion systems)
+depend: [Citizens]
+commands:
+  builder:
+    description: Manage Helper (builder/gatherer) NPCs
+    usage: /builder spawn
+permissions:
+  houseofel.builder.spawn:
+    description: Allows spawning a Helper NPC
+    default: false
