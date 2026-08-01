@@ -24,7 +24,9 @@ import java.util.logging.Logger;
 public final class RegionSelectionService {
 
     /** Safety cap per axis, to keep future FAWE jobs from lag-bombing the server. */
-    private static final int MAX_DIMENSION = 48;
+    private static final int MAX_DIMENSION = 200;
+    /** Off for now while testing big regions — re-enable once a real duration is chosen. */
+    private static final boolean TIMEOUT_ENABLED = false;
     private static final int TIMEOUT_TICKS = 20 * 20;
     private static final int PARTICLE_TICK_PERIOD = 20;
 
@@ -108,16 +110,20 @@ public final class RegionSelectionService {
             player.sendMessage(Component.text(
                     "Region too large (" + dx + " x " + dy + " x " + dz + ", max " + MAX_DIMENSION
                             + " per side). Rod consumed — visit the Helper again for a new one.", NamedTextColor.RED));
+            logger.info(player.getName() + " rejected: region " + dx + "x" + dy + "x" + dz + " exceeds " + MAX_DIMENSION);
             finish(player);
             return;
         }
 
         job.particleTask = Bukkit.getScheduler().runTaskTimer(plugin,
                 () -> drawBoxOutline(player, job.pointA, job.pointB), 0L, PARTICLE_TICK_PERIOD);
-        job.timeoutTask = Bukkit.getScheduler().runTaskLater(plugin, () -> {
-            player.sendMessage(Component.text("Region confirmation timed out.", NamedTextColor.RED));
-            finish(player);
-        }, TIMEOUT_TICKS);
+        if (TIMEOUT_ENABLED) {
+            job.timeoutTask = Bukkit.getScheduler().runTaskLater(plugin, () -> {
+                player.sendMessage(Component.text("Region confirmation timed out.", NamedTextColor.RED));
+                logger.info(player.getName() + " region confirmation timed out");
+                finish(player);
+            }, TIMEOUT_TICKS);
+        }
 
         player.sendMessage(Component.text(
                 "Region marked: " + dx + " x " + dy + " x " + dz + " for " + job.taskType.label() + " "
