@@ -23,8 +23,8 @@ import java.util.logging.Logger;
  */
 public final class RegionSelectionService {
 
-    /** Safety cap per axis, to keep future FAWE jobs from lag-bombing the server. */
-    private static final int MAX_DIMENSION = 200;
+    /** Safety cap on total blocks, to keep future FAWE jobs from lag-bombing the server. */
+    private static final long MAX_VOLUME = 1_500_000L;
     /** Off for now while testing big regions — re-enable once a real duration is chosen. */
     private static final boolean TIMEOUT_ENABLED = false;
     private static final int TIMEOUT_TICKS = 20 * 20;
@@ -105,12 +105,14 @@ public final class RegionSelectionService {
         int dx = Math.abs(job.pointB.getBlockX() - job.pointA.getBlockX()) + 1;
         int dy = Math.abs(job.pointB.getBlockY() - job.pointA.getBlockY()) + 1;
         int dz = Math.abs(job.pointB.getBlockZ() - job.pointA.getBlockZ()) + 1;
+        long volume = (long) dx * dy * dz;
 
-        if (dx > MAX_DIMENSION || dy > MAX_DIMENSION || dz > MAX_DIMENSION) {
+        if (volume > MAX_VOLUME) {
             player.sendMessage(Component.text(
-                    "Region too large (" + dx + " x " + dy + " x " + dz + ", max " + MAX_DIMENSION
-                            + " per side). Rod consumed — visit the Helper again for a new one.", NamedTextColor.RED));
-            logger.info(player.getName() + " rejected: region " + dx + "x" + dy + "x" + dz + " exceeds " + MAX_DIMENSION);
+                    "Region too large (" + dx + " x " + dy + " x " + dz + " = " + volume + " blocks, max "
+                            + MAX_VOLUME + "). Rod consumed — visit the Helper again for a new one.", NamedTextColor.RED));
+            logger.info(player.getName() + " rejected: region " + dx + "x" + dy + "x" + dz + " (" + volume
+                    + " blocks) exceeds " + MAX_VOLUME);
             finish(player);
             return;
         }
