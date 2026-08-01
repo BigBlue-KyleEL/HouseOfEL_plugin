@@ -46,6 +46,11 @@ public final class BuilderGui implements Listener {
         public String label() {
             return label;
         }
+
+        /** The tool the NPC equips while performing this task in the world. */
+        public Material tool() {
+            return icon;
+        }
     }
 
     public enum Target {
@@ -67,6 +72,14 @@ public final class BuilderGui implements Listener {
         public String label() {
             return label;
         }
+
+        /** Whether a world block counts as this target — Dirt also covers Grass Block. */
+        public boolean matches(Material candidate) {
+            if (this == DIRT) {
+                return candidate == Material.DIRT || candidate == Material.GRASS_BLOCK;
+            }
+            return candidate == icon;
+        }
     }
 
     private final Map<UUID, Selection> selections = new HashMap<>();
@@ -78,6 +91,7 @@ public final class BuilderGui implements Listener {
 
     public void open(Player player, NPC npc) {
         Selection selection = selections.computeIfAbsent(npc.getUniqueId(), id -> new Selection());
+        selection.npc = npc;
 
         BuilderGuiHolder holder = new BuilderGuiHolder(npc.getUniqueId());
         Inventory inventory = Bukkit.createInventory(holder, 27,
@@ -134,7 +148,7 @@ public final class BuilderGui implements Listener {
         }
         selections.remove(npcId);
         player.closeInventory();
-        regionService.beginJob(player, selection.taskType, selection.target);
+        regionService.beginJob(player, selection.npc, selection.taskType, selection.target);
     }
 
     private void render(Inventory inventory, Selection selection) {
@@ -158,6 +172,7 @@ public final class BuilderGui implements Listener {
     }
 
     private static final class Selection {
+        private NPC npc;
         private TaskType taskType;
         private Target target;
     }

@@ -2,6 +2,8 @@ package com.houseofel.builder.region;
 
 import com.houseofel.builder.gui.BuilderGui.Target;
 import com.houseofel.builder.gui.BuilderGui.TaskType;
+import com.houseofel.builder.job.JobExecutionService;
+import net.citizensnpcs.api.npc.NPC;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import org.bukkit.Bukkit;
@@ -33,18 +35,20 @@ public final class RegionSelectionService {
     private final Plugin plugin;
     private final Logger logger;
     private final SurveyorRod rod;
+    private final JobExecutionService jobExecutionService;
     private final Map<UUID, PendingJob> jobs = new HashMap<>();
 
-    public RegionSelectionService(Plugin plugin, SurveyorRod rod) {
+    public RegionSelectionService(Plugin plugin, SurveyorRod rod, JobExecutionService jobExecutionService) {
         this.plugin = plugin;
         this.logger = plugin.getLogger();
         this.rod = rod;
+        this.jobExecutionService = jobExecutionService;
     }
 
     /** Called once both task type and target are picked in the Helper NPC's GUI. */
-    public void beginJob(Player player, TaskType taskType, Target target) {
+    public void beginJob(Player player, NPC npc, TaskType taskType, Target target) {
         clearJob(player.getUniqueId());
-        jobs.put(player.getUniqueId(), new PendingJob(taskType, target));
+        jobs.put(player.getUniqueId(), new PendingJob(npc, taskType, target));
         rod.giveTo(player);
     }
 
@@ -79,10 +83,19 @@ public final class RegionSelectionService {
     }
 
     private void doConfirm(Player player, PendingJob job) {
-        player.sendMessage(Component.text("Region confirmed for " + job.taskType.label() + " " + job.target.label()
-                + " — logged, no job dispatched yet.", NamedTextColor.GREEN));
         logger.info(player.getName() + " confirmed " + job.taskType + "/" + job.target + " region "
                 + describe(job.pointA) + " to " + describe(job.pointB));
+
+        if (job.taskType == TaskType.CLEAR) {
+            Location pointA = job.pointA;
+            Location pointB = job.pointB;
+            finish(player);
+            jobExecutionService.dispatchClear(player, job.npc, job.taskType.tool(), job.target, pointA, pointB);
+            return;
+        }
+
+        player.sendMessage(Component.text("Region confirmed for " + job.taskType.label() + " " + job.target.label()
+                + " — logged, but only Clearing is wired up to actually run so far.", NamedTextColor.GREEN));
         finish(player);
     }
 
@@ -202,6 +215,7 @@ public final class RegionSelectionService {
     }
 
     private static final class PendingJob {
+        private final NPC npc;
         private final TaskType taskType;
         private final Target target;
         private Location pointA;
@@ -209,7 +223,8 @@ public final class RegionSelectionService {
         private BukkitTask particleTask;
         private BukkitTask timeoutTask;
 
-        private PendingJob(TaskType taskType, Target target) {
+        private PendingJob(NPC npc, TaskType taskType, Target target) {
+            this.npc = npc;
             this.taskType = taskType;
             this.target = target;
         }

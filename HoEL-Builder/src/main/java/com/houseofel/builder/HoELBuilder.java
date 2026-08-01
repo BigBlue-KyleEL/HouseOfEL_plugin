@@ -2,6 +2,7 @@ package com.houseofel.builder;
 
 import com.houseofel.builder.command.BuilderCommand;
 import com.houseofel.builder.gui.BuilderGui;
+import com.houseofel.builder.job.JobExecutionService;
 import com.houseofel.builder.npc.BuilderNpcListener;
 import com.houseofel.builder.npc.BuilderNpcService;
 import com.houseofel.builder.region.RegionSelectionService;
@@ -18,7 +19,8 @@ public final class HoELBuilder extends JavaPlugin {
     public void onEnable() {
         BuilderNpcService npcService = new BuilderNpcService();
         SurveyorRod rod = new SurveyorRod(this);
-        RegionSelectionService regionService = new RegionSelectionService(this, rod);
+        JobExecutionService jobExecutionService = new JobExecutionService(this);
+        RegionSelectionService regionService = new RegionSelectionService(this, rod, jobExecutionService);
         BuilderGui gui = new BuilderGui(regionService);
 
         getCommand("builder").setExecutor(new BuilderCommand(npcService, regionService));
