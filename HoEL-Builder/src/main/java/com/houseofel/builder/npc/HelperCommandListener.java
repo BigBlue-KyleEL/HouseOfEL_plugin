@@ -46,6 +46,11 @@ public final class HelperCommandListener implements Listener {
             new Trigger("enough", "Then my burden is lifted."),
             new Trigger("dismiss", "As you wish."),
             new Trigger("stop", "Understood — stopping."));
+    /** Only meaningful mid grief-ping — see {@link JobManager#requestGriefSkip}. */
+    private static final List<Trigger> GRIEF_SKIP_TRIGGERS = List.of(
+            new Trigger("leave it", "Understood — leaving that one be."),
+            new Trigger("skip it", "Skipping that one, then."),
+            new Trigger("spare it", "Spared. Moving on."));
 
     private static final Component NOT_OWNER_RESPONSE =
             Component.text("That errand isn't yours to call off.", NamedTextColor.GRAY);
@@ -73,7 +78,9 @@ public final class HelperCommandListener implements Listener {
         Trigger pause = matchTrigger(PAUSE_TRIGGERS, rest);
         Trigger resume = pause == null ? matchTrigger(RESUME_TRIGGERS, rest) : null;
         Trigger cancel = (pause == null && resume == null) ? matchTrigger(CANCEL_TRIGGERS, rest) : null;
-        if (pause == null && resume == null && cancel == null) {
+        Trigger griefSkip = (pause == null && resume == null && cancel == null)
+                ? matchTrigger(GRIEF_SKIP_TRIGGERS, rest) : null;
+        if (pause == null && resume == null && cancel == null && griefSkip == null) {
             return;
         }
 
@@ -99,9 +106,12 @@ public final class HelperCommandListener implements Listener {
             } else if (resume != null) {
                 outcome = jobManager.resume(npcId, requester);
                 response = resume.response();
-            } else {
+            } else if (cancel != null) {
                 outcome = jobManager.cancel(npcId, requester);
                 response = cancel.response();
+            } else {
+                outcome = jobManager.requestGriefSkip(npcId, requester);
+                response = griefSkip.response();
             }
 
             if (outcome == Outcome.NOT_OWNER) {

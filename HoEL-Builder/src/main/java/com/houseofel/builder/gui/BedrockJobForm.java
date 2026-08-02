@@ -8,6 +8,7 @@ import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.Plugin;
 import org.geysermc.cumulus.form.CustomForm;
+import org.geysermc.cumulus.form.SimpleForm;
 import org.geysermc.floodgate.api.FloodgateApi;
 import org.geysermc.floodgate.api.player.FloodgatePlayer;
 
@@ -34,7 +35,7 @@ public final class BedrockJobForm {
     }
 
     public void open(Player player, NPC npc) {
-        FloodgatePlayer floodgatePlayer = FloodgateApi.getInstance().getPlayer(player.getUniqueId());
+        FloodgatePlayer floodgatePlayer = floodgatePlayer(player);
         if (floodgatePlayer == null) {
             return;
         }
@@ -46,9 +47,30 @@ public final class BedrockJobForm {
                         .dropdown("Target", labelsOf(Target.values()))
                         .toggle("Surface Only", true)
                         .toggle("Store in Chest", true)
+                        .toggle("Grief Player-Placed Items", false)
                         .validResultHandler(response -> onSubmit(player, npc, response))
                         .closedOrInvalidResultHandler(() -> onClosed(player))
                         .build());
+    }
+
+    /** Shown instead of the usual flow when the concurrency ceiling is full. */
+    public void showBusy(Player player, NPC npc, String eta) {
+        FloodgatePlayer floodgatePlayer = floodgatePlayer(player);
+        if (floodgatePlayer == null) {
+            return;
+        }
+
+        floodgatePlayer.sendForm(
+                SimpleForm.builder()
+                        .title(npc.getName() + " is busy")
+                        .content("Can't help you right now, kiddo — every pair of hands is spoken "
+                                + "for. Check back in " + eta + ".")
+                        .button("Okay")
+                        .build());
+    }
+
+    private FloodgatePlayer floodgatePlayer(Player player) {
+        return FloodgateApi.getInstance().getPlayer(player.getUniqueId());
     }
 
     private void onSubmit(Player player, NPC npc, org.geysermc.cumulus.response.CustomFormResponse response) {
@@ -58,11 +80,12 @@ public final class BedrockJobForm {
         Target target = Target.values()[response.getDropdown(1)];
         boolean surfaceOnly = response.getToggle(2);
         boolean storeInChest = response.getToggle(3);
+        boolean griefPlayerPlaced = response.getToggle(4);
 
         // The form response arrives off the main thread — beginJob() hands out an item
         // and drives the region-selection flow, both of which need to run on it.
         Bukkit.getScheduler().runTask(plugin, () ->
-                regionService.beginJob(player, npc, taskType, target, storeInChest, surfaceOnly));
+                regionService.beginJob(player, npc, taskType, target, storeInChest, surfaceOnly, griefPlayerPlaced));
     }
 
     private void onClosed(Player player) {

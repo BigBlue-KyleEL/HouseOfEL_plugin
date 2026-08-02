@@ -11,6 +11,7 @@ import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.plugin.Plugin;
 
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ThreadLocalRandom;
 
 /** The tool a Helper NPC hands over for marking a job region: left-click sets point A, right-click sets point B. */
@@ -51,13 +52,22 @@ public final class SurveyorRod {
         return Boolean.TRUE.equals(tagged);
     }
 
-    /** Removes any rod(s) already carried, gives a fresh one, and sends a flavor line. */
-    public void giveTo(Player player) {
+    /**
+     * Removes any rod(s) already carried, gives a fresh one, and sends a flavor line.
+     * Returns false without sending the flavor line if the player's inventory had no
+     * room for it — {@code addItem} silently drops what doesn't fit rather than
+     * throwing, so this is the only way to know the hand-off didn't actually happen.
+     */
+    public boolean giveTo(Player player, String npcName) {
         removeAllFrom(player);
-        player.getInventory().addItem(create());
+        Map<Integer, ItemStack> leftover = player.getInventory().addItem(create());
+        if (!leftover.isEmpty()) {
+            return false;
+        }
         String line = FLAVOR_LINES.get(ThreadLocalRandom.current().nextInt(FLAVOR_LINES.size()));
-        player.sendMessage(Component.text("Helper: ", NamedTextColor.DARK_AQUA)
+        player.sendMessage(Component.text(npcName + ": ", NamedTextColor.DARK_AQUA)
                 .append(Component.text(line, NamedTextColor.WHITE)));
+        return true;
     }
 
     /** One-time-use: called once a marking attempt reaches a terminal outcome (confirm/cancel/timeout/reject). */

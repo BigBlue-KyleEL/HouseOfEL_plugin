@@ -45,7 +45,7 @@ public final class BuilderCommand implements CommandExecutor {
             player.sendMessage("You don't have permission to spawn a Helper NPC.");
             return;
         }
-        NPC npc = npcService.spawnHelper(player.getLocation(), "Helper");
+        NPC npc = npcService.spawnHelper(player.getLocation());
         player.sendMessage("Spawned Helper NPC '" + npc.getName() + "' (#" + npc.getId() + ").");
     }
 }

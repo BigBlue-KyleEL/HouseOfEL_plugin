@@ -27,19 +27,31 @@ public final class JobExecutionService {
     private final Plugin plugin;
     private final Logger logger;
     private final JobManager jobManager;
+    private final PlayerPlacementTracker placementTracker;
 
-    public JobExecutionService(Plugin plugin, JobManager jobManager) {
+    public JobExecutionService(Plugin plugin, JobManager jobManager, PlayerPlacementTracker placementTracker) {
         this.plugin = plugin;
         this.logger = plugin.getLogger();
         this.jobManager = jobManager;
+        this.placementTracker = placementTracker;
     }
 
     public void dispatchClear(Player player, NPC npc, Material tool, Target target,
                                Location pointA, Location pointB, boolean storeInChest,
-                               boolean surfaceOnly) {
+                               boolean surfaceOnly, boolean griefPlayerPlaced) {
         Entity npcEntity = npc.getEntity();
         if (npcEntity == null) {
-            player.sendMessage(Component.text("The Helper isn't spawned right now — can't start the job.", NamedTextColor.RED));
+            player.sendMessage(Component.text(
+                    npc.getName() + " isn't spawned right now — can't start the job.", NamedTextColor.RED));
+            return;
+        }
+        // Belt-and-suspenders: BuilderNpcListener already turns players away at the door
+        // when the ceiling is full, but the gap between opening that menu and hitting
+        // confirm is real — another job could have started in between.
+        if (jobManager.isAtCeiling()) {
+            String eta = jobManager.etaOfSoonestJob().orElse("a little while");
+            player.sendMessage(Component.text(
+                    "Every Helper is tied up right now — check back in " + eta + ".", NamedTextColor.RED));
             return;
         }
 
@@ -59,8 +71,8 @@ public final class JobExecutionService {
         TextDisplay label = ClearJobTask.spawnLabel(npcEntity.getLocation());
         EntityEquipment equipment = ClearJobTask.equipTool(npcEntity, tool);
 
-        player.sendMessage(Component.text(npc.getName() + " sets out to clear " + target.label()
-                + " (" + totalCells + " blocks to check)...", NamedTextColor.GREEN));
+        player.sendMessage(Component.text(npc.getName() + ": Right, I'll get started on the "
+                + target.label() + " — " + totalCells + " blocks to check.", NamedTextColor.GREEN));
         logger.info(player.getName() + " dispatched CLEAR/" + target + " job over " + totalCells + " cells");
 
         JobStorage storage = storeInChest
@@ -86,9 +98,9 @@ public final class JobExecutionService {
 
         RegionOutline outline = new RegionOutline(world, minX, minY, minZ, maxX, maxY, maxZ);
 
-        ClearJobTask task = new ClearJobTask(plugin, jobManager, player, npc, npcEntity, equipment, label,
-                world, target, tool, minX, maxX, minY, maxY, minZ, maxZ, spanX, spanZ, totalCells,
-                storage, storeInChest, surfaceOnly, outline);
+        ClearJobTask task = new ClearJobTask(plugin, jobManager, placementTracker, player, npc, npcEntity,
+                equipment, label, world, target, tool, minX, maxX, minY, maxY, minZ, maxZ, spanX, spanZ,
+                totalCells, storage, storeInChest, surfaceOnly, griefPlayerPlaced, outline);
         jobManager.register(task);
         task.start();
     }

@@ -56,10 +56,16 @@ public final class RegionSelectionService {
 
     /** Called once the job is configured and sent off from the Helper NPC's GUI. */
     public void beginJob(Player player, NPC npc, TaskType taskType, Target target,
-                          boolean storeInChest, boolean surfaceOnly) {
+                          boolean storeInChest, boolean surfaceOnly, boolean griefPlayerPlaced) {
         clearJob(player.getUniqueId());
-        jobs.put(player.getUniqueId(), new PendingJob(npc, taskType, target, storeInChest, surfaceOnly));
-        rod.giveTo(player);
+        if (!rod.giveTo(player, npc.getName())) {
+            player.sendMessage(Component.text(
+                    npc.getName() + ": You can't even hold the Surveyor's Rod. Make space.",
+                    NamedTextColor.RED));
+            return;
+        }
+        jobs.put(player.getUniqueId(),
+                new PendingJob(npc, taskType, target, storeInChest, surfaceOnly, griefPlayerPlaced));
     }
 
     /**
@@ -100,7 +106,7 @@ public final class RegionSelectionService {
             Location pointB = job.pointB;
             finish(player);
             jobExecutionService.dispatchClear(player, job.npc, job.taskType.tool(), job.target,
-                    pointA, pointB, job.storeInChest, job.surfaceOnly);
+                    pointA, pointB, job.storeInChest, job.surfaceOnly, job.griefPlayerPlaced);
             return;
         }
 
@@ -135,7 +141,8 @@ public final class RegionSelectionService {
         if (volume > MAX_VOLUME) {
             player.sendMessage(Component.text(
                     "Region too large (" + dx + " x " + dy + " x " + dz + " = " + volume + " blocks, max "
-                            + MAX_VOLUME + "). Rod consumed — visit the Helper again for a new one.", NamedTextColor.RED));
+                            + MAX_VOLUME + "). Rod consumed — visit " + job.npc.getName() + " again for a new one.",
+                    NamedTextColor.RED));
             logger.info(player.getName() + " rejected: region " + dx + "x" + dy + "x" + dz + " (" + volume
                     + " blocks) exceeds " + MAX_VOLUME);
             finish(player);
@@ -217,6 +224,7 @@ public final class RegionSelectionService {
         private final Target target;
         private final boolean storeInChest;
         private final boolean surfaceOnly;
+        private final boolean griefPlayerPlaced;
         private Location pointA;
         private Location pointB;
         private long lastClickMillis;
@@ -224,12 +232,13 @@ public final class RegionSelectionService {
         private BukkitTask timeoutTask;
 
         private PendingJob(NPC npc, TaskType taskType, Target target,
-                            boolean storeInChest, boolean surfaceOnly) {
+                            boolean storeInChest, boolean surfaceOnly, boolean griefPlayerPlaced) {
             this.npc = npc;
             this.taskType = taskType;
             this.target = target;
             this.storeInChest = storeInChest;
             this.surfaceOnly = surfaceOnly;
+            this.griefPlayerPlaced = griefPlayerPlaced;
         }
 
         private boolean locked() {

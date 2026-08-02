@@ -6,6 +6,7 @@ import io.papermc.paper.dialog.DialogResponseView;
 import io.papermc.paper.registry.data.dialog.ActionButton;
 import io.papermc.paper.registry.data.dialog.DialogBase;
 import io.papermc.paper.registry.data.dialog.action.DialogAction;
+import io.papermc.paper.registry.data.dialog.body.DialogBody;
 import io.papermc.paper.registry.data.dialog.input.DialogInput;
 import io.papermc.paper.registry.data.dialog.type.DialogType;
 import net.citizensnpcs.api.npc.NPC;
@@ -40,6 +41,17 @@ public final class JavaJobDialog {
 
     public void open(Player player, NPC npc) {
         showTaskTypeStep(player, npc);
+    }
+
+    /** Shown instead of the usual flow when the concurrency ceiling is full. */
+    public void showBusy(Player player, NPC npc, String eta) {
+        player.showDialog(Dialog.create(factory -> factory.empty()
+                .base(DialogBase.builder(Component.text(npc.getName() + " is busy"))
+                        .body(List.of(DialogBody.plainMessage(Component.text(
+                                "Can't help you right now, kiddo — every pair of hands is spoken "
+                                        + "for. Check back in " + eta + "."))))
+                        .build())
+                .type(DialogType.notice(ActionButton.create(Component.text("Okay"), null, 100, null)))));
     }
 
     private void showTaskTypeStep(Player player, NPC npc) {
@@ -87,7 +99,9 @@ public final class JavaJobDialog {
                                 npc.getName() + " — " + taskType.label() + " " + target.label()))
                         .inputs(List.of(
                                 DialogInput.bool("surfaceOnly", Component.text("Surface Only")).initial(true).build(),
-                                DialogInput.bool("storeInChest", Component.text("Store in Chest")).initial(true).build()
+                                DialogInput.bool("storeInChest", Component.text("Store in Chest")).initial(true).build(),
+                                DialogInput.bool("griefPlayerPlaced", Component.text("Grief Player-Placed Items"))
+                                        .initial(false).build()
                         ))
                         .build())
                 .type(DialogType.confirmation(
@@ -105,10 +119,11 @@ public final class JavaJobDialog {
     private void onSubmit(Player player, NPC npc, TaskType taskType, Target target, DialogResponseView view) {
         boolean surfaceOnly = Boolean.TRUE.equals(view.getBoolean("surfaceOnly"));
         boolean storeInChest = Boolean.TRUE.equals(view.getBoolean("storeInChest"));
+        boolean griefPlayerPlaced = Boolean.TRUE.equals(view.getBoolean("griefPlayerPlaced"));
 
         // beginJob() hands out an item and drives the region-selection flow — run it on
         // the main thread like every other dialog-triggered Bukkit call here.
         Bukkit.getScheduler().runTask(plugin, () ->
-                regionService.beginJob(player, npc, taskType, target, storeInChest, surfaceOnly));
+                regionService.beginJob(player, npc, taskType, target, storeInChest, surfaceOnly, griefPlayerPlaced));
     }
 }

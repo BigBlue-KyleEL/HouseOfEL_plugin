@@ -37,6 +37,7 @@ final class JobStateStore {
         yaml.set("tool", state.tool);
         yaml.set("surfaceOnly", state.surfaceOnly);
         yaml.set("storeInChest", state.storeInChest);
+        yaml.set("griefPlayerPlaced", state.griefPlayerPlaced);
         yaml.set("processedCells", state.processedCells);
         yaml.set("clearedCells", state.clearedCells);
         yaml.set("deposited", state.deposited);
@@ -101,6 +102,7 @@ final class JobStateStore {
             state.tool = yaml.getString("tool");
             state.surfaceOnly = yaml.getBoolean("surfaceOnly");
             state.storeInChest = yaml.getBoolean("storeInChest");
+            state.griefPlayerPlaced = yaml.getBoolean("griefPlayerPlaced");
             state.processedCells = yaml.getLong("processedCells");
             state.clearedCells = yaml.getLong("clearedCells");
             state.deposited = yaml.getLong("deposited");
