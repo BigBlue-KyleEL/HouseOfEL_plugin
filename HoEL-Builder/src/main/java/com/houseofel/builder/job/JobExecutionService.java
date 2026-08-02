@@ -72,11 +72,10 @@ public final class JobExecutionService {
      */
     private static final int CARRY_CAPACITY = 4 * 64;
     /**
-     * TEMPORARY, FOR TESTING ONLY — inflates every drop to 10 stacks so storage fills
-     * fast enough to exercise chest overflow in one short job. Set back to 1 for real
-     * behaviour, otherwise a Helper mints hundreds of blocks out of thin air.
+     * TEMPORARY, FOR TESTING ONLY — set above 1 to inflate drops and exercise chest
+     * overflow without clearing a huge region. Must stay 1 outside of that testing.
      */
-    private static final int TEST_DROP_MULTIPLIER = 10 * 64;
+    private static final int TEST_DROP_MULTIPLIER = 1;
     /** Squared-distance improvement that counts as real progress toward the target. */
     private static final double PROGRESS_EPSILON = 0.05;
     /**
