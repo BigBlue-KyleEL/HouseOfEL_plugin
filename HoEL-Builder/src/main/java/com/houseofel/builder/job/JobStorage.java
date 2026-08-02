@@ -13,9 +13,12 @@ import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.plugin.Plugin;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * The chest(s) a job deposits into. Places a tagged chest just outside the work
@@ -62,7 +65,7 @@ public final class JobStorage {
      * cube keeps re-finding the same column and stacks the next cube on the last one's
      * roof instead of moving to genuinely new ground.
      */
-    private final java.util.Set<Long> occupiedColumns = new java.util.HashSet<>();
+    private final Set<Long> occupiedColumns = new HashSet<>();
     /** Row-0, layer-0 spot of the current cube; every unit in the cube is laid out off this. */
     private Block anchor;
     /**
@@ -89,6 +92,81 @@ public final class JobStorage {
         this.maxY = maxY;
         this.minZ = minZ;
         this.maxZ = maxZ;
+    }
+
+    // --- Persistence accessors -------------------------------------------------------
+    // The layout state below is exactly what addChest()/findGridSpot()/findAdjacentCubeSpot()
+    // need to keep building the same structure seamlessly after a restart. Snapshotting the
+    // real fields (rather than replaying placement history) keeps this exactly in sync with
+    // whatever that logic does, instead of a second copy that could drift out of step with it.
+
+    List<Block> chests() {
+        return chests;
+    }
+
+    Set<Long> occupiedColumns() {
+        return occupiedColumns;
+    }
+
+    Block anchor() {
+        return anchor;
+    }
+
+    Block lastCubeAnchor() {
+        return lastCubeAnchor;
+    }
+
+    Block[] rowFoot() {
+        return rowFoot;
+    }
+
+    int cubeUnitIndex() {
+        return cubeUnitIndex;
+    }
+
+    int rowSign() {
+        return rowSign;
+    }
+
+    int columnSign() {
+        return columnSign;
+    }
+
+    static String encodeBlock(Block block) {
+        return block.getX() + "," + block.getY() + "," + block.getZ();
+    }
+
+    static Block decodeBlock(World world, String encoded) {
+        String[] parts = encoded.split(",");
+        return world.getBlockAt(Integer.parseInt(parts[0]), Integer.parseInt(parts[1]), Integer.parseInt(parts[2]));
+    }
+
+    static String encodeColumn(long key) {
+        return (key >> 32) + "," + (int) key;
+    }
+
+    static long decodeColumn(String encoded) {
+        String[] parts = encoded.split(",");
+        return columnKey(Integer.parseInt(parts[0]), Integer.parseInt(parts[1]));
+    }
+
+    /**
+     * Rebuilds this instance's bookkeeping from a saved snapshot, without re-placing any
+     * blocks — they already exist in the world from before the restart. Must be called
+     * before any deposit/addChest activity, on a freshly constructed, empty instance.
+     */
+    void restore(List<Block> savedChests, Set<Long> savedOccupiedColumns, Block savedAnchor,
+                 Block savedLastCubeAnchor, Block[] savedRowFoot, int savedCubeUnitIndex,
+                 int savedRowSign, int savedColumnSign) {
+        chests.addAll(savedChests);
+        occupiedColumns.addAll(savedOccupiedColumns);
+        anchor = savedAnchor;
+        lastCubeAnchor = savedLastCubeAnchor;
+        rowFoot[0] = savedRowFoot[0];
+        rowFoot[1] = savedRowFoot[1];
+        cubeUnitIndex = savedCubeUnitIndex;
+        rowSign = savedRowSign;
+        columnSign = savedColumnSign;
     }
 
     /** Where the NPC should walk to unload. Places the first chest if there isn't one yet. */
@@ -207,7 +285,7 @@ public final class JobStorage {
             anchor = spot;
             lastCubeAnchor = spot;
             cubeUnitIndex = 0;
-            java.util.Arrays.fill(rowFoot, null);
+            Arrays.fill(rowFoot, null);
             if (firstCubeEver) {
                 // Growth direction is set once, from the very first cube, and reused by
                 // every cube after — so the whole site tiles in one consistent direction
@@ -434,7 +512,7 @@ public final class JobStorage {
         };
     }
 
-    private long columnKey(int x, int z) {
+    private static long columnKey(int x, int z) {
         return (((long) x) << 32) ^ (z & 0xffffffffL);
     }
 

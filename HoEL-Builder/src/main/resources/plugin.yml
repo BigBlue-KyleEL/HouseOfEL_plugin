@@ -5,6 +5,7 @@ api-version: '1.13'
 author: Kyle
 description: House of EL - Builder module (Helper NPC builder/gatherer companion systems)
 depend: [Citizens]
+softdepend: [floodgate]
 commands:
   builder:
     description: Manage Helper (builder/gatherer) NPCs

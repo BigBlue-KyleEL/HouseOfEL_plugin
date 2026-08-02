@@ -1,7 +1,7 @@
 package com.houseofel.builder.region;
 
-import com.houseofel.builder.gui.BuilderGui.Target;
-import com.houseofel.builder.gui.BuilderGui.TaskType;
+import com.houseofel.builder.gui.Target;
+import com.houseofel.builder.gui.TaskType;
 import com.houseofel.builder.job.JobExecutionService;
 import net.citizensnpcs.api.npc.NPC;
 import net.kyori.adventure.text.Component;
@@ -12,15 +12,19 @@ import org.bukkit.entity.Player;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.scheduler.BukkitTask;
 
-import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Logger;
 
 /**
- * Drives one Surveyor's Rod job end to end: hand-off, point marking, then the rod
- * "locks" once both points are set — further clicks confirm/cancel instead of
- * remarking. The rod is consumed on any terminal outcome. No job dispatch here.
+ * Drives one Surveyor's Rod job end to end: hand-off, point marking, then a locked
+ * region awaiting a "Yep"/"Wait" chat reply. Point marking is click-type-agnostic —
+ * whichever click (or tap) comes first sets point A, the next sets point B — since
+ * Bedrock's touch controls don't map cleanly onto discrete left/right clicks; a single
+ * "hold" gesture there can fire both event types in quick succession, which is also why
+ * clicks within {@link #DEBOUNCE_MILLIS} of each other collapse into one. The rod is
+ * consumed on any terminal outcome. No job dispatch here.
  */
 public final class RegionSelectionService {
 
@@ -30,12 +34,18 @@ public final class RegionSelectionService {
     private static final boolean TIMEOUT_ENABLED = false;
     private static final int TIMEOUT_TICKS = 20 * 20;
     private static final int PARTICLE_TICK_PERIOD = 20;
+    /**
+     * Clicks this close together are treated as one physical gesture, not two separate
+     * points — a Bedrock "hold" can fire a left- and right-click event within a few
+     * milliseconds of each other for the same tap.
+     */
+    private static final long DEBOUNCE_MILLIS = 300;
 
     private final Plugin plugin;
     private final Logger logger;
     private final SurveyorRod rod;
     private final JobExecutionService jobExecutionService;
-    private final Map<UUID, PendingJob> jobs = new HashMap<>();
+    private final Map<UUID, PendingJob> jobs = new ConcurrentHashMap<>();
 
     public RegionSelectionService(Plugin plugin, SurveyorRod rod, JobExecutionService jobExecutionService) {
         this.plugin = plugin;
@@ -52,33 +62,32 @@ public final class RegionSelectionService {
         rod.giveTo(player);
     }
 
-    /** Left-click: marks point A while unlocked, or cancels once locked (awaiting confirmation). */
-    public void onLeftClick(Player player, Location location) {
+    /**
+     * Any click/tap while unlocked marks whichever point isn't set yet — point A first,
+     * then point B. Once locked, clicks do nothing; confirming or cancelling happens via
+     * a "Yep"/"Wait" chat reply (see {@link RegionConfirmListener}) or the equivalent
+     * {@code /builder confirm}/{@code /builder cancel} commands, both of which work
+     * identically regardless of platform.
+     */
+    public void onClick(Player player, Location location) {
         PendingJob job = jobs.get(player.getUniqueId());
-        if (job == null) {
+        if (job == null || job.locked()) {
             return;
         }
-        if (job.locked()) {
-            doCancel(player, job);
-            return;
-        }
-        job.pointA = location;
-        announce(player, "A", location);
-        tryLock(player, job);
-    }
 
-    /** Right-click: marks point B while unlocked, or confirms once locked (awaiting confirmation). */
-    public void onRightClick(Player player, Location location) {
-        PendingJob job = jobs.get(player.getUniqueId());
-        if (job == null) {
+        long now = System.currentTimeMillis();
+        if (now - job.lastClickMillis < DEBOUNCE_MILLIS) {
             return;
         }
-        if (job.locked()) {
-            doConfirm(player, job);
-            return;
+        job.lastClickMillis = now;
+
+        if (job.pointA == null) {
+            job.pointA = location;
+            announce(player, "A", location);
+        } else {
+            job.pointB = location;
+            announce(player, "B", location);
         }
-        job.pointB = location;
-        announce(player, "B", location);
         tryLock(player, job);
     }
 
@@ -101,7 +110,9 @@ public final class RegionSelectionService {
     }
 
     private void doCancel(Player player, PendingJob job) {
-        player.sendMessage(Component.text("Region selection cancelled.", NamedTextColor.RED));
+        player.sendMessage(Component.text(
+                job.npc.getName() + " lowers the rod. Come find me again when you're ready for a new job.",
+                NamedTextColor.RED));
         finish(player);
     }
 
@@ -142,12 +153,18 @@ public final class RegionSelectionService {
         }
 
         player.sendMessage(Component.text(
-                "Region marked: " + dx + " x " + dy + " x " + dz + " for " + job.taskType.label() + " "
-                        + job.target.label() + ". Right-click to CONFIRM, left-click to CANCEL.",
+                job.npc.getName() + " looks over the marked area — " + dx + " x " + dy + " x " + dz + " ("
+                        + volume + " blocks) for " + job.taskType.label() + " " + job.target.label()
+                        + ". Say \"Yep\" to begin, or \"Wait\" to call it off.",
                 NamedTextColor.AQUA));
     }
 
-    /** Secondary path for confirm/cancel, in case a player prefers typing over re-clicking the rod. */
+    /** Thread-safe existence check for the async chat listener — see {@link RegionConfirmListener}. */
+    public boolean hasPending(UUID playerId) {
+        return jobs.containsKey(playerId);
+    }
+
+    /** Confirm/cancel entry point for both the "Yep"/"Wait" chat reply and the /builder command fallback. */
     public void confirmPending(Player player) {
         PendingJob job = jobs.get(player.getUniqueId());
         if (job == null || !job.locked()) {
@@ -202,6 +219,7 @@ public final class RegionSelectionService {
         private final boolean surfaceOnly;
         private Location pointA;
         private Location pointB;
+        private long lastClickMillis;
         private BukkitTask particleTask;
         private BukkitTask timeoutTask;
 

@@ -1,6 +1,5 @@
 package com.houseofel.builder.region;
 
-import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.Action;
@@ -8,8 +7,11 @@ import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.inventory.EquipmentSlot;
 
 /**
- * Left/right-click with a Surveyor's Rod marks point A / point B of a job region.
- * Once both points are set the rod locks, and the same clicks confirm/cancel instead.
+ * Clicking (or tapping, on Bedrock) a block with a Surveyor's Rod marks the next unset
+ * point of the pending region — point A first, then point B. Left- and right-click are
+ * treated identically: Bedrock's touch controls don't map cleanly onto discrete mouse
+ * buttons, so distinguishing them isn't reliable there. Confirming or cancelling once
+ * both points are set happens via chat instead — see {@link RegionSelectionService}.
  */
 public final class SurveyorListener implements Listener {
 
@@ -30,15 +32,12 @@ public final class SurveyorListener implements Listener {
             return;
         }
 
-        Player player = event.getPlayer();
         Action action = event.getAction();
-
-        if (action == Action.LEFT_CLICK_BLOCK) {
-            event.setCancelled(true);
-            regionService.onLeftClick(player, event.getClickedBlock().getLocation());
-        } else if (action == Action.RIGHT_CLICK_BLOCK) {
-            event.setCancelled(true);
-            regionService.onRightClick(player, event.getClickedBlock().getLocation());
+        if (action != Action.LEFT_CLICK_BLOCK && action != Action.RIGHT_CLICK_BLOCK) {
+            return;
         }
+
+        event.setCancelled(true);
+        regionService.onClick(event.getPlayer(), event.getClickedBlock().getLocation());
     }
 }

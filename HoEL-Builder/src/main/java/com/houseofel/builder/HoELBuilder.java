@@ -1,10 +1,14 @@
 package com.houseofel.builder;
 
 import com.houseofel.builder.command.BuilderCommand;
-import com.houseofel.builder.gui.BuilderGui;
+import com.houseofel.builder.gui.BedrockJobForm;
+import com.houseofel.builder.gui.JavaJobDialog;
 import com.houseofel.builder.job.JobExecutionService;
+import com.houseofel.builder.job.JobManager;
 import com.houseofel.builder.npc.BuilderNpcListener;
 import com.houseofel.builder.npc.BuilderNpcService;
+import com.houseofel.builder.npc.HelperCommandListener;
+import com.houseofel.builder.region.RegionConfirmListener;
 import com.houseofel.builder.region.RegionSelectionService;
 import com.houseofel.builder.region.SurveyorListener;
 import com.houseofel.builder.region.SurveyorRod;
@@ -15,24 +19,34 @@ import org.bukkit.plugin.java.JavaPlugin;
  */
 public final class HoELBuilder extends JavaPlugin {
 
+    private JobManager jobManager;
+
     @Override
     public void onEnable() {
         BuilderNpcService npcService = new BuilderNpcService();
         SurveyorRod rod = new SurveyorRod(this);
-        JobExecutionService jobExecutionService = new JobExecutionService(this);
+        jobManager = new JobManager(this);
+        JobExecutionService jobExecutionService = new JobExecutionService(this, jobManager);
         RegionSelectionService regionService = new RegionSelectionService(this, rod, jobExecutionService);
-        BuilderGui gui = new BuilderGui(regionService);
+        JavaJobDialog javaDialog = new JavaJobDialog(this, regionService);
+        BedrockJobForm bedrockForm = new BedrockJobForm(this, regionService);
 
         getCommand("builder").setExecutor(new BuilderCommand(npcService, regionService));
-        getServer().getPluginManager().registerEvents(new BuilderNpcListener(npcService, gui), this);
-        getServer().getPluginManager().registerEvents(gui, this);
+        getServer().getPluginManager().registerEvents(new BuilderNpcListener(npcService, javaDialog, bedrockForm), this);
+        getServer().getPluginManager().registerEvents(new HelperCommandListener(this, npcService, jobManager), this);
         getServer().getPluginManager().registerEvents(new SurveyorListener(rod, regionService), this);
+        getServer().getPluginManager().registerEvents(new RegionConfirmListener(this, regionService), this);
+
+        jobManager.resumeAllOnEnable();
 
         getLogger().info("HoEL-Builder enabled.");
     }
 
     @Override
     public void onDisable() {
+        if (jobManager != null) {
+            jobManager.saveAllOnDisable();
+        }
         getLogger().info("HoEL-Builder disabled.");
     }
 }
