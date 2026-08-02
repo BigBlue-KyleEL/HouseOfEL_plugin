@@ -19,8 +19,9 @@ import java.util.Map;
 
 /**
  * The chest(s) a job deposits into. Places a tagged chest just outside the work
- * region on first use, and adds another alongside whenever they fill up, so a job
- * is never blocked for want of storage.
+ * region on first use, and adds more whenever they fill up — packed into a flush
+ * 2-row-by-3-layer cube of double chests before starting a fresh cube elsewhere —
+ * so a job is never blocked for want of storage.
  */
 public final class JobStorage {
 
@@ -32,13 +33,18 @@ public final class JobStorage {
     private static final int HAZARD_RADIUS = 2;
     /** Bound on how many times one deposit will build more storage before giving up. */
     private static final int MAX_EXPANSIONS_PER_DEPOSIT = 4;
-    /** Chests fill two rows deep before starting a new column alongside. */
-    private static final int ROWS_PER_COLUMN = 2;
-    /** A double chest is two blocks wide; the extra block keeps columns from merging. */
-    private static final int COLUMN_STRIDE = 3;
+    /** Two rows of double chests, packed flush front-to-back, per layer. */
+    private static final int ROWS_PER_LAYER = 2;
+    /** Layers stack flush on top of each other before a fresh cube starts elsewhere. */
+    private static final int LAYERS_PER_CUBE = 3;
+    private static final int UNITS_PER_CUBE = ROWS_PER_LAYER * LAYERS_PER_CUBE;
     /** Chests face north, so "behind" is one block south. */
     private static final int ROW_STRIDE = 1;
-    /** How far up/down to look for footing when the storage block crosses uneven ground. */
+    /** A double chest is two blocks wide; the next cube starts flush against that edge. */
+    private static final int CUBE_WIDTH = 2;
+    /** Two rows deep; a cube attaching front/back starts flush against that edge instead. */
+    private static final int CUBE_DEPTH = ROWS_PER_LAYER * ROW_STRIDE;
+    /** How far to widen the search, closest-Y-first, when a row's base spot isn't level with the anchor. */
     private static final int GRID_VERTICAL_SEARCH = 3;
 
     private final NamespacedKey key;
@@ -50,12 +56,28 @@ public final class JobStorage {
     private final int minZ;
     private final int maxZ;
     private final List<Block> chests = new ArrayList<>();
-    /** First chest placed; everything after it is laid out relative to this one. */
+    /**
+     * (x, z) columns this job has already built on. A finished cube's rooftop is
+     * technically open, hazard-free ground — without this, the ring search for a fresh
+     * cube keeps re-finding the same column and stacks the next cube on the last one's
+     * roof instead of moving to genuinely new ground.
+     */
+    private final java.util.Set<Long> occupiedColumns = new java.util.HashSet<>();
+    /** Row-0, layer-0 spot of the current cube; every unit in the cube is laid out off this. */
     private Block anchor;
-    private int unitsPlaced;
-    /** Which way the grid grows on each axis — away from the region, matching the anchor's side. */
-    private int columnSign;
+    /**
+     * Row-0, layer-0 spot of the most recently completed (or current) cube. Unlike
+     * {@link #anchor}, this never resets to null, so the next cube can site itself
+     * flush beside it instead of via an unrelated search around the whole job region.
+     */
+    private Block lastCubeAnchor;
+    /** Most recently placed chest for each row (index 0/1) — the next layer stacks flush on top of it. */
+    private final Block[] rowFoot = new Block[ROWS_PER_LAYER];
+    /** Which unit (0..UNITS_PER_CUBE-1) comes next within the current cube. */
+    private int cubeUnitIndex;
+    /** Which way rows grow and cubes extend — away from the region, set once from the first cube's side. */
     private int rowSign;
+    private int columnSign;
 
     public JobStorage(Plugin plugin, World world,
                        int minX, int maxX, int minY, int maxY, int minZ, int maxZ) {
@@ -126,15 +148,24 @@ public final class JobStorage {
     }
 
     /**
-     * Stands a tagged double chest. The first one is sited by searching outside the
-     * region; every one after that extends a tidy grid off the first — filling the slot
-     * behind before starting a new column beside — so storage stays in one block rather
-     * than scattering across the landscape. Falls back to a fresh search if the next
-     * grid slot happens to be unusable ground.
+     * Stands a tagged double chest. The very first unit ever is sited by searching
+     * outside the region; every unit after that packs flush against its neighbours —
+     * two rows deep, stacked three layers high, forming one 2-wide-by-3-tall block of
+     * storage. Once a cube fills, the next one starts flush beside it, not off in some
+     * unrelated spot the region-wide search happens to prefer. Falls back to that wider
+     * search only if beside-the-last-cube (or the very first search) turns up nothing.
      */
     private boolean addChest() {
-        Block spot = anchor == null ? findChestSpot() : findGridSpot();
-        if (spot == null) {
+        boolean startingCube = anchor == null;
+        Block spot;
+        if (!startingCube) {
+            spot = findGridSpot();
+        } else if (lastCubeAnchor != null) {
+            spot = findAdjacentCubeSpot();
+            if (spot == null) {
+                spot = findChestSpot();
+            }
+        } else {
             spot = findChestSpot();
         }
         if (spot == null) {
@@ -146,8 +177,14 @@ public final class JobStorage {
         Block partner = null;
         for (BlockFace side : new BlockFace[] {BlockFace.EAST, BlockFace.WEST}) {
             Block candidate = spot.getRelative(side);
-            if (isFreeStandingSpot(candidate)
-                    && candidate.getRelative(BlockFace.DOWN).getType().isSolid()) {
+            if (!isFreeStandingSpot(candidate)) {
+                continue;
+            }
+            if (candidate.getRelative(BlockFace.DOWN).getType().isSolid()
+                    || candidate.getRelative(BlockFace.DOWN, 2).getType().isSolid()) {
+                // Either flush ground, or the ground steps down one block right at the
+                // partner — pair it at the primary's Y anyway (floating over the step)
+                // rather than lose the double chest, since both halves must share a Y.
                 partner = candidate;
                 break;
             }
@@ -161,40 +198,96 @@ public final class JobStorage {
         }
 
         chests.add(spot);
-        if (anchor == null) {
-            anchor = spot;
-            double centreX = (minX + maxX) / 2.0;
-            double centreZ = (minZ + maxZ) / 2.0;
-            columnSign = anchor.getX() >= centreX ? 1 : -1;
-            rowSign = anchor.getZ() >= centreZ ? 1 : -1;
+        occupiedColumns.add(columnKey(spot.getX(), spot.getZ()));
+        if (partner != null) {
+            occupiedColumns.add(columnKey(partner.getX(), partner.getZ()));
         }
-        unitsPlaced++;
+        if (startingCube) {
+            boolean firstCubeEver = lastCubeAnchor == null;
+            anchor = spot;
+            lastCubeAnchor = spot;
+            cubeUnitIndex = 0;
+            java.util.Arrays.fill(rowFoot, null);
+            if (firstCubeEver) {
+                // Growth direction is set once, from the very first cube, and reused by
+                // every cube after — so the whole site tiles in one consistent direction
+                // instead of each cube re-deriving its own (possibly conflicting) side.
+                double centreX = (minX + maxX) / 2.0;
+                double centreZ = (minZ + maxZ) / 2.0;
+                columnSign = anchor.getX() >= centreX ? 1 : -1;
+                rowSign = anchor.getZ() >= centreZ ? 1 : -1;
+            }
+        }
+        rowFoot[cubeUnitIndex % ROWS_PER_LAYER] = spot;
+        cubeUnitIndex++;
+        if (cubeUnitIndex >= UNITS_PER_CUBE) {
+            // Cube's full — the next unit starts a fresh one flush beside this one.
+            anchor = null;
+        }
         return true;
     }
 
     /**
-     * Next slot in the storage block, laid out off the first chest:
-     * unit 1 goes behind unit 0, unit 2 beside unit 0, unit 3 behind unit 2, and so on.
-     * Columns are spaced so neighbouring doubles can't accidentally merge into each other.
-     *
-     * <p>Growth direction on each axis matches whichever side of the region the anchor
-     * already landed on. Growing a fixed east/south regardless of that would walk the
-     * grid straight back through the region on three of its four sides — including,
-     * mid-job, through ground that's still being dug.
+     * Site for the next cube, flush against one edge of the one that just filled up —
+     * so storage grows as one tiled structure instead of scattering across the ring
+     * search's next "nearest open ground," which could be nowhere near the last cube.
+     * Tries all four sides (both column directions, then both row directions) before
+     * giving up, so one obstructed side — a dig site, a tree, uneven ground — doesn't
+     * bounce the next cube off to some unrelated spot; only genuinely surrounding it
+     * falls back to the wider search.
+     */
+    private Block findAdjacentCubeSpot() {
+        int[][] offsets = {
+            {CUBE_WIDTH * columnSign, 0},
+            {-CUBE_WIDTH * columnSign, 0},
+            {0, CUBE_DEPTH * rowSign},
+            {0, -CUBE_DEPTH * rowSign},
+        };
+        for (int[] offset : offsets) {
+            Block candidate = findNearGround(
+                    lastCubeAnchor.getX() + offset[0],
+                    lastCubeAnchor.getY(),
+                    lastCubeAnchor.getZ() + offset[1]);
+            if (candidate != null) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Next slot in the current cube. The first appearance of a row searches near the
+     * anchor, allowed to step the ground up or down a block if that's genuinely where it
+     * sits; every layer after that stacks flush on top of the chest placed for that row
+     * one level below, so the stack rises with zero gap.
      */
     private Block findGridSpot() {
-        int column = unitsPlaced / ROWS_PER_COLUMN;
-        int row = unitsPlaced % ROWS_PER_COLUMN;
+        int row = cubeUnitIndex % ROWS_PER_LAYER;
+        Block below = rowFoot[row];
+        if (below != null) {
+            Block above = below.getRelative(BlockFace.UP);
+            return isFreeStandingSpot(above) && isHazardFree(above) ? above : null;
+        }
 
-        int x = anchor.getX() + column * COLUMN_STRIDE * columnSign;
+        int x = anchor.getX();
         int z = anchor.getZ() + row * ROW_STRIDE * rowSign;
+        return findNearGround(x, anchor.getY(), z);
+    }
 
-        for (int dy = GRID_VERTICAL_SEARCH; dy >= -GRID_VERTICAL_SEARCH; dy--) {
-            Block candidate = world.getBlockAt(x, anchor.getY() + dy, z);
-            if (isFreeStandingSpot(candidate)
-                    && candidate.getRelative(BlockFace.DOWN).getType().isSolid()
-                    && isHazardFree(candidate)) {
-                return candidate;
+    /**
+     * Searches outward from the expected height, closest first, so a row sits level
+     * with the anchor wherever it can and only steps down (or up) a block when the
+     * terrain genuinely does.
+     */
+    private Block findNearGround(int x, int expectedY, int z) {
+        for (int dy = 0; dy <= GRID_VERTICAL_SEARCH; dy++) {
+            for (int sign : dy == 0 ? new int[] {0} : new int[] {-1, 1}) {
+                Block candidate = world.getBlockAt(x, expectedY + dy * sign, z);
+                if (isFreeStandingSpot(candidate)
+                        && candidate.getRelative(BlockFace.DOWN).getType().isSolid()
+                        && isHazardFree(candidate)) {
+                    return candidate;
+                }
             }
         }
         return null;
@@ -287,6 +380,9 @@ public final class JobStorage {
     }
 
     private Block groundSpotAt(int x, int z) {
+        if (occupiedColumns.contains(columnKey(x, z))) {
+            return null;
+        }
         int startY = Math.min(maxY + VERTICAL_SEARCH, world.getMaxHeight() - 2);
         int endY = Math.max(minY - VERTICAL_SEARCH, world.getMinHeight() + 1);
 
@@ -336,6 +432,10 @@ public final class JobStorage {
                  WATER, POWDER_SNOW, CACTUS, TNT -> true;
             default -> false;
         };
+    }
+
+    private long columnKey(int x, int z) {
+        return (((long) x) << 32) ^ (z & 0xffffffffL);
     }
 
     /**
