@@ -82,6 +82,10 @@ public final class BuilderGui implements Listener {
         }
     }
 
+    private static final int SURFACE_TOGGLE_SLOT = 2;
+    private static final int STORE_TOGGLE_SLOT = 4;
+    private static final int SEND_SLOT = 26;
+
     private final Map<UUID, Selection> selections = new HashMap<>();
     private final RegionSelectionService regionService;
 
@@ -124,11 +128,25 @@ public final class BuilderGui implements Listener {
         int slot = event.getSlot();
         Player player = (Player) event.getWhoClicked();
 
+        if (slot == SURFACE_TOGGLE_SLOT) {
+            selection.surfaceOnly = !selection.surfaceOnly;
+            render(event.getInventory(), selection);
+            return;
+        }
+        if (slot == STORE_TOGGLE_SLOT) {
+            selection.storeInChest = !selection.storeInChest;
+            render(event.getInventory(), selection);
+            return;
+        }
+        if (slot == SEND_SLOT) {
+            handOff(player, holder.npcId(), selection);
+            return;
+        }
+
         for (TaskType type : TaskType.values()) {
             if (type.slot == slot) {
                 selection.taskType = (selection.taskType == type) ? null : type;
                 render(event.getInventory(), selection);
-                maybeHandOff(player, holder.npcId(), selection);
                 return;
             }
         }
@@ -136,19 +154,20 @@ public final class BuilderGui implements Listener {
             if (target.slot == slot) {
                 selection.target = (selection.target == target) ? null : target;
                 render(event.getInventory(), selection);
-                maybeHandOff(player, holder.npcId(), selection);
                 return;
             }
         }
     }
 
-    private void maybeHandOff(Player player, UUID npcId, Selection selection) {
+    private void handOff(Player player, UUID npcId, Selection selection) {
         if (selection.taskType == null || selection.target == null) {
+            player.sendMessage(Component.text("Pick a task type and a target first.", NamedTextColor.RED));
             return;
         }
         selections.remove(npcId);
         player.closeInventory();
-        regionService.beginJob(player, selection.npc, selection.taskType, selection.target);
+        regionService.beginJob(player, selection.npc, selection.taskType, selection.target,
+                selection.storeInChest, selection.surfaceOnly);
     }
 
     private void render(Inventory inventory, Selection selection) {
@@ -158,6 +177,47 @@ public final class BuilderGui implements Listener {
         for (Target target : Target.values()) {
             inventory.setItem(target.slot, buildIcon(target.icon, target.label, selection.target == target));
         }
+
+        inventory.setItem(SURFACE_TOGGLE_SLOT, buildSurfaceToggle(selection.surfaceOnly));
+        inventory.setItem(STORE_TOGGLE_SLOT, buildToggle(selection.storeInChest));
+        inventory.setItem(SEND_SLOT, buildSendButton(
+                selection.taskType != null && selection.target != null));
+    }
+
+    private ItemStack buildSurfaceToggle(boolean surfaceOnly) {
+        ItemStack item = new ItemStack(surfaceOnly ? Material.GRASS_BLOCK : Material.DEEPSLATE);
+        ItemMeta meta = item.getItemMeta();
+        meta.displayName(Component.text("Surface Only",
+                surfaceOnly ? NamedTextColor.GREEN : NamedTextColor.GOLD));
+        meta.lore(List.of(surfaceOnly
+                ? Component.text("On — only clears open-air blocks", NamedTextColor.GREEN)
+                : Component.text("Off — hollows out buried blocks too", NamedTextColor.GOLD)));
+        item.setItemMeta(meta);
+        return item;
+    }
+
+    private ItemStack buildToggle(boolean enabled) {
+        ItemStack item = new ItemStack(enabled ? Material.CHEST : Material.BARRIER);
+        ItemMeta meta = item.getItemMeta();
+        meta.displayName(Component.text("Store in Chest",
+                enabled ? NamedTextColor.GREEN : NamedTextColor.GRAY));
+        meta.lore(List.of(enabled
+                ? Component.text("On — hauls drops to a chest", NamedTextColor.GREEN)
+                : Component.text("Off — cleared blocks are discarded", NamedTextColor.GRAY)));
+        item.setItemMeta(meta);
+        return item;
+    }
+
+    private ItemStack buildSendButton(boolean ready) {
+        ItemStack item = new ItemStack(ready ? Material.LIME_WOOL : Material.GRAY_WOOL);
+        ItemMeta meta = item.getItemMeta();
+        meta.displayName(Component.text("Send to work",
+                ready ? NamedTextColor.GREEN : NamedTextColor.GRAY));
+        meta.lore(List.of(ready
+                ? Component.text("Click for the Surveyor's Rod", NamedTextColor.GREEN)
+                : Component.text("Pick a task type and target first", NamedTextColor.GRAY)));
+        item.setItemMeta(meta);
+        return item;
     }
 
     private ItemStack buildIcon(Material material, String label, boolean selected) {
@@ -175,5 +235,7 @@ public final class BuilderGui implements Listener {
         private NPC npc;
         private TaskType taskType;
         private Target target;
+        private boolean storeInChest = true;
+        private boolean surfaceOnly = true;
     }
 }

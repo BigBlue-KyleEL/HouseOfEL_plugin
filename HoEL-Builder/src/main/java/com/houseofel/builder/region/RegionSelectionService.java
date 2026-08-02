@@ -8,7 +8,6 @@ import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
-import org.bukkit.Particle;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.scheduler.BukkitTask;
@@ -45,10 +44,11 @@ public final class RegionSelectionService {
         this.jobExecutionService = jobExecutionService;
     }
 
-    /** Called once both task type and target are picked in the Helper NPC's GUI. */
-    public void beginJob(Player player, NPC npc, TaskType taskType, Target target) {
+    /** Called once the job is configured and sent off from the Helper NPC's GUI. */
+    public void beginJob(Player player, NPC npc, TaskType taskType, Target target,
+                          boolean storeInChest, boolean surfaceOnly) {
         clearJob(player.getUniqueId());
-        jobs.put(player.getUniqueId(), new PendingJob(npc, taskType, target));
+        jobs.put(player.getUniqueId(), new PendingJob(npc, taskType, target, storeInChest, surfaceOnly));
         rod.giveTo(player);
     }
 
@@ -90,7 +90,8 @@ public final class RegionSelectionService {
             Location pointA = job.pointA;
             Location pointB = job.pointB;
             finish(player);
-            jobExecutionService.dispatchClear(player, job.npc, job.taskType.tool(), job.target, pointA, pointB);
+            jobExecutionService.dispatchClear(player, job.npc, job.taskType.tool(), job.target,
+                    pointA, pointB, job.storeInChest, job.surfaceOnly);
             return;
         }
 
@@ -179,35 +180,14 @@ public final class RegionSelectionService {
     }
 
     private void drawBoxOutline(Player player, Location a, Location b) {
-        double minX = Math.min(a.getBlockX(), b.getBlockX());
-        double minY = Math.min(a.getBlockY(), b.getBlockY());
-        double minZ = Math.min(a.getBlockZ(), b.getBlockZ());
-        double maxX = Math.max(a.getBlockX(), b.getBlockX()) + 1;
-        double maxY = Math.max(a.getBlockY(), b.getBlockY()) + 1;
-        double maxZ = Math.max(a.getBlockZ(), b.getBlockZ()) + 1;
-
-        for (double x = minX; x <= maxX; x += 1.0) {
-            spawnEdgePoint(player, x, minY, minZ);
-            spawnEdgePoint(player, x, minY, maxZ);
-            spawnEdgePoint(player, x, maxY, minZ);
-            spawnEdgePoint(player, x, maxY, maxZ);
-        }
-        for (double y = minY; y <= maxY; y += 1.0) {
-            spawnEdgePoint(player, minX, y, minZ);
-            spawnEdgePoint(player, minX, y, maxZ);
-            spawnEdgePoint(player, maxX, y, minZ);
-            spawnEdgePoint(player, maxX, y, maxZ);
-        }
-        for (double z = minZ; z <= maxZ; z += 1.0) {
-            spawnEdgePoint(player, minX, minY, z);
-            spawnEdgePoint(player, minX, maxY, z);
-            spawnEdgePoint(player, maxX, minY, z);
-            spawnEdgePoint(player, maxX, maxY, z);
-        }
-    }
-
-    private void spawnEdgePoint(Player player, double x, double y, double z) {
-        player.spawnParticle(Particle.END_ROD, x, y, z, 1, 0, 0, 0, 0);
+        new RegionOutline(a.getWorld(),
+                Math.min(a.getBlockX(), b.getBlockX()),
+                Math.min(a.getBlockY(), b.getBlockY()),
+                Math.min(a.getBlockZ(), b.getBlockZ()),
+                Math.max(a.getBlockX(), b.getBlockX()),
+                Math.max(a.getBlockY(), b.getBlockY()),
+                Math.max(a.getBlockZ(), b.getBlockZ())
+        ).drawGlowFor(player);
     }
 
     private String describe(Location location) {
@@ -218,15 +198,20 @@ public final class RegionSelectionService {
         private final NPC npc;
         private final TaskType taskType;
         private final Target target;
+        private final boolean storeInChest;
+        private final boolean surfaceOnly;
         private Location pointA;
         private Location pointB;
         private BukkitTask particleTask;
         private BukkitTask timeoutTask;
 
-        private PendingJob(NPC npc, TaskType taskType, Target target) {
+        private PendingJob(NPC npc, TaskType taskType, Target target,
+                            boolean storeInChest, boolean surfaceOnly) {
             this.npc = npc;
             this.taskType = taskType;
             this.target = target;
+            this.storeInChest = storeInChest;
+            this.surfaceOnly = surfaceOnly;
         }
 
         private boolean locked() {

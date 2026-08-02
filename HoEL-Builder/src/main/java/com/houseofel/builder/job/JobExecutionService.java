@@ -1,6 +1,7 @@
 package com.houseofel.builder.job;
 
 import com.houseofel.builder.gui.BuilderGui.Target;
+import com.houseofel.builder.region.RegionOutline;
 import net.citizensnpcs.api.ai.TeleportStuckAction;
 import net.citizensnpcs.api.npc.NPC;
 import net.kyori.adventure.text.Component;
@@ -9,6 +10,7 @@ import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.Particle;
+import org.bukkit.Sound;
 import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.entity.Display;
@@ -21,6 +23,8 @@ import org.bukkit.inventory.ItemStack;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.scheduler.BukkitTask;
 
+import java.util.HashMap;
+import java.util.Map;
 import java.util.logging.Logger;
 
 /**
@@ -61,6 +65,12 @@ public final class JobExecutionService {
      * wherever it stands rather than leaving stragglers behind.
      */
     private static final int UNLIMITED_REACH_FROM_PASS = 3;
+    /**
+     * How much the NPC hauls before walking a load back to the chest. Deliberately a
+     * few stacks rather than a full chest's worth — a large capacity means a job of a
+     * few hundred blocks never makes a visible trip.
+     */
+    private static final int CARRY_CAPACITY = 4 * 64;
     /** Squared-distance improvement that counts as real progress toward the target. */
     private static final double PROGRESS_EPSILON = 0.05;
     /**
@@ -75,6 +85,10 @@ public final class JobExecutionService {
     /** Upper bound on cells scanned per tick, so a big sparse region doesn't stall the server. */
     private static final int MAX_CELLS_SCANNED_PER_TICK = 10_000;
     private static final double LABEL_HEIGHT_OFFSET = 2.3;
+    /** How often the constant white glow of the work-area outline is refreshed. */
+    private static final int GLOW_TICK_PERIOD = 20;
+    /** The yellow tint refreshes faster, so its pulse reads as a fade not a few steps. */
+    private static final int TINT_TICK_PERIOD = 5;
 
     private final Plugin plugin;
     private final Logger logger;
@@ -85,7 +99,8 @@ public final class JobExecutionService {
     }
 
     public void dispatchClear(Player player, NPC npc, Material tool, Target target,
-                               Location pointA, Location pointB) {
+                               Location pointA, Location pointB, boolean storeInChest,
+                               boolean surfaceOnly) {
         Entity npcEntity = npc.getEntity();
         if (npcEntity == null) {
             player.sendMessage(Component.text("The Helper isn't spawned right now — can't start the job.", NamedTextColor.RED));
@@ -119,8 +134,31 @@ public final class JobExecutionService {
                 + " (" + totalCells + " blocks to check)...", NamedTextColor.GREEN));
         logger.info(player.getName() + " dispatched CLEAR/" + target + " job over " + totalCells + " cells");
 
+        JobStorage storage = storeInChest
+                ? new JobStorage(plugin, world, minX, maxX, minY, maxY, minZ, maxZ)
+                : null;
+
+        // Stand the chest up front rather than lazily on the first haul, so the player
+        // can see where the job's output is going from the moment it starts.
+        if (storage != null) {
+            Location chestAt = storage.depositPoint();
+            if (chestAt == null) {
+                player.sendMessage(Component.text(
+                        "Couldn't find anywhere to place a storage chest — " + npc.getName()
+                                + " will work without one.", NamedTextColor.RED));
+            } else {
+                String coords = "(" + chestAt.getBlockX() + ", " + chestAt.getBlockY() + ", "
+                        + chestAt.getBlockZ() + ")";
+                player.sendMessage(Component.text("Storage chest placed at " + coords,
+                        NamedTextColor.AQUA));
+                logger.info("Storage chest placed at " + coords + " for " + player.getName() + "'s job");
+            }
+        }
+
+        RegionOutline outline = new RegionOutline(world, minX, minY, minZ, maxX, maxY, maxZ);
+
         new ClearJobTask(player, npc, npcEntity, equipment, label, world, target,
-                minX, maxY, minZ, spanX, spanZ, totalCells).start();
+                minX, maxY, minZ, spanX, spanZ, totalCells, tool, storage, surfaceOnly, outline).start();
     }
 
     private TextDisplay spawnLabel(Location npcLocation) {
@@ -143,7 +181,7 @@ public final class JobExecutionService {
         return equipment;
     }
 
-    private enum Phase { SEEKING, WALKING, DIGGING }
+    private enum Phase { SEEKING, WALKING, DIGGING, HAULING }
 
     private final class ClearJobTask {
         private final Player player;
@@ -159,10 +197,19 @@ public final class JobExecutionService {
         private final int spanX;
         private final int spanZ;
         private final long totalCells;
+        private final Material tool;
+        private final JobStorage storage;
+        private final boolean surfaceOnly;
+        private final RegionOutline outline;
+        private int outlineTicks;
+        private final Map<Material, Integer> carried = new HashMap<>();
+        private int carriedTotal;
+        private Location depositPoint;
 
         private Phase phase = Phase.SEEKING;
         private long processedCells;
         private long clearedCells;
+        private long deposited;
         private long clearedThisPass;
         private long skippedThisPass;
         private long skippedNoPath;
@@ -174,11 +221,13 @@ public final class JobExecutionService {
         private double closestApproachSquared;
         private int digTicks;
         private boolean usedStraightLine;
+        private boolean jobComplete;
         private BukkitTask task;
 
         private ClearJobTask(Player player, NPC npc, Entity npcEntity, EntityEquipment equipment, TextDisplay label,
                               World world, Target target, int minX, int maxY, int minZ,
-                              int spanX, int spanZ, long totalCells) {
+                              int spanX, int spanZ, long totalCells, Material tool, JobStorage storage,
+                              boolean surfaceOnly, RegionOutline outline) {
             this.player = player;
             this.npc = npc;
             this.npcEntity = npcEntity;
@@ -192,6 +241,10 @@ public final class JobExecutionService {
             this.spanX = spanX;
             this.spanZ = spanZ;
             this.totalCells = totalCells;
+            this.tool = tool;
+            this.storage = storage;
+            this.surfaceOnly = surfaceOnly;
+            this.outline = outline;
         }
 
         private void start() {
@@ -208,8 +261,18 @@ public final class JobExecutionService {
                 case SEEKING -> seekNextBlock();
                 case WALKING -> walkToPendingBlock();
                 case DIGGING -> digPendingBlock();
+                case HAULING -> haulToChest();
             }
 
+            // Glow is the constant base and lingers, so it only needs redrawing about
+            // once a second; the tint runs faster so the pulse reads as a smooth fade.
+            if (outlineTicks % GLOW_TICK_PERIOD == 0) {
+                outline.drawGlowNearby();
+            }
+            if (outlineTicks % TINT_TICK_PERIOD == 0) {
+                outline.drawTintNearby(RegionOutline.WORKING_TINT, RegionOutline.tintSize(outlineTicks));
+            }
+            outlineTicks++;
             updateLabel();
         }
 
@@ -247,8 +310,15 @@ public final class JobExecutionService {
                 return;
             }
 
+            // Take the last part-load back before knocking off.
+            if (storage != null && carriedTotal > 0) {
+                startHauling();
+                jobComplete = true;
+                return;
+            }
+
             finish(npc.getName() + " finished clearing — " + clearedCells + " " + target.label()
-                    + " block(s) cleared.");
+                    + " block(s) cleared." + storedSuffix());
         }
 
         /** Waits until the NPC is within reach, or gives up on an unreachable block. */
@@ -339,10 +409,113 @@ public final class JobExecutionService {
                     pendingBlock.getBlockData().getSoundGroup().getBreakSound(), 1.0f, 1.0f);
             world.spawnParticle(Particle.BLOCK, pendingBlock.getLocation().add(0.5, 0.5, 0.5),
                     16, 0.3, 0.3, 0.3, pendingBlock.getBlockData());
+
+            collectDrops(pendingBlock);
             pendingBlock.setType(Material.AIR);
             clearedCells++;
             clearedThisPass++;
             abandonPendingBlock();
+
+            if (storage != null && carriedTotal >= CARRY_CAPACITY) {
+                startHauling();
+            }
+        }
+
+        /** Picks up what the block would really drop for this tool, so grass yields dirt. */
+        private void collectDrops(Block block) {
+            if (storage == null) {
+                return;
+            }
+            for (ItemStack drop : block.getDrops(new ItemStack(tool))) {
+                carried.merge(drop.getType(), drop.getAmount(), Integer::sum);
+                carriedTotal += drop.getAmount();
+            }
+        }
+
+        private void startHauling() {
+            depositPoint = storage.depositPoint();
+            if (depositPoint == null) {
+                // Nowhere to build a chest — carry on working rather than stalling the job.
+                player.sendMessage(Component.text(
+                        "No room to place a storage chest nearby — " + npc.getName()
+                                + " is working without one.", NamedTextColor.RED));
+                carried.clear();
+                carriedTotal = 0;
+                return;
+            }
+            walkTicks = 0;
+            noProgressTicks = 0;
+            closestApproachSquared = Double.MAX_VALUE;
+            npc.getNavigator().setTarget(depositPoint);
+            phase = Phase.HAULING;
+        }
+
+        /** Walks a full load back to the chest and unloads it. */
+        private void haulToChest() {
+            double distanceSquared = npcEntity.getLocation().distanceSquared(depositPoint);
+
+            if (distanceSquared <= REACH_DISTANCE * REACH_DISTANCE) {
+                unload();
+                return;
+            }
+
+            walkTicks++;
+            if (distanceSquared < closestApproachSquared - PROGRESS_EPSILON) {
+                closestApproachSquared = distanceSquared;
+                noProgressTicks = 0;
+            } else {
+                noProgressTicks++;
+            }
+
+            if (walkTicks > PATH_GRACE_TICKS && !npc.getNavigator().isNavigating() && !usedStraightLine) {
+                usedStraightLine = true;
+                walkTicks = 0;
+                noProgressTicks = 0;
+                closestApproachSquared = Double.MAX_VALUE;
+                npc.getNavigator().setStraightLineTarget(depositPoint);
+                return;
+            }
+
+            // Same escalation as digging: if it genuinely can't get to the chest, unload
+            // from here rather than wedging the job forever.
+            if (noProgressTicks > NO_PROGRESS_TICKS || walkTicks > WALK_TIMEOUT_TICKS) {
+                unload();
+            }
+        }
+
+        private void unload() {
+            npc.getNavigator().cancelNavigation();
+            npc.faceLocation(depositPoint);
+            world.playSound(depositPoint, Sound.BLOCK_BARREL_OPEN, 0.7f, 1.0f);
+
+            Map<Material, Integer> leftover = storage.deposit(carried);
+            int stored = carriedTotal - leftover.values().stream().mapToInt(Integer::intValue).sum();
+            deposited += stored;
+
+            carried.clear();
+            carried.putAll(leftover);
+            carriedTotal = leftover.values().stream().mapToInt(Integer::intValue).sum();
+
+            if (!leftover.isEmpty()) {
+                player.sendMessage(Component.text(
+                        "Storage is full and there's no room to expand — " + npc.getName()
+                                + " is dropping the rest.", NamedTextColor.RED));
+                carried.clear();
+                carriedTotal = 0;
+            }
+
+            usedStraightLine = false;
+
+            if (jobComplete) {
+                finish(npc.getName() + " finished clearing — " + clearedCells + " " + target.label()
+                        + " block(s) cleared." + storedSuffix());
+                return;
+            }
+            phase = Phase.SEEKING;
+        }
+
+        private String storedSuffix() {
+            return storage == null ? "" : " " + deposited + " item(s) stored.";
         }
 
         private void abandonPendingBlock() {
@@ -352,9 +525,14 @@ public final class JobExecutionService {
         }
 
         private boolean isClearable(Block block) {
-            return block != null
-                    && target.matches(block.getType())
-                    && world.getBlockAt(block.getX(), block.getY() + 1, block.getZ()).isPassable();
+            if (block == null || !target.matches(block.getType())) {
+                return false;
+            }
+            // Surface mode leaves buried material alone. With it off the job hollows the
+            // region out instead — still safe to path, since clearing a full Y layer before
+            // descending means the NPC always has open space above the layer it's working.
+            return !surfaceOnly
+                    || world.getBlockAt(block.getX(), block.getY() + 1, block.getZ()).isPassable();
         }
 
         /**
