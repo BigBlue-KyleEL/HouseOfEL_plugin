@@ -32,6 +32,14 @@ public final class JobStorage {
     private static final int HAZARD_RADIUS = 2;
     /** Bound on how many times one deposit will build more storage before giving up. */
     private static final int MAX_EXPANSIONS_PER_DEPOSIT = 4;
+    /** Chests fill two rows deep before starting a new column alongside. */
+    private static final int ROWS_PER_COLUMN = 2;
+    /** A double chest is two blocks wide; the extra block keeps columns from merging. */
+    private static final int COLUMN_STRIDE = 3;
+    /** Chests face north, so "behind" is one block south. */
+    private static final int ROW_STRIDE = 1;
+    /** How far up/down to look for footing when the storage block crosses uneven ground. */
+    private static final int GRID_VERTICAL_SEARCH = 3;
 
     private final NamespacedKey key;
     private final World world;
@@ -42,6 +50,12 @@ public final class JobStorage {
     private final int minZ;
     private final int maxZ;
     private final List<Block> chests = new ArrayList<>();
+    /** First chest placed; everything after it is laid out relative to this one. */
+    private Block anchor;
+    private int unitsPlaced;
+    /** Which way the grid grows on each axis — away from the region, matching the anchor's side. */
+    private int columnSign;
+    private int rowSign;
 
     public JobStorage(Plugin plugin, World world,
                        int minX, int maxX, int minY, int maxY, int minZ, int maxZ) {
@@ -111,9 +125,18 @@ public final class JobStorage {
         return leftover;
     }
 
-    /** Finds open ground just outside the region and stands a tagged double chest on it. */
+    /**
+     * Stands a tagged double chest. The first one is sited by searching outside the
+     * region; every one after that extends a tidy grid off the first — filling the slot
+     * behind before starting a new column beside — so storage stays in one block rather
+     * than scattering across the landscape. Falls back to a fresh search if the next
+     * grid slot happens to be unusable ground.
+     */
     private boolean addChest() {
-        Block spot = findChestSpot();
+        Block spot = anchor == null ? findChestSpot() : findGridSpot();
+        if (spot == null) {
+            spot = findChestSpot();
+        }
         if (spot == null) {
             return false;
         }
@@ -138,7 +161,43 @@ public final class JobStorage {
         }
 
         chests.add(spot);
+        if (anchor == null) {
+            anchor = spot;
+            double centreX = (minX + maxX) / 2.0;
+            double centreZ = (minZ + maxZ) / 2.0;
+            columnSign = anchor.getX() >= centreX ? 1 : -1;
+            rowSign = anchor.getZ() >= centreZ ? 1 : -1;
+        }
+        unitsPlaced++;
         return true;
+    }
+
+    /**
+     * Next slot in the storage block, laid out off the first chest:
+     * unit 1 goes behind unit 0, unit 2 beside unit 0, unit 3 behind unit 2, and so on.
+     * Columns are spaced so neighbouring doubles can't accidentally merge into each other.
+     *
+     * <p>Growth direction on each axis matches whichever side of the region the anchor
+     * already landed on. Growing a fixed east/south regardless of that would walk the
+     * grid straight back through the region on three of its four sides — including,
+     * mid-job, through ground that's still being dug.
+     */
+    private Block findGridSpot() {
+        int column = unitsPlaced / ROWS_PER_COLUMN;
+        int row = unitsPlaced % ROWS_PER_COLUMN;
+
+        int x = anchor.getX() + column * COLUMN_STRIDE * columnSign;
+        int z = anchor.getZ() + row * ROW_STRIDE * rowSign;
+
+        for (int dy = GRID_VERTICAL_SEARCH; dy >= -GRID_VERTICAL_SEARCH; dy--) {
+            Block candidate = world.getBlockAt(x, anchor.getY() + dy, z);
+            if (isFreeStandingSpot(candidate)
+                    && candidate.getRelative(BlockFace.DOWN).getType().isSolid()
+                    && isHazardFree(candidate)) {
+                return candidate;
+            }
+        }
+        return null;
     }
 
     /**
@@ -242,10 +301,19 @@ public final class JobStorage {
         return null;
     }
 
+    /**
+     * A spot counts as clear if it's air, or anything vanilla itself treats as
+     * replaceable — grass, ferns, flowers, vines, snow layers. Placing a chest destroys
+     * these the same way a player walking through or building over them would; nothing
+     * a player would consider an actual obstruction gets touched. Water/lava/fire are
+     * also replaceable but get excluded separately by the hazard check.
+     */
     private boolean isFreeStandingSpot(Block block) {
-        return block.getType().isAir()
-                && block.getRelative(BlockFace.UP).getType().isAir()
-                && !isNearRegion(block);
+        return isOpen(block) && isOpen(block.getRelative(BlockFace.UP)) && !isNearRegion(block);
+    }
+
+    private boolean isOpen(Block block) {
+        return block.getType().isAir() || block.isReplaceable();
     }
 
     /** Nothing that would burn, melt or wash away the chest sitting close by. */

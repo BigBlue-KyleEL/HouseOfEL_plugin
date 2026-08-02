@@ -71,6 +71,12 @@ public final class JobExecutionService {
      * few hundred blocks never makes a visible trip.
      */
     private static final int CARRY_CAPACITY = 4 * 64;
+    /**
+     * TEMPORARY, FOR TESTING ONLY — inflates every drop to 10 stacks so storage fills
+     * fast enough to exercise chest overflow in one short job. Set back to 1 for real
+     * behaviour, otherwise a Helper mints hundreds of blocks out of thin air.
+     */
+    private static final int TEST_DROP_MULTIPLIER = 10 * 64;
     /** Squared-distance improvement that counts as real progress toward the target. */
     private static final double PROGRESS_EPSILON = 0.05;
     /**
@@ -427,8 +433,9 @@ public final class JobExecutionService {
                 return;
             }
             for (ItemStack drop : block.getDrops(new ItemStack(tool))) {
-                carried.merge(drop.getType(), drop.getAmount(), Integer::sum);
-                carriedTotal += drop.getAmount();
+                int amount = drop.getAmount() * TEST_DROP_MULTIPLIER;
+                carried.merge(drop.getType(), amount, Integer::sum);
+                carriedTotal += amount;
             }
         }
 
