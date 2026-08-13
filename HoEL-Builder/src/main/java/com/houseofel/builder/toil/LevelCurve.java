@@ -25,6 +25,17 @@ public final class LevelCurve {
     private LevelCurve() {
     }
 
+    /**
+     * Cumulative Toil required to reach this level — the inverse of {@link #levelForToil}.
+     * Used by the Death Policy's rank-floor fallback: flooring the level alone isn't
+     * enough, since {@link #levelForToil} would just re-derive the old (higher) level from
+     * the untouched banked-Toil total on the Helper's next ticket award. Flooring both
+     * together keeps them consistent going forward.
+     */
+    public static int toilThresholdFor(int level) {
+        return CUMULATIVE_TOIL[level];
+    }
+
     /** Current level for a given banked-Toil total, capped at {@link #MAX_LEVEL}. */
     public static int levelForToil(int bankedToil) {
         int level = 1;

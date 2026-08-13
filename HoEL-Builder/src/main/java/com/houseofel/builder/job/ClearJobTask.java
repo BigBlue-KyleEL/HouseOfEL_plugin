@@ -7,6 +7,8 @@ import com.houseofel.builder.npc.HelperLevelService;
 import com.houseofel.builder.npc.Specialization;
 import com.houseofel.builder.npc.TicketAwardResult;
 import com.houseofel.builder.region.RegionOutline;
+import com.houseofel.builder.timing.HelperTempo;
+import com.houseofel.builder.timing.VanillaTiming;
 import com.houseofel.builder.toil.TicketKind;
 import net.citizensnpcs.api.ai.TeleportStuckAction;
 import net.citizensnpcs.api.npc.NPC;
@@ -43,6 +45,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.logging.Logger;
 
 /**
@@ -170,9 +173,16 @@ public final class ClearJobTask {
     private Location depositPoint;
 
     private Phase phase;
+    /**
+     * Ticks left dithering before the next action — the duty-cycle refinement made
+     * concrete. Shrinks as the Helper levels. See {@link HelperTempo#hesitationTicksFor}.
+     */
+    private int hesitationTicks;
     private long processedCells;
     private long clearedCells;
     private long deposited;
+    /** Blocks fumbled and left for a later sweep — the error-rate refinement. */
+    private long fumbled;
     private long clearedThisPass;
     private long skippedThisPass;
     private long skippedNoPath;
@@ -562,11 +572,19 @@ public final class ClearJobTask {
             return;
         }
 
-        switch (phase) {
-            case SEEKING -> seekNextBlock();
-            case WALKING -> walkToPendingBlock();
-            case DIGGING -> digPendingBlock();
-            case HAULING -> haulToChest();
+        // Duty cycle: a Helper that hasn't learned its trade yet stands about between
+        // actions before getting on with the next one. Only the work phases pause — the
+        // visual/upkeep work below still runs, so a hesitating Helper looks like it's
+        // thinking rather than frozen.
+        if (hesitationTicks > 0) {
+            hesitationTicks--;
+        } else {
+            switch (phase) {
+                case SEEKING -> seekNextBlock();
+                case WALKING -> walkToPendingBlock();
+                case DIGGING -> digPendingBlock();
+                case HAULING -> haulToChest();
+            }
         }
 
         // A long walk across a big site otherwise has zero feedback between one dig and
@@ -657,6 +675,25 @@ public final class ClearJobTask {
             Block candidate = blockAt(processedCells);
             processedCells++;
             if (isClearable(candidate)) {
+                // Rust's site-refusal: a Helper won't enter the exact block it died in
+                // until an owner clears the site or 24h passes. Reuses the same skip
+                // mechanism as the error-rate miss below — the multi-pass sweep re-checks
+                // it every pass, so it clears itself the moment the refusal lifts instead
+                // of needing separate re-queue logic.
+                if (levelService.isDeathSiteBlocked(npc, candidate.getLocation())) {
+                    skippedThisPass++;
+                    continue;
+                }
+                // Error rate: a green Helper misses one now and then. It's counted as a
+                // skip, which the existing multi-pass sweep already re-visits — so the
+                // job still finishes clean, the mistake just costs time. Exactly what a
+                // future "works the face clean without doubling back" verb removes.
+                if (ThreadLocalRandom.current().nextDouble()
+                        < HelperTempo.errorRateFor(levelService.levelOf(npc))) {
+                    fumbled++;
+                    skippedThisPass++;
+                    continue;
+                }
                 pendingBlock = candidate;
                 walkTicks = 0;
                 noProgressTicks = 0;
@@ -764,6 +801,18 @@ public final class ClearJobTask {
         phase = Phase.DIGGING;
     }
 
+    /**
+     * How long this Helper takes on the block in front of it. The base comes from
+     * {@link VanillaTiming} — tool and block only, no level — and {@link HelperTempo}
+     * applies the level curve on top. See {@code HelperTempo}'s dig-speed note: that
+     * multiplier is a deliberate, documented departure from the framework.
+     */
+    private int digTicksForPendingBlock() {
+        int vanillaTicks = VanillaTiming.durationFor(
+                TaskType.fromTool(tool), new ItemStack(tool), pendingBlock.getBlockData());
+        return HelperTempo.digTicksFor(levelService.levelOf(npc), vanillaTicks);
+    }
+
     /** Plays the dig animation for a beat, then actually breaks the block. */
     private void digPendingBlock() {
         if (!isClearable(pendingBlock)) {
@@ -779,7 +828,7 @@ public final class ClearJobTask {
         }
         digTicks++;
 
-        if (digTicks < levelService.digTicksFor(npc)) {
+        if (digTicks < digTicksForPendingBlock()) {
             return;
         }
 
@@ -798,6 +847,8 @@ public final class ClearJobTask {
         clearedThisPass++;
         awardGroundworkerProgress();
         abandonPendingBlock();
+        // Duty cycle: pause before getting on with the next one. Shrinks with level.
+        hesitationTicks = HelperTempo.hesitationTicksFor(levelService.levelOf(npc));
 
         if (storage != null && carriedTotal >= CARRY_CAPACITY) {
             startHauling();
@@ -956,12 +1007,6 @@ public final class ClearJobTask {
         if (block == null || !target.matches(block.getType())) {
             return false;
         }
-        // Harvest-tier gating: nothing in today's Target roster actually requires above
-        // Tier 1, so this can't yet block anything live — it's ready for Phase 1-G's ore
-        // targets without needing to touch this method again.
-        if (!levelService.canHarvest(npc, block.getType())) {
-            return false;
-        }
         // Basic hazard-avoidance pathing (warning-only Nether/End dispatch still lets the
         // job proceed, but the NPC won't walk right up to a lava-adjacent block for it).
         if (isNearLava(block)) {
@@ -1045,7 +1090,7 @@ public final class ClearJobTask {
             jobManager.queueOfflineNotification(playerId, message);
         }
         logger.info(message + " [passes=" + passNumber + ", no-path-skips=" + skippedNoPath
-                + ", timeout-skips=" + skippedTimeout + "]");
+                + ", timeout-skips=" + skippedTimeout + ", fumbled=" + fumbled + "]");
         jobManager.onJobEnded(npc.getId());
     }
 

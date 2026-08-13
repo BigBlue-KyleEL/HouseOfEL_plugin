@@ -45,10 +45,14 @@ public final class SpecializationForm {
     }
 
     private void onPick(Player player, Location location, Specialization specialization) {
-        // The form response arrives off the main thread — spawnHelper() creates a real
-        // NPC/entity, which needs to happen on it.
+        // The form response arrives off the main thread — recruitHelper() creates a real
+        // NPC/entity (on success), which needs to happen on it.
         Bukkit.getScheduler().runTask(plugin, () -> {
-            NPC npc = npcService.spawnHelper(location, specialization);
+            NPC npc = npcService.recruitHelper(player, location, specialization);
+            if (npc == null) {
+                // RecruitmentCost already told the player exactly what they're short on.
+                return;
+            }
             player.sendMessage(Component.text("Spawned Helper NPC '" + BuilderNpcService.baseNameOf(npc) + "' (#" + npc.getId()
                     + ") as a " + specialization.label() + ".", NamedTextColor.GREEN));
         });

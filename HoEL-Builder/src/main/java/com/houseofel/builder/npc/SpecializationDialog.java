@@ -54,7 +54,11 @@ public final class SpecializationDialog {
     }
 
     private void onPick(Player player, Location location, Specialization specialization) {
-        NPC npc = npcService.spawnHelper(location, specialization);
+        NPC npc = npcService.recruitHelper(player, location, specialization);
+        if (npc == null) {
+            // RecruitmentCost already told the player exactly what they're short on.
+            return;
+        }
         player.sendMessage(Component.text("Spawned Helper NPC '" + BuilderNpcService.baseNameOf(npc) + "' (#" + npc.getId()
                 + ") as a " + specialization.label() + ".", NamedTextColor.GREEN));
     }

@@ -37,4 +37,20 @@ public enum Rank {
         }
         return null;
     }
+
+    /**
+     * The highest rank threshold at or below the given level, or null if it's below
+     * {@link #JOURNEYMAN}. Used by the Death Policy's rank-floor fallback (the one place a
+     * level can be lost) — distinct from {@link #at}, which is an exact-milestone lookup
+     * and returns null for anything between rank levels.
+     */
+    public static Rank floorFor(int level) {
+        Rank floor = null;
+        for (Rank rank : values()) {
+            if (rank.level <= level && (floor == null || rank.level > floor.level)) {
+                floor = rank;
+            }
+        }
+        return floor;
+    }
 }

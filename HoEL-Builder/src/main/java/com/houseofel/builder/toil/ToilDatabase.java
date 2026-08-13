@@ -6,6 +6,7 @@ import org.sqlite.JDBC;
 import java.io.File;
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 
@@ -44,6 +45,12 @@ public final class ToilDatabase {
                             banked_toil INTEGER NOT NULL
                         )
                         """);
+                // helper_ledger predates owner_uuid/scar_choice — CREATE TABLE IF NOT
+                // EXISTS alone won't add columns to an already-existing on-disk table, so
+                // existing installs (Bartholomew, Thaddeus, Montgomery) need an explicit,
+                // idempotent ALTER TABLE guarded by a PRAGMA table_info check.
+                ensureColumn(statement, "helper_ledger", "owner_uuid", "TEXT");
+                ensureColumn(statement, "helper_ledger", "scar_choice", "TEXT");
                 statement.execute("""
                         CREATE TABLE IF NOT EXISTS toil_ticket (
                             order_id TEXT PRIMARY KEY,
@@ -66,13 +73,69 @@ public final class ToilDatabase {
                             PRIMARY KEY (npc_uuid, ticket_kind)
                         )
                         """);
+                // Append-only Chronicler-shaped event log — one row per death, never
+                // updated or replaced. Deliberately generic (cause/world/x/y/z/timestamp)
+                // rather than Helper-specific, per Kyle's note that a future Chronicler
+                // should be able to read this without a Helper-only shape in the way.
+                statement.execute("""
+                        CREATE TABLE IF NOT EXISTS helper_scar (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            npc_uuid TEXT NOT NULL,
+                            cause TEXT NOT NULL,
+                            world TEXT NOT NULL,
+                            x INTEGER NOT NULL,
+                            y INTEGER NOT NULL,
+                            z INTEGER NOT NULL,
+                            occurred_at INTEGER NOT NULL
+                        )
+                        """);
+                // One row per currently-rusted Helper; deleted the moment Rust clears.
+                statement.execute("""
+                        CREATE TABLE IF NOT EXISTS helper_rust (
+                            npc_uuid TEXT PRIMARY KEY,
+                            toil_remaining INTEGER NOT NULL,
+                            death_world TEXT NOT NULL,
+                            death_x INTEGER NOT NULL,
+                            death_y INTEGER NOT NULL,
+                            death_z INTEGER NOT NULL,
+                            started_at INTEGER NOT NULL
+                        )
+                        """);
+                // One row per Helper with a currently dropped-but-uncollected Work Ledger
+                // book; deleted on recovery or once LedgerExpiryTask applies the
+                // rank-floor fallback.
+                statement.execute("""
+                        CREATE TABLE IF NOT EXISTS helper_ledger_pending (
+                            npc_uuid TEXT PRIMARY KEY,
+                            dropped_at INTEGER NOT NULL
+                        )
+                        """);
             }
         } catch (ClassNotFoundException | SQLException e) {
             throw new IllegalStateException("Couldn't open the Toil ledger database", e);
         }
     }
 
-    Connection connection() {
+    /**
+     * Idempotent single-column migration guard — {@code CREATE TABLE IF NOT EXISTS} alone
+     * doesn't add columns to a table that already exists on disk from an earlier version.
+     * No precedent for this in the codebase before now (only new tables had ever been
+     * added); this is the first schema change to an existing table.
+     */
+    private void ensureColumn(Statement statement, String table, String column, String columnDefinition)
+            throws SQLException {
+        try (ResultSet rs = statement.executeQuery("PRAGMA table_info(" + table + ")")) {
+            while (rs.next()) {
+                if (column.equalsIgnoreCase(rs.getString("name"))) {
+                    return;
+                }
+            }
+        }
+        statement.execute("ALTER TABLE " + table + " ADD COLUMN " + column + " " + columnDefinition);
+    }
+
+    /** Public since {@code death.DeathRecordStore} needs the same shared connection {@code ToilLedgerStore} does. */
+    public Connection connection() {
         return connection;
     }
 

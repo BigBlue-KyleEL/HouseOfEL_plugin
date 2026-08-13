@@ -1,5 +1,7 @@
 package com.houseofel.builder.npc;
 
+import com.houseofel.builder.death.DeathRecordStore;
+import com.houseofel.builder.death.ScarRecord;
 import io.papermc.paper.event.player.AsyncChatEvent;
 import net.citizensnpcs.api.npc.NPC;
 import net.kyori.adventure.text.Component;
@@ -10,6 +12,9 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.plugin.Plugin;
+
+import java.util.List;
+import java.util.Locale;
 
 /**
  * "&lt;Helper's name&gt; report" reads back its level, specialization, and banked Toil —
@@ -27,11 +32,14 @@ public final class HelperStatusListener implements Listener {
     private final Plugin plugin;
     private final BuilderNpcService npcService;
     private final HelperLevelService levelService;
+    private final DeathRecordStore deathRecordStore;
 
-    public HelperStatusListener(Plugin plugin, BuilderNpcService npcService, HelperLevelService levelService) {
+    public HelperStatusListener(Plugin plugin, BuilderNpcService npcService, HelperLevelService levelService,
+                                 DeathRecordStore deathRecordStore) {
         this.plugin = plugin;
         this.npcService = npcService;
         this.levelService = levelService;
+        this.deathRecordStore = deathRecordStore;
     }
 
     @EventHandler
@@ -54,10 +62,28 @@ public final class HelperStatusListener implements Listener {
             String specLabel = specialization == null ? "unassigned" : specialization.label();
             int level = levelService.levelOf(npc);
             int toil = levelService.bankedToilOf(npc);
+            // Duty cycle and error rate are reported explicitly because they're otherwise
+            // invisible — the framework calls that its single largest failure risk ("an
+            // invisible improvement is a wasted level"). Until the per-spec ladders give
+            // them somewhere better to live, this line is where they're legible.
+            int dutyPercent = (int) Math.round(levelService.dutyCycleOf(npc) * 100);
+            String errorPercent = String.format("%.1f", levelService.errorRateOf(npc) * 100);
             player.sendMessage(Component.text(
                     BuilderNpcService.baseNameOf(npc) + ": Level " + level + " " + specLabel
-                            + ", " + toil + " Toil banked.",
+                            + ", " + toil + " Toil banked. Working " + dutyPercent
+                            + "% of the time, slipping on " + errorPercent + "% of blocks.",
                     NamedTextColor.AQUA));
+
+            List<ScarRecord> scars = deathRecordStore.scarsFor(npc.getUniqueId());
+            player.sendMessage(Component.text(
+                    scars.isEmpty() ? "No scars yet." : "Scars: " + scars.size() + " — " + scarSummary(scars),
+                    NamedTextColor.DARK_GRAY));
         });
+    }
+
+    private static String scarSummary(List<ScarRecord> scars) {
+        ScarRecord latest = scars.get(scars.size() - 1);
+        String cause = latest.cause().name().toLowerCase(Locale.ROOT).replace('_', ' ');
+        return "latest was " + cause + " at " + latest.world() + " " + latest.x() + "," + latest.y() + "," + latest.z() + ".";
     }
 }

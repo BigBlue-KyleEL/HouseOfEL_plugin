@@ -1,7 +1,12 @@
 package com.houseofel.builder.npc;
 
+import com.houseofel.builder.death.DeathRecordStore;
+import com.houseofel.builder.death.HelperRust;
+import com.houseofel.builder.death.RustState;
+import com.houseofel.builder.death.ScarChoice;
 import com.houseofel.builder.gui.Target;
 import com.houseofel.builder.gui.TaskType;
+import com.houseofel.builder.timing.HelperTempo;
 import com.houseofel.builder.title.HelperTitleService;
 import com.houseofel.builder.toil.BalanceEstimator;
 import com.houseofel.builder.toil.HelperLedgerRecord;
@@ -14,6 +19,7 @@ import com.houseofel.builder.toil.ToilDatabase;
 import com.houseofel.builder.toil.ToilLedgerStore;
 import com.houseofel.builder.toil.ToilPipeline;
 import net.citizensnpcs.api.npc.NPC;
+import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
 import org.bukkit.entity.Entity;
@@ -39,10 +45,10 @@ import java.util.logging.Logger;
  * or the entity's Minecraft UUID, since only the Citizens UUID survives entity
  * replacement (verified against the real Citizens jar).
  *
- * <p>Ledger rows are cached in memory once read, since {@link #digTicksFor} and
- * {@link #canHarvest} are called every tick a Helper is digging — a SQLite round-trip
- * that often would be wasteful. Every write updates the cache and the database together,
- * so they never drift.
+ * <p>Ledger rows are cached in memory once read, since {@link #levelOf} is consulted
+ * every tick a Helper is digging (pacing reads it constantly) — a SQLite round-trip that
+ * often would be wasteful. Every write updates the cache and the database together, so
+ * they never drift.
  *
  * <p>Level and banked Toil are also mirrored onto the NPC entity's
  * {@link PersistentDataContainer} on every write, per the framework's storage rule
@@ -53,6 +59,8 @@ import java.util.logging.Logger;
 public final class HelperLevelService {
 
     private static final double BONUS_DROP_CHANCE = 0.15;
+    /** WARY's 3rd-scar choice — see the Death Policy plan. Small enough to read inline rather than its own class. */
+    private static final double WARY_DUTY_PENALTY = 0.03;
 
     private final Logger logger;
     private final ToilLedgerStore store;
@@ -61,12 +69,14 @@ public final class HelperLevelService {
     private final NamespacedKey pdcLevelKey;
     private final NamespacedKey pdcToilKey;
     private final HelperTitleService titleService;
+    private final DeathRecordStore deathRecordStore;
     private final Map<UUID, HelperLedgerRecord> cache = new HashMap<>();
     /** In-memory ticket progress — see {@link #awardProgress} for why it isn't written through. */
     private record ProgressKey(UUID npcUuid, TicketKind kind) { }
     private final Map<ProgressKey, Integer> progressCache = new HashMap<>();
 
-    public HelperLevelService(Plugin plugin, ToilDatabase database, HelperTitleService titleService) {
+    public HelperLevelService(Plugin plugin, ToilDatabase database, HelperTitleService titleService,
+                               DeathRecordStore deathRecordStore) {
         this.logger = plugin.getLogger();
         this.store = new ToilLedgerStore(database, logger);
         this.estimator = new BalanceEstimator();
@@ -74,6 +84,7 @@ public final class HelperLevelService {
         this.pdcLevelKey = new NamespacedKey(plugin, "toil-level");
         this.pdcToilKey = new NamespacedKey(plugin, "toil-banked");
         this.titleService = titleService;
+        this.deathRecordStore = deathRecordStore;
     }
 
     /** Called once at spawn time, when the player picks the NPC's specialization. */
@@ -121,6 +132,11 @@ public final class HelperLevelService {
         TicketContext context = new TicketContext(npc.getUniqueId(), record.specialization(), kind, rawMinutes, orderId);
         int finalToil = pipeline.award(context);
 
+        RustState rust = deathRecordStore.rustFor(npc.getUniqueId());
+        if (rust != null) {
+            finalToil = HelperRust.toilFor(finalToil);
+        }
+
         if (!store.logTicket(orderId, npc.getUniqueId(), kind, rawMinutes, finalToil)) {
             return null;
         }
@@ -134,6 +150,10 @@ public final class HelperLevelService {
         cache.put(npc.getUniqueId(), updated);
         mirrorToPdc(npc, updated);
 
+        if (rust != null) {
+            progressRust(npc.getUniqueId(), rust, finalToil);
+        }
+
         boolean leveledUp = newLevel > oldLevel;
         List<String> announcementLines;
         if (leveledUp) {
@@ -143,6 +163,46 @@ public final class HelperLevelService {
             announcementLines = List.of();
         }
         return new TicketAwardResult(finalToil, leveledUp, newLevel, announcementLines);
+    }
+
+    /** Counts this award's (already-halved) Toil against the 200 needed to clear Rust; clears it at zero. */
+    private void progressRust(UUID npcUuid, RustState rust, int toilEarned) {
+        int remaining = rust.toilRemaining() - toilEarned;
+        if (remaining <= 0) {
+            deathRecordStore.clearRust(npcUuid);
+        } else {
+            deathRecordStore.saveRust(new RustState(rust.npcUuid(), remaining, rust.deathWorld(),
+                    rust.deathX(), rust.deathY(), rust.deathZ(), rust.startedAt()));
+        }
+    }
+
+    /**
+     * Death Policy's rank-floor fallback — the one place a level can be lost. Floors both
+     * level and banked Toil down to the last rank actually reached (or 1, if never ranked),
+     * so a later ticket award derives the SAME floored level from Toil via
+     * {@link LevelCurve#levelForToil} rather than silently restoring the old one.
+     */
+    public void applyRankFloor(NPC npc) {
+        HelperLedgerRecord record = recordOf(npc);
+        if (record == null) {
+            return;
+        }
+        Rank floor = Rank.floorFor(record.level());
+        int flooredLevel = floor == null ? 1 : floor.level();
+        if (flooredLevel >= record.level()) {
+            return;
+        }
+        HelperLedgerRecord updated = new HelperLedgerRecord(
+                record.npcUuid(), record.specialization(), flooredLevel, LevelCurve.toilThresholdFor(flooredLevel));
+        store.save(updated);
+        cache.put(npc.getUniqueId(), updated);
+        mirrorToPdc(npc, updated);
+    }
+
+    /** True while this Helper still refuses to enter the exact block it died in (Rust's site-refusal). */
+    public boolean isDeathSiteBlocked(NPC npc, Location candidate) {
+        RustState rust = deathRecordStore.rustFor(npc.getUniqueId());
+        return rust != null && HelperRust.blocksReentry(rust, candidate, System.currentTimeMillis());
     }
 
     /**
@@ -207,23 +267,36 @@ public final class HelperLevelService {
         return lines;
     }
 
-    // Dig-speed / harvest-tier gating — unchanged behavior from the flat-XP prototype,
-    // just reading the new SQLite-backed level. The framework's real throughput model
-    // (a VanillaTiming service, chassis-owned duty cycle/error rate) is its own separate
-    // Phase 1-F item, not part of this chassis build — see that item before extending this.
-    public int digTicksFor(NPC npc) {
-        int level = levelOf(npc);
-        if (level >= HarvestTier.TIER_3.unlockedAtLevel()) {
-            return 1;
+    // Pacing (dig speed, hesitation, error rate) lives in HelperTempo, and the base
+    // action timing it builds on lives in VanillaTiming — the job engine reads those
+    // directly. This service only answers "what level is this Helper", which is the one
+    // thing those need from it.
+
+    /**
+     * Fraction of its time this Helper spends actually working, for status display and for
+     * the job engine's hesitation pacing. Base value from {@link HelperTempo}, then WARY's
+     * permanent −3% if chosen, then Rust's 50% floor on top if currently rusted.
+     */
+    public double dutyCycleOf(NPC npc) {
+        double duty = HelperTempo.dutyCycleFor(levelOf(npc));
+        if (deathRecordStore.scarChoiceOf(npc.getUniqueId()) == ScarChoice.WARY) {
+            duty -= WARY_DUTY_PENALTY;
         }
-        if (level >= HarvestTier.TIER_2.unlockedAtLevel()) {
-            return 2;
+        RustState rust = deathRecordStore.rustFor(npc.getUniqueId());
+        if (rust != null) {
+            duty = HelperRust.dutyCycleFor(duty);
         }
-        return 3;
+        return duty;
     }
 
-    public boolean canHarvest(NPC npc, Material material) {
-        return levelOf(npc) >= HarvestTier.requiredTier(material).unlockedAtLevel();
+    /** Chance this Helper fumbles a given action — base value from {@link HelperTempo}, doubled while rusted. */
+    public double errorRateOf(NPC npc) {
+        double error = HelperTempo.errorRateFor(levelOf(npc));
+        RustState rust = deathRecordStore.rustFor(npc.getUniqueId());
+        if (rust != null) {
+            error = HelperRust.errorRateFor(error);
+        }
+        return error;
     }
 
     /** True on a specialization-bonus hit for this target — one extra matching drop. */

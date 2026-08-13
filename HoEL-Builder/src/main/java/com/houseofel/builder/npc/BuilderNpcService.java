@@ -1,10 +1,13 @@
 package com.houseofel.builder.npc;
 
+import com.houseofel.builder.death.DeathRecordStore;
+import com.houseofel.builder.death.RecruitmentCost;
 import com.houseofel.builder.title.HelperTitleService;
 import net.citizensnpcs.api.CitizensAPI;
 import net.citizensnpcs.api.npc.NPC;
 import org.bukkit.Location;
 import org.bukkit.entity.EntityType;
+import org.bukkit.entity.Player;
 
 import java.util.HashSet;
 import java.util.List;
@@ -29,10 +32,31 @@ public final class BuilderNpcService {
 
     private final HelperLevelService levelService;
     private final HelperTitleService titleService;
+    private final RecruitmentCost recruitmentCost;
+    private final DeathRecordStore deathRecordStore;
 
-    public BuilderNpcService(HelperLevelService levelService, HelperTitleService titleService) {
+    public BuilderNpcService(HelperLevelService levelService, HelperTitleService titleService,
+                              RecruitmentCost recruitmentCost, DeathRecordStore deathRecordStore) {
         this.levelService = levelService;
         this.titleService = titleService;
+        this.recruitmentCost = recruitmentCost;
+        this.deathRecordStore = deathRecordStore;
+    }
+
+    /**
+     * The Death Policy entry point: charges {@code owner} via {@link RecruitmentCost} and
+     * only spawns on success, so both {@code SpecializationDialog} and
+     * {@code SpecializationForm} share one charge-then-spawn-or-refuse path instead of
+     * duplicating it. Returns null (with the refusal already messaged to the player by
+     * {@link RecruitmentCost#tryCharge}) if they can't afford it.
+     */
+    public NPC recruitHelper(Player owner, Location location, Specialization specialization) {
+        if (!recruitmentCost.tryCharge(owner, specialization)) {
+            return null;
+        }
+        NPC npc = spawnHelper(location, specialization);
+        deathRecordStore.setOwner(npc.getUniqueId(), owner.getUniqueId());
+        return npc;
     }
 
     public NPC spawnHelper(Location location, Specialization specialization) {
@@ -41,8 +65,16 @@ public final class BuilderNpcService {
         npc.data().setPersistent(ROLE_KEY, ROLE_VALUE);
         npc.data().setPersistent(BASE_NAME_KEY, baseName);
         npc.spawn(location);
+        // Death Policy's master switch — a freshly created Citizens NPC defaults to
+        // protected (invulnerable), which is what kept every Helper unkillable before this.
+        npc.setProtected(false);
         levelService.assign(npc, specialization);
         titleService.applyTitle(npc, specialization, 1);
+        // Citizens only writes saves.yml on its own ~1-hour autosave or a graceful
+        // shutdown — this dev environment only ever force-kills (no console access), so
+        // without an explicit save here a fresh Helper's very existence/position could be
+        // silently lost on the next restart.
+        CitizensAPI.getNPCRegistry().saveToStore();
         return npc;
     }
 
