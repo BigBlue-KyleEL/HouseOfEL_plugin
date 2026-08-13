@@ -47,7 +47,6 @@ public final class BedrockJobForm {
                         .dropdown("Target", labelsOf(Target.values()))
                         .toggle("Surface Only", true)
                         .toggle("Store in Chest", true)
-                        .toggle("Grief Player-Placed Items", false)
                         .validResultHandler(response -> onSubmit(player, npc, response))
                         .closedOrInvalidResultHandler(() -> onClosed(player))
                         .build());
@@ -80,12 +79,11 @@ public final class BedrockJobForm {
         Target target = Target.values()[response.getDropdown(1)];
         boolean surfaceOnly = response.getToggle(2);
         boolean storeInChest = response.getToggle(3);
-        boolean griefPlayerPlaced = response.getToggle(4);
 
         // The form response arrives off the main thread — beginJob() hands out an item
         // and drives the region-selection flow, both of which need to run on it.
         Bukkit.getScheduler().runTask(plugin, () ->
-                regionService.beginJob(player, npc, taskType, target, storeInChest, surfaceOnly, griefPlayerPlaced));
+                regionService.beginJob(player, npc, taskType, target, storeInChest, surfaceOnly));
     }
 
     private void onClosed(Player player) {

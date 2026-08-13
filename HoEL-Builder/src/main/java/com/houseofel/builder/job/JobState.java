@@ -27,7 +27,6 @@ final class JobState {
     String tool;
     boolean surfaceOnly;
     boolean storeInChest;
-    boolean griefPlayerPlaced;
 
     long processedCells;
     long clearedCells;

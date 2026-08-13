@@ -1,5 +1,6 @@
 package com.houseofel.builder.job;
 
+import com.houseofel.builder.npc.HelperLevelService;
 import net.citizensnpcs.api.CitizensAPI;
 import net.citizensnpcs.api.npc.NPC;
 import net.kyori.adventure.text.Component;
@@ -44,7 +45,7 @@ public final class JobManager {
     private final Logger logger;
     private final JobStateStore store;
     private final PendingNotificationStore notifications;
-    private final PlayerPlacementTracker placementTracker;
+    private final HelperLevelService levelService;
     private final Map<Integer, ClearJobTask> jobs = new ConcurrentHashMap<>();
     /**
      * How many jobs currently want each chunk kept loaded. Paper's own chunk-ticket API
@@ -56,12 +57,12 @@ public final class JobManager {
      */
     private final Map<ChunkKey, Integer> chunkRefCounts = new ConcurrentHashMap<>();
 
-    public JobManager(Plugin plugin, PlayerPlacementTracker placementTracker) {
+    public JobManager(Plugin plugin, HelperLevelService levelService) {
         this.plugin = plugin;
         this.logger = plugin.getLogger();
         this.store = new JobStateStore(plugin);
         this.notifications = new PendingNotificationStore(plugin);
-        this.placementTracker = placementTracker;
+        this.levelService = levelService;
     }
 
     /** Queues a message for a player who's currently offline — delivered the next time they log in. */
@@ -187,22 +188,6 @@ public final class JobManager {
         return Outcome.OK;
     }
 
-    /** "Leave it" during a grief-ping — only applicable while that job is actually waiting on one. */
-    public Outcome requestGriefSkip(int npcId, UUID requester) {
-        ClearJobTask task = jobs.get(npcId);
-        if (task == null) {
-            return Outcome.ALREADY_IN_THAT_STATE;
-        }
-        if (!task.playerId().equals(requester)) {
-            return Outcome.NOT_OWNER;
-        }
-        if (!task.isAwaitingGriefResponse()) {
-            return Outcome.ALREADY_IN_THAT_STATE;
-        }
-        task.requestGriefSkip();
-        return Outcome.OK;
-    }
-
     /** Snapshots every tracked job (running or paused) to disk — the restart safety net. */
     public void saveAllOnDisable() {
         for (ClearJobTask task : jobs.values()) {
@@ -221,7 +206,8 @@ public final class JobManager {
         int deferred = 0;
         for (JobState state : store.loadAll()) {
             NPC npc = CitizensAPI.getNPCRegistry().getById(state.npcId);
-            ClearJobTask task = npc == null ? null : ClearJobTask.resume(plugin, this, placementTracker, state, npc);
+            ClearJobTask task = npc == null ? null
+                    : ClearJobTask.resume(plugin, this, levelService, state, npc);
             if (task == null) {
                 deferred++;
                 continue;

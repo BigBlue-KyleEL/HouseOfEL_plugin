@@ -1,11 +1,14 @@
 package com.houseofel.builder.job;
 
 import com.houseofel.builder.gui.Target;
+import com.houseofel.builder.gui.TaskType;
+import com.houseofel.builder.npc.HelperLevelService;
 import com.houseofel.builder.region.RegionOutline;
 import net.citizensnpcs.api.ai.TeleportStuckAction;
 import net.citizensnpcs.api.npc.NPC;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
+import net.kyori.adventure.text.format.TextDecoration;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
@@ -13,6 +16,7 @@ import org.bukkit.Particle;
 import org.bukkit.Sound;
 import org.bukkit.World;
 import org.bukkit.block.Block;
+import org.bukkit.block.BlockFace;
 import org.bukkit.entity.Display;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
@@ -23,6 +27,7 @@ import org.bukkit.entity.Silverfish;
 import org.bukkit.entity.TextDisplay;
 import org.bukkit.inventory.EntityEquipment;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.scheduler.BukkitTask;
 
@@ -56,17 +61,14 @@ public final class ClearJobTask {
      */
     private static final double REACH_DISTANCE = 5.5;
     /**
-     * Ticks spent digging one block once in range. ~3 ticks is close to a real player
-     * breaking dirt with an iron shovel.
-     */
-    private static final int DIG_TICKS = 3;
-    /**
      * Movement speed while working. Vanilla sprinting is ~5.6 blocks/sec against
      * ~4.3 walking, so ~1.3x reads as a player jogging between blocks.
      */
     private static final float WALK_SPEED_MODIFIER = 1.3f;
     /** Pathfinding range in blocks. Citizens defaults to 25 and caps at 100. */
     private static final float PATHFINDING_RANGE = 100.0f;
+    /** Basic ledge/fall-risk avoidance — how far a path is allowed to drop the NPC in one go. */
+    private static final int MAX_TOLERATED_FALL = 3;
     /** Grace period for the navigator to actually start moving before we call it a failed path. */
     private static final int PATH_GRACE_TICKS = 20;
     /**
@@ -116,15 +118,12 @@ public final class ClearJobTask {
     /** How often to scan for hostile mobs — no need to check every tick. */
     private static final int MOB_ALERT_CHECK_PERIOD = GLOW_TICK_PERIOD;
 
-    private enum Phase { SEEKING, WALKING, DIGGING, HAULING, GRIEF_WAIT }
-
-    /** How long a grief ping waits for a response before defaulting to leaving the block alone. */
-    private static final int GRIEF_WAIT_TICKS = 20 * 20;
+    private enum Phase { SEEKING, WALKING, DIGGING, HAULING }
 
     private final Plugin plugin;
     private final Logger logger;
     private final JobManager jobManager;
-    private final PlayerPlacementTracker placementTracker;
+    private final HelperLevelService levelService;
     private final UUID playerId;
     private final NPC npc;
     private final Entity npcEntity;
@@ -135,7 +134,6 @@ public final class ClearJobTask {
     private final Material tool;
     private final boolean surfaceOnly;
     private final boolean storeInChest;
-    private final boolean griefPlayerPlaced;
     private final int savedMinX;
     private final int savedMaxX;
     private final int savedMinY;
@@ -176,10 +174,6 @@ public final class ClearJobTask {
     private boolean announced50;
     private boolean announced85;
     private BukkitTask task;
-    private int griefWaitTicks;
-    private boolean griefSkipRequested;
-    /** Positions a grief ping already resolved — permanently excluded so a later pass never re-pings them. */
-    private final Set<String> griefSkippedBlocks = new HashSet<>();
     /** Hostile mobs already alerted about, so the same one doesn't re-trigger every scan. */
     private final Set<UUID> alertedMobs = new HashSet<>();
     /** Chunks currently held open via a plugin ticket — see {@link #refreshChunkTickets()}. */
@@ -192,23 +186,23 @@ public final class ClearJobTask {
     private final long startedAtMillis = System.currentTimeMillis();
 
     /** Fresh job, just dispatched. */
-    ClearJobTask(Plugin plugin, JobManager jobManager, PlayerPlacementTracker placementTracker, Player player,
+    ClearJobTask(Plugin plugin, JobManager jobManager, HelperLevelService levelService, Player player,
                  NPC npc, Entity npcEntity, EntityEquipment equipment, TextDisplay label, World world,
                  Target target, Material tool, int minX, int maxX, int minY, int maxY, int minZ, int maxZ,
                  int spanX, int spanZ, long totalCells, JobStorage storage, boolean storeInChest,
-                 boolean surfaceOnly, boolean griefPlayerPlaced, RegionOutline outline) {
-        this(plugin, jobManager, placementTracker, player.getUniqueId(), npc, npcEntity, equipment, label, world,
-                target, tool, minX, maxX, minY, maxY, minZ, maxZ, spanX, spanZ, totalCells, storage,
-                storeInChest, surfaceOnly, griefPlayerPlaced, outline,
+                 boolean surfaceOnly, RegionOutline outline) {
+        this(plugin, jobManager, levelService, player.getUniqueId(), npc, npcEntity, equipment,
+                label, world, target, tool, minX, maxX, minY, maxY, minZ, maxZ, spanX, spanZ, totalCells, storage,
+                storeInChest, surfaceOnly, outline,
                 Phase.SEEKING, 0, 0, 0, 1, 0, 0, 0, 0, new HashMap<>());
     }
 
-    private ClearJobTask(Plugin plugin, JobManager jobManager, PlayerPlacementTracker placementTracker,
-                          UUID playerId, NPC npc, Entity npcEntity,
-                          EntityEquipment equipment, TextDisplay label, World world, Target target, Material tool,
+    private ClearJobTask(Plugin plugin, JobManager jobManager, HelperLevelService levelService, UUID playerId,
+                          NPC npc, Entity npcEntity, EntityEquipment equipment, TextDisplay label, World world,
+                          Target target, Material tool,
                           int minX, int maxX, int minY, int maxY, int minZ, int maxZ,
                           int spanX, int spanZ, long totalCells, JobStorage storage,
-                          boolean storeInChest, boolean surfaceOnly, boolean griefPlayerPlaced,
+                          boolean storeInChest, boolean surfaceOnly,
                           RegionOutline outline,
                           Phase phase, long processedCells, long clearedCells, long deposited, int passNumber,
                           long clearedThisPass, long skippedThisPass, long skippedNoPath, long skippedTimeout,
@@ -216,7 +210,7 @@ public final class ClearJobTask {
         this.plugin = plugin;
         this.logger = plugin.getLogger();
         this.jobManager = jobManager;
-        this.placementTracker = placementTracker;
+        this.levelService = levelService;
         this.playerId = playerId;
         this.npc = npc;
         this.npcEntity = npcEntity;
@@ -240,7 +234,6 @@ public final class ClearJobTask {
         this.storage = storage;
         this.storeInChest = storeInChest;
         this.surfaceOnly = surfaceOnly;
-        this.griefPlayerPlaced = griefPlayerPlaced;
         this.outline = outline;
         this.phase = phase;
         this.processedCells = processedCells;
@@ -265,8 +258,8 @@ public final class ClearJobTask {
      * trusting after the world may have changed underneath it. Returns null if the
      * world, target, or tool this job needs no longer resolves.
      */
-    static ClearJobTask resume(Plugin plugin, JobManager jobManager, PlayerPlacementTracker placementTracker,
-                                JobState state, NPC npc) {
+    static ClearJobTask resume(Plugin plugin, JobManager jobManager,
+                                HelperLevelService levelService, JobState state, NPC npc) {
         World world = Bukkit.getWorld(state.worldName);
         Entity npcEntity = npc.getEntity();
         if (world == null || npcEntity == null) {
@@ -310,7 +303,7 @@ public final class ClearJobTask {
                     state.cubeUnitIndex, state.rowSign, state.columnSign);
         }
 
-        EntityEquipment equipment = equipTool(npcEntity, tool);
+        EntityEquipment equipment = equipTool(npcEntity, tool, npc.getName(), TaskType.fromTool(tool).toolNoun());
         TextDisplay label = spawnLabel(npcEntity.getLocation());
         RegionOutline outline = new RegionOutline(world, state.minX, state.minY, state.minZ,
                 state.maxX, state.maxY, state.maxZ);
@@ -323,11 +316,12 @@ public final class ClearJobTask {
             }
         }
 
-        return new ClearJobTask(plugin, jobManager, placementTracker, state.playerId, npc, npcEntity, equipment,
-                label, world, target, tool, state.minX, state.maxX, state.minY, state.maxY, state.minZ, state.maxZ,
-                spanX, spanZ, totalCells, storage, state.storeInChest, state.surfaceOnly, state.griefPlayerPlaced,
-                outline, Phase.SEEKING, state.processedCells, state.clearedCells, state.deposited, state.passNumber,
-                state.clearedThisPass, state.skippedThisPass, state.skippedNoPath, state.skippedTimeout, carried);
+        return new ClearJobTask(plugin, jobManager, levelService, state.playerId, npc, npcEntity,
+                equipment, label, world, target, tool, state.minX, state.maxX, state.minY, state.maxY, state.minZ,
+                state.maxZ, spanX, spanZ, totalCells, storage, state.storeInChest, state.surfaceOnly,
+                outline, Phase.SEEKING, state.processedCells, state.clearedCells,
+                state.deposited, state.passNumber, state.clearedThisPass, state.skippedThisPass,
+                state.skippedNoPath, state.skippedTimeout, carried);
     }
 
     static TextDisplay spawnLabel(Location npcLocation) {
@@ -338,14 +332,27 @@ public final class ClearJobTask {
         return label;
     }
 
-    /** Returns the entity's equipment if it can hold one, so the job can clear it when done. */
-    static EntityEquipment equipTool(Entity npcEntity, Material tool) {
+    /**
+     * Returns the entity's equipment if it can hold one, so the job can clear it when
+     * done. The equipped copy gets a per-NPC display name ("Thaddeus's Trusty Shovel")
+     * for flavor — purely cosmetic, so this must never be the item passed to
+     * {@link Block#getDrops(ItemStack)} in {@link #collectDrops}, which needs the plain
+     * material to keep drop-table math unaffected.
+     */
+    static EntityEquipment equipTool(Entity npcEntity, Material tool, String npcName, String toolNoun) {
         if (!(npcEntity instanceof LivingEntity livingEntity)) {
             return null;
         }
         EntityEquipment equipment = livingEntity.getEquipment();
         if (equipment != null) {
-            equipment.setItemInMainHand(new ItemStack(tool));
+            ItemStack item = new ItemStack(tool);
+            ItemMeta meta = item.getItemMeta();
+            if (meta != null) {
+                meta.displayName(Component.text(npcName + "'s Trusty " + toolNoun, NamedTextColor.AQUA)
+                        .decoration(TextDecoration.ITALIC, false));
+                item.setItemMeta(meta);
+            }
+            equipment.setItemInMainHand(item);
         }
         return equipment;
     }
@@ -385,9 +392,13 @@ public final class ClearJobTask {
     void start() {
         // Citizens defaults to a 25-block pathfinding range and simply gives up past it,
         // which strands the NPC on anything across a decent-sized site. 100 is the max.
+        // fallDistance caps how far a path is allowed to drop the NPC in one go — Citizens'
+        // NavigatorParameters has no dedicated "avoid lava" flag (checked against the real
+        // jar), so lava-adjacency is handled separately via isNearLava() in isClearable().
         npc.getNavigator().getDefaultParameters()
                 .speedModifier(WALK_SPEED_MODIFIER)
                 .range(PATHFINDING_RANGE)
+                .fallDistance(MAX_TOLERATED_FALL)
                 .stuckAction(TeleportStuckAction.INSTANCE);
         paused = false;
         refreshChunkTickets();
@@ -498,7 +509,6 @@ public final class ClearJobTask {
         state.tool = tool.name();
         state.surfaceOnly = surfaceOnly;
         state.storeInChest = storeInChest;
-        state.griefPlayerPlaced = griefPlayerPlaced;
         state.processedCells = processedCells;
         state.clearedCells = clearedCells;
         state.deposited = deposited;
@@ -541,7 +551,6 @@ public final class ClearJobTask {
             case WALKING -> walkToPendingBlock();
             case DIGGING -> digPendingBlock();
             case HAULING -> haulToChest();
-            case GRIEF_WAIT -> waitForGriefResponse();
         }
 
         // A long walk across a big site otherwise has zero feedback between one dig and
@@ -733,59 +742,10 @@ public final class ClearJobTask {
         }
     }
 
-    /**
-     * Starts digging pendingBlock — unless it looks like a player's build and the
-     * grief checkbox is off, in which case it pings the player and waits instead.
-     */
+    /** Starts digging pendingBlock. */
     private void beginDigging() {
-        if (!griefPlayerPlaced && placementTracker.isPlayerPlaced(pendingBlock)) {
-            griefWaitTicks = 0;
-            griefSkipRequested = false;
-            phase = Phase.GRIEF_WAIT;
-            Location loc = pendingBlock.getLocation();
-            messagePlayer(Component.text(npc.getName() + ": Hold on — (" + loc.getBlockX() + ", "
-                    + loc.getBlockY() + ", " + loc.getBlockZ() + ") looks like it might be yours. Say "
-                    + "\"leave it\" within 20 seconds if you want me to skip it.", NamedTextColor.GOLD));
-            return;
-        }
         digTicks = 0;
         phase = Phase.DIGGING;
-    }
-
-    /**
-     * Waits for a "leave it" reply before touching a suspected player-placed block.
-     * Silence isn't treated as permission — the block is skipped either way, since
-     * getting this wrong destroys something real while getting it "wrong" the other
-     * way just costs a few extra seconds of walking.
-     */
-    private void waitForGriefResponse() {
-        if (griefSkipRequested) {
-            // No message here — the chat listener that set this flag already sent its
-            // own flavor response, same as every other job-control trigger.
-            griefSkippedBlocks.add(blockKey(pendingBlock));
-            abandonPendingBlock();
-            return;
-        }
-        griefWaitTicks++;
-        if (griefWaitTicks >= GRIEF_WAIT_TICKS) {
-            messagePlayer(Component.text(
-                    npc.getName() + ": No word back — I'll leave that one alone.", NamedTextColor.YELLOW));
-            griefSkippedBlocks.add(blockKey(pendingBlock));
-            abandonPendingBlock();
-        }
-    }
-
-    /** Called by {@link JobManager} when the job's owner says "leave it" during a grief-wait. */
-    void requestGriefSkip() {
-        griefSkipRequested = true;
-    }
-
-    boolean isAwaitingGriefResponse() {
-        return phase == Phase.GRIEF_WAIT;
-    }
-
-    private static String blockKey(Block block) {
-        return block.getX() + "," + block.getY() + "," + block.getZ();
     }
 
     /** Plays the dig animation for a beat, then actually breaks the block. */
@@ -803,7 +763,7 @@ public final class ClearJobTask {
         }
         digTicks++;
 
-        if (digTicks < DIG_TICKS) {
+        if (digTicks < levelService.digTicksFor(npc.getId())) {
             return;
         }
 
@@ -815,14 +775,12 @@ public final class ClearJobTask {
         boolean wasInfested = Target.isInfested(pendingBlock.getType());
         collectDrops(pendingBlock);
         pendingBlock.setType(Material.AIR);
-        // Bypasses BlockBreakEvent the same way the silverfish spawn does, so the
-        // placement tracker needs telling directly that this position is clear now.
-        placementTracker.forget(pendingBlock);
         if (wasInfested) {
             spawnSurpriseSilverfish(pendingBlock.getLocation());
         }
         clearedCells++;
         clearedThisPass++;
+        levelService.awardXp(npc.getId(), 1);
         abandonPendingBlock();
 
         if (storage != null && carriedTotal >= CARRY_CAPACITY) {
@@ -837,6 +795,12 @@ public final class ClearJobTask {
         }
         for (ItemStack drop : block.getDrops(new ItemStack(tool))) {
             int amount = drop.getAmount() * TEST_DROP_MULTIPLIER;
+            // Specialization bonus-drop skill: a matching-specialty Helper occasionally
+            // pulls one extra unit. Rolled on the plain drop, same material either way —
+            // this is a bonus quantity, not a different item.
+            if (levelService.rollBonusDrop(npc.getId(), target)) {
+                amount += 1;
+            }
             carried.merge(drop.getType(), amount, Integer::sum);
             carriedTotal += amount;
         }
@@ -938,9 +902,15 @@ public final class ClearJobTask {
         if (block == null || !target.matches(block.getType())) {
             return false;
         }
-        // A grief-ping that resolved to "leave it" is permanent for this job — otherwise
-        // a later pass would just walk back over and re-ping about the same block.
-        if (griefSkippedBlocks.contains(blockKey(block))) {
+        // Harvest-tier gating: nothing in today's Target roster actually requires above
+        // Tier 1, so this can't yet block anything live — it's ready for Phase 1-G's ore
+        // targets without needing to touch this method again.
+        if (!levelService.canHarvest(npc.getId(), block.getType())) {
+            return false;
+        }
+        // Basic hazard-avoidance pathing (warning-only Nether/End dispatch still lets the
+        // job proceed, but the NPC won't walk right up to a lava-adjacent block for it).
+        if (isNearLava(block)) {
             return false;
         }
         // Surface mode leaves buried material alone. With it off the job hollows the
@@ -948,6 +918,20 @@ public final class ClearJobTask {
         // descending means the NPC always has open space above the layer it's working.
         return !surfaceOnly
                 || world.getBlockAt(block.getX(), block.getY() + 1, block.getZ()).isPassable();
+    }
+
+    private static final BlockFace[] ADJACENT_FACES = {
+        BlockFace.UP, BlockFace.DOWN, BlockFace.NORTH, BlockFace.SOUTH, BlockFace.EAST, BlockFace.WEST,
+    };
+
+    /** Basic hazard-avoidance: don't walk up to dig a block sitting right next to lava. */
+    private boolean isNearLava(Block block) {
+        for (BlockFace face : ADJACENT_FACES) {
+            if (block.getRelative(face).getType() == Material.LAVA) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

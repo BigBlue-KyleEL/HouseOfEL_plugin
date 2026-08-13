@@ -18,10 +18,17 @@ public final class BuilderNpcService {
     private static final List<String> NAME_ROSTER = List.of(
             "Thaddeus", "Bartholomew", "Montgomery", "Horace", "Aldric");
 
-    public NPC spawnHelper(Location location) {
+    private final HelperLevelService levelService;
+
+    public BuilderNpcService(HelperLevelService levelService) {
+        this.levelService = levelService;
+    }
+
+    public NPC spawnHelper(Location location, Specialization specialization) {
         NPC npc = CitizensAPI.getNPCRegistry().createNPC(EntityType.VILLAGER, nextName());
         npc.data().setPersistent(ROLE_KEY, ROLE_VALUE);
         npc.spawn(location);
+        levelService.assign(npc.getId(), specialization);
         return npc;
     }
 

@@ -1,8 +1,9 @@
 package com.houseofel.builder.command;
 
-import com.houseofel.builder.npc.BuilderNpcService;
+import com.houseofel.builder.gui.BedrockJobForm;
+import com.houseofel.builder.npc.SpecializationDialog;
+import com.houseofel.builder.npc.SpecializationForm;
 import com.houseofel.builder.region.RegionSelectionService;
-import net.citizensnpcs.api.npc.NPC;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
@@ -12,11 +13,14 @@ public final class BuilderCommand implements CommandExecutor {
 
     private static final String SPAWN_PERMISSION = "houseofel.builder.spawn";
 
-    private final BuilderNpcService npcService;
+    private final SpecializationDialog specializationDialog;
+    private final SpecializationForm specializationForm;
     private final RegionSelectionService regionService;
 
-    public BuilderCommand(BuilderNpcService npcService, RegionSelectionService regionService) {
-        this.npcService = npcService;
+    public BuilderCommand(SpecializationDialog specializationDialog, SpecializationForm specializationForm,
+                           RegionSelectionService regionService) {
+        this.specializationDialog = specializationDialog;
+        this.specializationForm = specializationForm;
         this.regionService = regionService;
     }
 
@@ -45,7 +49,10 @@ public final class BuilderCommand implements CommandExecutor {
             player.sendMessage("You don't have permission to spawn a Helper NPC.");
             return;
         }
-        NPC npc = npcService.spawnHelper(player.getLocation());
-        player.sendMessage("Spawned Helper NPC '" + npc.getName() + "' (#" + npc.getId() + ").");
+        if (BedrockJobForm.isBedrockPlayer(player)) {
+            specializationForm.open(player, player.getLocation());
+        } else {
+            specializationDialog.open(player, player.getLocation());
+        }
     }
 }

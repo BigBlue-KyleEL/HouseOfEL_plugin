@@ -56,7 +56,7 @@ public final class RegionSelectionService {
 
     /** Called once the job is configured and sent off from the Helper NPC's GUI. */
     public void beginJob(Player player, NPC npc, TaskType taskType, Target target,
-                          boolean storeInChest, boolean surfaceOnly, boolean griefPlayerPlaced) {
+                          boolean storeInChest, boolean surfaceOnly) {
         clearJob(player.getUniqueId());
         if (!rod.giveTo(player, npc.getName())) {
             player.sendMessage(Component.text(
@@ -65,7 +65,7 @@ public final class RegionSelectionService {
             return;
         }
         jobs.put(player.getUniqueId(),
-                new PendingJob(npc, taskType, target, storeInChest, surfaceOnly, griefPlayerPlaced));
+                new PendingJob(npc, taskType, target, storeInChest, surfaceOnly));
     }
 
     /**
@@ -105,8 +105,8 @@ public final class RegionSelectionService {
             Location pointA = job.pointA;
             Location pointB = job.pointB;
             finish(player);
-            jobExecutionService.dispatchClear(player, job.npc, job.taskType.tool(), job.target,
-                    pointA, pointB, job.storeInChest, job.surfaceOnly, job.griefPlayerPlaced);
+            jobExecutionService.dispatchClear(player, job.npc, job.taskType, job.target,
+                    pointA, pointB, job.storeInChest, job.surfaceOnly);
             return;
         }
 
@@ -224,7 +224,6 @@ public final class RegionSelectionService {
         private final Target target;
         private final boolean storeInChest;
         private final boolean surfaceOnly;
-        private final boolean griefPlayerPlaced;
         private Location pointA;
         private Location pointB;
         private long lastClickMillis;
@@ -232,13 +231,12 @@ public final class RegionSelectionService {
         private BukkitTask timeoutTask;
 
         private PendingJob(NPC npc, TaskType taskType, Target target,
-                            boolean storeInChest, boolean surfaceOnly, boolean griefPlayerPlaced) {
+                            boolean storeInChest, boolean surfaceOnly) {
             this.npc = npc;
             this.taskType = taskType;
             this.target = target;
             this.storeInChest = storeInChest;
             this.surfaceOnly = surfaceOnly;
-            this.griefPlayerPlaced = griefPlayerPlaced;
         }
 
         private boolean locked() {

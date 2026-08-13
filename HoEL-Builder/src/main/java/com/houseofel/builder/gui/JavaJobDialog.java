@@ -99,9 +99,7 @@ public final class JavaJobDialog {
                                 npc.getName() + " — " + taskType.label() + " " + target.label()))
                         .inputs(List.of(
                                 DialogInput.bool("surfaceOnly", Component.text("Surface Only")).initial(true).build(),
-                                DialogInput.bool("storeInChest", Component.text("Store in Chest")).initial(true).build(),
-                                DialogInput.bool("griefPlayerPlaced", Component.text("Grief Player-Placed Items"))
-                                        .initial(false).build()
+                                DialogInput.bool("storeInChest", Component.text("Store in Chest")).initial(true).build()
                         ))
                         .build())
                 .type(DialogType.confirmation(
@@ -119,11 +117,10 @@ public final class JavaJobDialog {
     private void onSubmit(Player player, NPC npc, TaskType taskType, Target target, DialogResponseView view) {
         boolean surfaceOnly = Boolean.TRUE.equals(view.getBoolean("surfaceOnly"));
         boolean storeInChest = Boolean.TRUE.equals(view.getBoolean("storeInChest"));
-        boolean griefPlayerPlaced = Boolean.TRUE.equals(view.getBoolean("griefPlayerPlaced"));
 
         // beginJob() hands out an item and drives the region-selection flow — run it on
         // the main thread like every other dialog-triggered Bukkit call here.
         Bukkit.getScheduler().runTask(plugin, () ->
-                regionService.beginJob(player, npc, taskType, target, storeInChest, surfaceOnly, griefPlayerPlaced));
+                regionService.beginJob(player, npc, taskType, target, storeInChest, surfaceOnly));
     }
 }

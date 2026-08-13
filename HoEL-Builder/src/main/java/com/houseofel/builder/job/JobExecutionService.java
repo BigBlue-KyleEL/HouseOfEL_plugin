@@ -1,6 +1,8 @@
 package com.houseofel.builder.job;
 
 import com.houseofel.builder.gui.Target;
+import com.houseofel.builder.gui.TaskType;
+import com.houseofel.builder.npc.HelperLevelService;
 import com.houseofel.builder.region.RegionOutline;
 import net.citizensnpcs.api.npc.NPC;
 import net.kyori.adventure.text.Component;
@@ -27,18 +29,19 @@ public final class JobExecutionService {
     private final Plugin plugin;
     private final Logger logger;
     private final JobManager jobManager;
-    private final PlayerPlacementTracker placementTracker;
+    private final HelperLevelService levelService;
 
-    public JobExecutionService(Plugin plugin, JobManager jobManager, PlayerPlacementTracker placementTracker) {
+    public JobExecutionService(Plugin plugin, JobManager jobManager, HelperLevelService levelService) {
         this.plugin = plugin;
         this.logger = plugin.getLogger();
         this.jobManager = jobManager;
-        this.placementTracker = placementTracker;
+        this.levelService = levelService;
     }
 
-    public void dispatchClear(Player player, NPC npc, Material tool, Target target,
+    public void dispatchClear(Player player, NPC npc, TaskType taskType, Target target,
                                Location pointA, Location pointB, boolean storeInChest,
-                               boolean surfaceOnly, boolean griefPlayerPlaced) {
+                               boolean surfaceOnly) {
+        Material tool = taskType.tool();
         Entity npcEntity = npc.getEntity();
         if (npcEntity == null) {
             player.sendMessage(Component.text(
@@ -56,6 +59,14 @@ public final class JobExecutionService {
         }
 
         World world = pointA.getWorld();
+        // Warning-only per the Masterfile — no restriction, the job proceeds regardless.
+        if (world.getEnvironment() == World.Environment.NETHER
+                || world.getEnvironment() == World.Environment.THE_END) {
+            player.sendMessage(Component.text(
+                    npc.getName() + ": Rough territory out here — I'll be careful, but you might want to keep an eye on me.",
+                    NamedTextColor.YELLOW));
+        }
+
         int minX = Math.min(pointA.getBlockX(), pointB.getBlockX());
         int minY = Math.min(pointA.getBlockY(), pointB.getBlockY());
         int minZ = Math.min(pointA.getBlockZ(), pointB.getBlockZ());
@@ -69,7 +80,7 @@ public final class JobExecutionService {
         long totalCells = (long) spanX * spanY * spanZ;
 
         TextDisplay label = ClearJobTask.spawnLabel(npcEntity.getLocation());
-        EntityEquipment equipment = ClearJobTask.equipTool(npcEntity, tool);
+        EntityEquipment equipment = ClearJobTask.equipTool(npcEntity, tool, npc.getName(), taskType.toolNoun());
 
         player.sendMessage(Component.text(npc.getName() + ": Right, I'll get started on the "
                 + target.label() + " — " + totalCells + " blocks to check.", NamedTextColor.GREEN));
@@ -98,9 +109,9 @@ public final class JobExecutionService {
 
         RegionOutline outline = new RegionOutline(world, minX, minY, minZ, maxX, maxY, maxZ);
 
-        ClearJobTask task = new ClearJobTask(plugin, jobManager, placementTracker, player, npc, npcEntity,
-                equipment, label, world, target, tool, minX, maxX, minY, maxY, minZ, maxZ, spanX, spanZ,
-                totalCells, storage, storeInChest, surfaceOnly, griefPlayerPlaced, outline);
+        ClearJobTask task = new ClearJobTask(plugin, jobManager, levelService, player, npc,
+                npcEntity, equipment, label, world, target, tool, minX, maxX, minY, maxY, minZ, maxZ, spanX, spanZ,
+                totalCells, storage, storeInChest, surfaceOnly, outline);
         jobManager.register(task);
         task.start();
     }
