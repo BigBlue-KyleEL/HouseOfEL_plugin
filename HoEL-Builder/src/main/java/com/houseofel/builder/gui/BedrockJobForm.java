@@ -1,6 +1,9 @@
 package com.houseofel.builder.gui;
 
+import com.houseofel.builder.npc.BuilderNpcService;
+import com.houseofel.builder.npc.Specialization;
 import com.houseofel.builder.region.RegionSelectionService;
+import com.houseofel.builder.title.FlavorLadder;
 import net.citizensnpcs.api.npc.NPC;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
@@ -34,20 +37,34 @@ public final class BedrockJobForm {
         return FloodgateApi.getInstance().isFloodgatePlayer(player.getUniqueId());
     }
 
-    public void open(Player player, NPC npc) {
+    public void open(Player player, NPC npc, Specialization specialization, int level) {
         FloodgatePlayer floodgatePlayer = floodgatePlayer(player);
         if (floodgatePlayer == null) {
             return;
         }
 
+        String name = BuilderNpcService.baseNameOf(npc);
+        String title = specialization == null ? name : name + " — " + specialization.label();
+        String flavor = FlavorLadder.flavorFor(specialization, level);
+
+        CustomForm.Builder form = CustomForm.builder().title(title);
+        // Absent for an unassigned or still-green Helper — no empty label in that case.
+        // A label OCCUPIES a response slot (it comes back as null), so its presence
+        // shifts every following component's index — hence answerOffset below. Verified
+        // against Cumulus' own response implementation; getDropdown/getToggle index
+        // absolutely and do not skip labels.
+        int answerOffset = 0;
+        if (flavor != null) {
+            form.label(flavor);
+            answerOffset = 1;
+        }
+        int offset = answerOffset;
         floodgatePlayer.sendForm(
-                CustomForm.builder()
-                        .title(npc.getName() + " — New Job")
-                        .dropdown("Task Type", labelsOf(TaskType.values()))
+                form.dropdown("Task Type", labelsOf(TaskType.values()))
                         .dropdown("Target", labelsOf(Target.values()))
                         .toggle("Surface Only", true)
                         .toggle("Store in Chest", true)
-                        .validResultHandler(response -> onSubmit(player, npc, response))
+                        .validResultHandler(response -> onSubmit(player, npc, response, offset))
                         .closedOrInvalidResultHandler(() -> onClosed(player))
                         .build());
     }
@@ -61,7 +78,7 @@ public final class BedrockJobForm {
 
         floodgatePlayer.sendForm(
                 SimpleForm.builder()
-                        .title(npc.getName() + " is busy")
+                        .title(BuilderNpcService.baseNameOf(npc) + " is busy")
                         .content("Can't help you right now, kiddo — every pair of hands is spoken "
                                 + "for. Check back in " + eta + ".")
                         .button("Okay")
@@ -72,13 +89,15 @@ public final class BedrockJobForm {
         return FloodgateApi.getInstance().getPlayer(player.getUniqueId());
     }
 
-    private void onSubmit(Player player, NPC npc, org.geysermc.cumulus.response.CustomFormResponse response) {
+    private void onSubmit(Player player, NPC npc, org.geysermc.cumulus.response.CustomFormResponse response,
+                           int offset) {
         // A dropdown's answer is the selected index (an int), not its label — reading it
         // as a String is what actually threw the ClassCastException on submit.
-        TaskType taskType = TaskType.values()[response.getDropdown(0)];
-        Target target = Target.values()[response.getDropdown(1)];
-        boolean surfaceOnly = response.getToggle(2);
-        boolean storeInChest = response.getToggle(3);
+        // `offset` accounts for the optional flavour label ahead of these — see open().
+        TaskType taskType = TaskType.values()[response.getDropdown(offset)];
+        Target target = Target.values()[response.getDropdown(offset + 1)];
+        boolean surfaceOnly = response.getToggle(offset + 2);
+        boolean storeInChest = response.getToggle(offset + 3);
 
         // The form response arrives off the main thread — beginJob() hands out an item
         // and drives the region-selection flow, both of which need to run on it.

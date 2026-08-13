@@ -49,7 +49,7 @@ public final class SpecializationForm {
         // NPC/entity, which needs to happen on it.
         Bukkit.getScheduler().runTask(plugin, () -> {
             NPC npc = npcService.spawnHelper(location, specialization);
-            player.sendMessage(Component.text("Spawned Helper NPC '" + npc.getName() + "' (#" + npc.getId()
+            player.sendMessage(Component.text("Spawned Helper NPC '" + BuilderNpcService.baseNameOf(npc) + "' (#" + npc.getId()
                     + ") as a " + specialization.label() + ".", NamedTextColor.GREEN));
         });
     }

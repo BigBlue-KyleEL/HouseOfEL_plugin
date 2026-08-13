@@ -23,13 +23,15 @@ import org.bukkit.event.Listener;
 public final class BuilderNpcListener implements Listener {
 
     private final BuilderNpcService npcService;
+    private final HelperLevelService levelService;
     private final JavaJobDialog javaDialog;
     private final BedrockJobForm bedrockForm;
     private final JobManager jobManager;
 
-    public BuilderNpcListener(BuilderNpcService npcService, JavaJobDialog javaDialog,
-                               BedrockJobForm bedrockForm, JobManager jobManager) {
+    public BuilderNpcListener(BuilderNpcService npcService, HelperLevelService levelService,
+                               JavaJobDialog javaDialog, BedrockJobForm bedrockForm, JobManager jobManager) {
         this.npcService = npcService;
+        this.levelService = levelService;
         this.javaDialog = javaDialog;
         this.bedrockForm = bedrockForm;
         this.jobManager = jobManager;
@@ -54,10 +56,15 @@ public final class BuilderNpcListener implements Listener {
             return;
         }
 
+        // Null for a pre-1-F NPC that was never assigned a specialization — both
+        // open()s fall back to just the Helper's name in that case. The level drives the
+        // flavour line under the header, which changes as the Helper grows.
+        Specialization specialization = levelService.specializationOf(npc);
+        int level = levelService.levelOf(npc);
         if (isBedrock) {
-            bedrockForm.open(player, npc);
+            bedrockForm.open(player, npc, specialization, level);
         } else {
-            javaDialog.open(player, npc);
+            javaDialog.open(player, npc, specialization, level);
         }
     }
 }

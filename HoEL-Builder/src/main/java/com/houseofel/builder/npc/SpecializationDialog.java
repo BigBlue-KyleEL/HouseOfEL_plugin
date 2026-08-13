@@ -55,7 +55,7 @@ public final class SpecializationDialog {
 
     private void onPick(Player player, Location location, Specialization specialization) {
         NPC npc = npcService.spawnHelper(location, specialization);
-        player.sendMessage(Component.text("Spawned Helper NPC '" + npc.getName() + "' (#" + npc.getId()
+        player.sendMessage(Component.text("Spawned Helper NPC '" + BuilderNpcService.baseNameOf(npc) + "' (#" + npc.getId()
                 + ") as a " + specialization.label() + ".", NamedTextColor.GREEN));
     }
 }

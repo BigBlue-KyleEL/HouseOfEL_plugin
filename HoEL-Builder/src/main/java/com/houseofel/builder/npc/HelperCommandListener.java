@@ -3,7 +3,6 @@ package com.houseofel.builder.npc;
 import com.houseofel.builder.job.JobManager;
 import com.houseofel.builder.job.JobManager.Outcome;
 import io.papermc.paper.event.player.AsyncChatEvent;
-import net.citizensnpcs.api.CitizensAPI;
 import net.citizensnpcs.api.npc.NPC;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
@@ -64,11 +63,12 @@ public final class HelperCommandListener implements Listener {
     public void onChat(AsyncChatEvent event) {
         String message = PlainTextComponentSerializer.plainText().serialize(event.message()).trim();
 
-        NPC npc = matchHelper(message);
+        NPC npc = npcService.matchHelper(message);
         if (npc == null) {
             return;
         }
-        String rest = message.substring(npc.getName().length()).trim().toLowerCase();
+        String npcName = BuilderNpcService.baseNameOf(npc);
+        String rest = message.substring(npcName.length()).trim().toLowerCase();
 
         Trigger pause = matchTrigger(PAUSE_TRIGGERS, rest);
         Trigger resume = pause == null ? matchTrigger(RESUME_TRIGGERS, rest) : null;
@@ -88,7 +88,6 @@ public final class HelperCommandListener implements Listener {
         event.setCancelled(true);
         Player player = event.getPlayer();
         UUID requester = player.getUniqueId();
-        String npcName = npc.getName();
 
         Bukkit.getScheduler().runTask(plugin, () -> {
             Outcome outcome;
@@ -118,22 +117,6 @@ public final class HelperCommandListener implements Listener {
         for (Trigger trigger : triggers) {
             if (rest.equals(trigger.word())) {
                 return trigger;
-            }
-        }
-        return null;
-    }
-
-    /** Matches a message starting with a spawned Helper's name, case-insensitively. */
-    private NPC matchHelper(String message) {
-        for (NPC npc : CitizensAPI.getNPCRegistry()) {
-            if (!npcService.isHelper(npc)) {
-                continue;
-            }
-            String name = npc.getName();
-            if (message.length() > name.length()
-                    && message.regionMatches(true, 0, name, 0, name.length())
-                    && Character.isWhitespace(message.charAt(name.length()))) {
-                return npc;
             }
         }
         return null;

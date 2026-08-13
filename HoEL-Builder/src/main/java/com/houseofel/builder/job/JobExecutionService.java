@@ -2,6 +2,7 @@ package com.houseofel.builder.job;
 
 import com.houseofel.builder.gui.Target;
 import com.houseofel.builder.gui.TaskType;
+import com.houseofel.builder.npc.BuilderNpcService;
 import com.houseofel.builder.npc.HelperLevelService;
 import com.houseofel.builder.region.RegionOutline;
 import net.citizensnpcs.api.npc.NPC;
@@ -45,7 +46,7 @@ public final class JobExecutionService {
         Entity npcEntity = npc.getEntity();
         if (npcEntity == null) {
             player.sendMessage(Component.text(
-                    npc.getName() + " isn't spawned right now — can't start the job.", NamedTextColor.RED));
+                    BuilderNpcService.baseNameOf(npc) + " isn't spawned right now — can't start the job.", NamedTextColor.RED));
             return;
         }
         // Belt-and-suspenders: BuilderNpcListener already turns players away at the door
@@ -63,7 +64,7 @@ public final class JobExecutionService {
         if (world.getEnvironment() == World.Environment.NETHER
                 || world.getEnvironment() == World.Environment.THE_END) {
             player.sendMessage(Component.text(
-                    npc.getName() + ": Rough territory out here — I'll be careful, but you might want to keep an eye on me.",
+                    BuilderNpcService.baseNameOf(npc) + ": Rough territory out here — I'll be careful, but you might want to keep an eye on me.",
                     NamedTextColor.YELLOW));
         }
 
@@ -80,9 +81,9 @@ public final class JobExecutionService {
         long totalCells = (long) spanX * spanY * spanZ;
 
         TextDisplay label = ClearJobTask.spawnLabel(npcEntity.getLocation());
-        EntityEquipment equipment = ClearJobTask.equipTool(npcEntity, tool, npc.getName(), taskType.toolNoun());
+        EntityEquipment equipment = ClearJobTask.equipTool(npcEntity, tool, BuilderNpcService.baseNameOf(npc), taskType.toolNoun());
 
-        player.sendMessage(Component.text(npc.getName() + ": Right, I'll get started on the "
+        player.sendMessage(Component.text(BuilderNpcService.baseNameOf(npc) + ": Right, I'll get started on the "
                 + target.label() + " — " + totalCells + " blocks to check.", NamedTextColor.GREEN));
         logger.info(player.getName() + " dispatched CLEAR/" + target + " job over " + totalCells + " cells");
 
@@ -96,7 +97,7 @@ public final class JobExecutionService {
             Location chestAt = storage.depositPoint();
             if (chestAt == null) {
                 player.sendMessage(Component.text(
-                        "Couldn't find anywhere to place a storage chest — " + npc.getName()
+                        "Couldn't find anywhere to place a storage chest — " + BuilderNpcService.baseNameOf(npc)
                                 + " will work without one.", NamedTextColor.RED));
             } else {
                 String coords = "(" + chestAt.getBlockX() + ", " + chestAt.getBlockY() + ", "

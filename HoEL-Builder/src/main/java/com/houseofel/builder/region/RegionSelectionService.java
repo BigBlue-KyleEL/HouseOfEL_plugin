@@ -1,5 +1,6 @@
 package com.houseofel.builder.region;
 
+import com.houseofel.builder.npc.BuilderNpcService;
 import com.houseofel.builder.gui.Target;
 import com.houseofel.builder.gui.TaskType;
 import com.houseofel.builder.job.JobExecutionService;
@@ -58,9 +59,9 @@ public final class RegionSelectionService {
     public void beginJob(Player player, NPC npc, TaskType taskType, Target target,
                           boolean storeInChest, boolean surfaceOnly) {
         clearJob(player.getUniqueId());
-        if (!rod.giveTo(player, npc.getName())) {
+        if (!rod.giveTo(player, BuilderNpcService.baseNameOf(npc))) {
             player.sendMessage(Component.text(
-                    npc.getName() + ": You can't even hold the Surveyor's Rod. Make space.",
+                    BuilderNpcService.baseNameOf(npc) + ": You can't even hold the Surveyor's Rod. Make space.",
                     NamedTextColor.RED));
             return;
         }
@@ -117,7 +118,7 @@ public final class RegionSelectionService {
 
     private void doCancel(Player player, PendingJob job) {
         player.sendMessage(Component.text(
-                job.npc.getName() + " lowers the rod. Come find me again when you're ready for a new job.",
+                BuilderNpcService.baseNameOf(job.npc) + " lowers the rod. Come find me again when you're ready for a new job.",
                 NamedTextColor.RED));
         finish(player);
     }
@@ -141,7 +142,7 @@ public final class RegionSelectionService {
         if (volume > MAX_VOLUME) {
             player.sendMessage(Component.text(
                     "Region too large (" + dx + " x " + dy + " x " + dz + " = " + volume + " blocks, max "
-                            + MAX_VOLUME + "). Rod consumed — visit " + job.npc.getName() + " again for a new one.",
+                            + MAX_VOLUME + "). Rod consumed — visit " + BuilderNpcService.baseNameOf(job.npc) + " again for a new one.",
                     NamedTextColor.RED));
             logger.info(player.getName() + " rejected: region " + dx + "x" + dy + "x" + dz + " (" + volume
                     + " blocks) exceeds " + MAX_VOLUME);
@@ -160,7 +161,7 @@ public final class RegionSelectionService {
         }
 
         player.sendMessage(Component.text(
-                job.npc.getName() + " looks over the marked area — " + dx + " x " + dy + " x " + dz + " ("
+                BuilderNpcService.baseNameOf(job.npc) + " looks over the marked area — " + dx + " x " + dy + " x " + dz + " ("
                         + volume + " blocks) for " + job.taskType.label() + " " + job.target.label()
                         + ". Say \"Yep\" to begin, or \"Wait\" to call it off.",
                 NamedTextColor.AQUA));

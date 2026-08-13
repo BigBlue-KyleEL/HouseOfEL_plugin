@@ -1,6 +1,9 @@
 package com.houseofel.builder.gui;
 
+import com.houseofel.builder.npc.BuilderNpcService;
+import com.houseofel.builder.npc.Specialization;
 import com.houseofel.builder.region.RegionSelectionService;
+import com.houseofel.builder.title.FlavorLadder;
 import io.papermc.paper.dialog.Dialog;
 import io.papermc.paper.dialog.DialogResponseView;
 import io.papermc.paper.registry.data.dialog.ActionButton;
@@ -12,6 +15,7 @@ import io.papermc.paper.registry.data.dialog.type.DialogType;
 import net.citizensnpcs.api.npc.NPC;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.event.ClickCallback;
+import net.kyori.adventure.text.format.TextDecoration;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.Plugin;
@@ -39,14 +43,14 @@ public final class JavaJobDialog {
         this.regionService = regionService;
     }
 
-    public void open(Player player, NPC npc) {
-        showTaskTypeStep(player, npc);
+    public void open(Player player, NPC npc, Specialization specialization, int level) {
+        showTaskTypeStep(player, npc, specialization, level);
     }
 
     /** Shown instead of the usual flow when the concurrency ceiling is full. */
     public void showBusy(Player player, NPC npc, String eta) {
         player.showDialog(Dialog.create(factory -> factory.empty()
-                .base(DialogBase.builder(Component.text(npc.getName() + " is busy"))
+                .base(DialogBase.builder(Component.text(BuilderNpcService.baseNameOf(npc) + " is busy"))
                         .body(List.of(DialogBody.plainMessage(Component.text(
                                 "Can't help you right now, kiddo — every pair of hands is spoken "
                                         + "for. Check back in " + eta + "."))))
@@ -54,7 +58,7 @@ public final class JavaJobDialog {
                 .type(DialogType.notice(ActionButton.create(Component.text("Okay"), null, 100, null)))));
     }
 
-    private void showTaskTypeStep(Player player, NPC npc) {
+    private void showTaskTypeStep(Player player, NPC npc, Specialization specialization, int level) {
         List<ActionButton> buttons = new ArrayList<>();
         for (TaskType type : TaskType.values()) {
             buttons.add(ActionButton.create(Component.text(type.label()), null, 150,
@@ -69,9 +73,29 @@ public final class JavaJobDialog {
                             ClickCallback.Options.builder().build())));
         }
 
+        // Name in the header, flavour line as a body block beneath it. The wide pad
+        // between the two is vanilla dialog spacing and isn't adjustable from here —
+        // both alternatives were tried in-game and were worse: a newline in the TITLE
+        // renders as an unprintable box glyph mid-line (a header is strictly one line),
+        // and moving BOTH lines into the body sits them together but leaves the title
+        // bar visibly empty. The gap is the least-bad of the three. Absent for an
+        // unassigned or still-green Helper, which just gets the header on its own.
+        String flavor = FlavorLadder.flavorFor(specialization, level);
+        DialogBase.Builder base = DialogBase.builder(Component.text(entryTitle(npc, specialization)));
+        if (flavor != null) {
+            base.body(List.of(DialogBody.plainMessage(
+                    Component.text(flavor).decorate(TextDecoration.ITALIC))));
+        }
+
         player.showDialog(Dialog.create(factory -> factory.empty()
-                .base(DialogBase.builder(Component.text(npc.getName() + " — Task Type")).build())
+                .base(base.build())
                 .type(DialogType.multiAction(buttons).build())));
+    }
+
+    /** "<Name> — <Specialization>", or just "<Name>" for a pre-1-F NPC with no assignment. */
+    private static String entryTitle(NPC npc, Specialization specialization) {
+        String name = BuilderNpcService.baseNameOf(npc);
+        return specialization == null ? name : name + " — " + specialization.label();
     }
 
     private void showTargetStep(Player player, NPC npc, TaskType taskType) {
@@ -89,14 +113,14 @@ public final class JavaJobDialog {
         }
 
         player.showDialog(Dialog.create(factory -> factory.empty()
-                .base(DialogBase.builder(Component.text(npc.getName() + " — Target")).build())
+                .base(DialogBase.builder(Component.text(BuilderNpcService.baseNameOf(npc) + " — Target")).build())
                 .type(DialogType.multiAction(buttons).build())));
     }
 
     private void showConfirmStep(Player player, NPC npc, TaskType taskType, Target target) {
         player.showDialog(Dialog.create(factory -> factory.empty()
                 .base(DialogBase.builder(Component.text(
-                                npc.getName() + " — " + taskType.label() + " " + target.label()))
+                                BuilderNpcService.baseNameOf(npc) + " — " + taskType.label() + " " + target.label()))
                         .inputs(List.of(
                                 DialogInput.bool("surfaceOnly", Component.text("Surface Only")).initial(true).build(),
                                 DialogInput.bool("storeInChest", Component.text("Store in Chest")).initial(true).build()

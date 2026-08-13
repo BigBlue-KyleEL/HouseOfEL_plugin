@@ -2,8 +2,12 @@ package com.houseofel.builder.job;
 
 import com.houseofel.builder.gui.Target;
 import com.houseofel.builder.gui.TaskType;
+import com.houseofel.builder.npc.BuilderNpcService;
 import com.houseofel.builder.npc.HelperLevelService;
+import com.houseofel.builder.npc.Specialization;
+import com.houseofel.builder.npc.TicketAwardResult;
 import com.houseofel.builder.region.RegionOutline;
+import com.houseofel.builder.toil.TicketKind;
 import net.citizensnpcs.api.ai.TeleportStuckAction;
 import net.citizensnpcs.api.npc.NPC;
 import net.kyori.adventure.text.Component;
@@ -93,6 +97,18 @@ public final class ClearJobTask {
      * overflow without clearing a huge region. Must stay 1 outside of that testing.
      */
     private static final int TEST_DROP_MULTIPLIER = 1;
+    /**
+     * Groundworker's real Toil ticket per the framework's XP-sources table: "512 blocks
+     * excavated, smoothed or drained, spoil hauled to a real chest — 8 Toil." The only
+     * live-wired ticket source as of Phase 1-F item 1 — see {@link #awardGroundworkerProgress()}.
+     *
+     * <p>Was temporarily dropped to 8 during Phase 1-F item 2 so a Helper could be walked
+     * through all ten milestone titles in one sitting; restored to the real value
+     * 2026-08-13 once that was confirmed working. Helpers levelled during that window
+     * (Bartholomew reached 20) keep their levels — deliberate, since the dev world is
+     * reset before go-live anyway.
+     */
+    private static final int GROUNDWORKER_TICKET_BLOCKS = 512;
     /** Squared-distance improvement that counts as real progress toward the target. */
     private static final double PROGRESS_EPSILON = 0.05;
     /**
@@ -303,7 +319,7 @@ public final class ClearJobTask {
                     state.cubeUnitIndex, state.rowSign, state.columnSign);
         }
 
-        EntityEquipment equipment = equipTool(npcEntity, tool, npc.getName(), TaskType.fromTool(tool).toolNoun());
+        EntityEquipment equipment = equipTool(npcEntity, tool, BuilderNpcService.baseNameOf(npc), TaskType.fromTool(tool).toolNoun());
         TextDisplay label = spawnLabel(npcEntity.getLocation());
         RegionOutline outline = new RegionOutline(world, state.minX, state.minY, state.minZ,
                 state.maxX, state.maxY, state.maxZ);
@@ -434,7 +450,7 @@ public final class ClearJobTask {
             equipment.setItemInMainHand(null);
         }
         jobManager.onJobEnded(npc.getId());
-        logger.info(npc.getName() + "'s job was cancelled ["
+        logger.info(BuilderNpcService.baseNameOf(npc) + "'s job was cancelled ["
                 + clearedCells + " cleared, " + deposited + " stored]");
     }
 
@@ -542,7 +558,7 @@ public final class ClearJobTask {
 
     private void tick() {
         if (!npcEntity.isValid()) {
-            finish(npc.getName() + " disappeared mid-job — clearing stopped early.");
+            finish(BuilderNpcService.baseNameOf(npc) + " disappeared mid-job — clearing stopped early.");
             return;
         }
 
@@ -588,14 +604,14 @@ public final class ClearJobTask {
         if (!announced50 && percent >= 50) {
             announced50 = true;
             messagePlayer(Component.text(
-                    npc.getName() + ": Making good progress — about halfway through the "
+                    BuilderNpcService.baseNameOf(npc) + ": Making good progress — about halfway through the "
                             + target.label() + " now.",
                     NamedTextColor.YELLOW));
         }
         if (!announced85 && percent >= 85) {
             announced85 = true;
             messagePlayer(Component.text(
-                    npc.getName() + ": Nearly there — just a bit more " + target.label() + " to go.",
+                    BuilderNpcService.baseNameOf(npc) + ": Nearly there — just a bit more " + target.label() + " to go.",
                     NamedTextColor.YELLOW));
         }
     }
@@ -609,7 +625,7 @@ public final class ClearJobTask {
         for (Entity nearby : npcEntity.getNearbyEntities(MOB_ALERT_RADIUS, MOB_ALERT_RADIUS, MOB_ALERT_RADIUS)) {
             if (nearby instanceof Monster monster && alertedMobs.add(monster.getUniqueId())) {
                 messagePlayer(Component.text(
-                        npc.getName() + ": Careful — there's a " + prettyName(monster.getType()) + " nearby!",
+                        BuilderNpcService.baseNameOf(npc) + ": Careful — there's a " + prettyName(monster.getType()) + " nearby!",
                         NamedTextColor.RED));
             }
         }
@@ -626,7 +642,7 @@ public final class ClearJobTask {
         Silverfish silverfish = world.spawn(location.add(0.5, 0.5, 0.5), Silverfish.class);
         alertedMobs.add(silverfish.getUniqueId());
         messagePlayer(Component.text(
-                npc.getName() + ": Whoa — that wasn't just stone! Silverfish!", NamedTextColor.RED));
+                BuilderNpcService.baseNameOf(npc) + ": Whoa — that wasn't just stone! Silverfish!", NamedTextColor.RED));
     }
 
     private static String prettyName(EntityType type) {
@@ -675,7 +691,7 @@ public final class ClearJobTask {
             return;
         }
 
-        finish(npc.getName() + ": All done — cleared " + clearedCells + " " + target.label()
+        finish(BuilderNpcService.baseNameOf(npc) + ": All done — cleared " + clearedCells + " " + target.label()
                 + " block(s)." + storedSuffix());
     }
 
@@ -763,7 +779,7 @@ public final class ClearJobTask {
         }
         digTicks++;
 
-        if (digTicks < levelService.digTicksFor(npc.getId())) {
+        if (digTicks < levelService.digTicksFor(npc)) {
             return;
         }
 
@@ -780,7 +796,7 @@ public final class ClearJobTask {
         }
         clearedCells++;
         clearedThisPass++;
-        levelService.awardXp(npc.getId(), 1);
+        awardGroundworkerProgress();
         abandonPendingBlock();
 
         if (storage != null && carriedTotal >= CARRY_CAPACITY) {
@@ -798,7 +814,7 @@ public final class ClearJobTask {
             // Specialization bonus-drop skill: a matching-specialty Helper occasionally
             // pulls one extra unit. Rolled on the plain drop, same material either way —
             // this is a bonus quantity, not a different item.
-            if (levelService.rollBonusDrop(npc.getId(), target)) {
+            if (levelService.rollBonusDrop(npc, target)) {
                 amount += 1;
             }
             carried.merge(drop.getType(), amount, Integer::sum);
@@ -811,7 +827,7 @@ public final class ClearJobTask {
         if (depositPoint == null) {
             // Nowhere to build a chest — carry on working rather than stalling the job.
             messagePlayer(Component.text(
-                    "No room to place a storage chest nearby — " + npc.getName()
+                    "No room to place a storage chest nearby — " + BuilderNpcService.baseNameOf(npc)
                             + " is working without one.", NamedTextColor.RED));
             carried.clear();
             carriedTotal = 0;
@@ -872,7 +888,7 @@ public final class ClearJobTask {
 
         if (!leftover.isEmpty()) {
             messagePlayer(Component.text(
-                    "Storage is full and there's no room to expand — " + npc.getName()
+                    "Storage is full and there's no room to expand — " + BuilderNpcService.baseNameOf(npc)
                             + " is dropping the rest.", NamedTextColor.RED));
             carried.clear();
             carriedTotal = 0;
@@ -881,7 +897,7 @@ public final class ClearJobTask {
         usedStraightLine = false;
 
         if (jobComplete) {
-            finish(npc.getName() + " finished clearing — " + clearedCells + " " + target.label()
+            finish(BuilderNpcService.baseNameOf(npc) + " finished clearing — " + clearedCells + " " + target.label()
                     + " block(s) cleared." + storedSuffix());
             return;
         }
@@ -890,6 +906,44 @@ public final class ClearJobTask {
 
     private String storedSuffix() {
         return storage == null ? "" : " " + deposited + " item(s) stored.";
+    }
+
+    /**
+     * Groundworker's Toil ticket: one per {@link #GROUNDWORKER_TICKET_BLOCKS} cleared.
+     * Called once per block broken, so progress accrues steadily as the Helper works and
+     * tickets fire one at a time — rather than the whole job's worth landing in a single
+     * lump the moment it reaches a chest, which read as the Helper jumping several levels
+     * at once with nothing visible in between.
+     *
+     * <p>Counting on the BREAK rather than on the deposit is a deliberate divergence from
+     * the framework's Groundworker entry ("spoil hauled to a real chest... voided spoil is
+     * an unfinished ticket"), made at Kyle's call 2026-08-13 for progression feel. It also
+     * closes a real hole in the deposit-gated version: that one only ran inside
+     * {@code unload()}, so any job dispatched with "Store in Chest" unchecked earned zero
+     * Toil no matter how much it cleared. The framework's "never award per block" rule is
+     * still honoured — the ledger is credited per finished TICKET; only the counter that
+     * accumulates toward one ticks per block.
+     *
+     * <p>Gated on the NPC's ASSIGNED specialization, not just the target block — the same
+     * gating {@link HelperLevelService#rollBonusDrop} already uses — so a non-Groundworker
+     * Helper sent to clear Stone/Dirt still does the job but earns no Groundworker Toil.
+     * Farmer/Lumberjack tickets aren't wired yet (they need tree-shape/replant logic this
+     * job engine doesn't have) — those Helpers earn no Toil until a later item wires them.
+     */
+    private void awardGroundworkerProgress() {
+        if (target != Target.STONE && target != Target.DIRT) {
+            return;
+        }
+        if (levelService.specializationOf(npc) != Specialization.GROUNDWORKER) {
+            return;
+        }
+        List<TicketAwardResult> results = levelService.awardProgress(
+                npc, TicketKind.GROUNDWORKER_CLEAR_512, GROUNDWORKER_TICKET_BLOCKS, 1);
+        for (TicketAwardResult result : results) {
+            for (String line : result.announcementLines()) {
+                messagePlayer(Component.text(line, NamedTextColor.GREEN));
+            }
+        }
     }
 
     private void abandonPendingBlock() {
@@ -905,7 +959,7 @@ public final class ClearJobTask {
         // Harvest-tier gating: nothing in today's Target roster actually requires above
         // Tier 1, so this can't yet block anything live — it's ready for Phase 1-G's ore
         // targets without needing to touch this method again.
-        if (!levelService.canHarvest(npc.getId(), block.getType())) {
+        if (!levelService.canHarvest(npc, block.getType())) {
             return false;
         }
         // Basic hazard-avoidance pathing (warning-only Nether/End dispatch still lets the
