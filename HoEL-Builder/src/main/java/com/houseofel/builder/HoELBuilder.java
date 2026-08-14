@@ -66,10 +66,10 @@ public final class HoELBuilder extends JavaPlugin {
         WorkLedgerBook ledgerBook = new WorkLedgerBook(this);
         SurveyorRod rod = new SurveyorRod(this);
         jobManager = new JobManager(this, levelService);
-        JobExecutionService jobExecutionService = new JobExecutionService(this, jobManager, levelService);
+        JobExecutionService jobExecutionService = new JobExecutionService(this, jobManager, levelService, deathRecordStore);
         RegionSelectionService regionService = new RegionSelectionService(this, rod, jobExecutionService);
-        JavaJobDialog javaDialog = new JavaJobDialog(this, regionService);
-        BedrockJobForm bedrockForm = new BedrockJobForm(this, regionService);
+        JavaJobDialog javaDialog = new JavaJobDialog(this, regionService, deathRecordStore);
+        BedrockJobForm bedrockForm = new BedrockJobForm(this, regionService, deathRecordStore);
         SpecializationDialog specializationDialog = new SpecializationDialog(this, npcService);
         SpecializationForm specializationForm = new SpecializationForm(this, npcService);
 
@@ -84,7 +84,7 @@ public final class HoELBuilder extends JavaPlugin {
         getServer().getPluginManager().registerEvents(new RegionConfirmListener(this, regionService), this);
         getServer().getPluginManager().registerEvents(new JobNotificationListener(jobManager), this);
         getServer().getPluginManager().registerEvents(
-                new HelperDeathListener(npcService, levelService, deathRecordStore, ledgerBook), this);
+                new HelperDeathListener(this, npcService, levelService, deathRecordStore, ledgerBook), this);
         getServer().getPluginManager().registerEvents(
                 new WorkLedgerRecoveryListener(this, ledgerBook, deathRecordStore), this);
 

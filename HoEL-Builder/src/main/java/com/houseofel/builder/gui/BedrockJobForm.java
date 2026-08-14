@@ -1,5 +1,7 @@
 package com.houseofel.builder.gui;
 
+import com.houseofel.builder.death.DeathRecordStore;
+import com.houseofel.builder.death.ScarChoice;
 import com.houseofel.builder.npc.BuilderNpcService;
 import com.houseofel.builder.npc.Specialization;
 import com.houseofel.builder.region.RegionSelectionService;
@@ -27,10 +29,12 @@ public final class BedrockJobForm {
 
     private final Plugin plugin;
     private final RegionSelectionService regionService;
+    private final DeathRecordStore deathRecordStore;
 
-    public BedrockJobForm(Plugin plugin, RegionSelectionService regionService) {
+    public BedrockJobForm(Plugin plugin, RegionSelectionService regionService, DeathRecordStore deathRecordStore) {
         this.plugin = plugin;
         this.regionService = regionService;
+        this.deathRecordStore = deathRecordStore;
     }
 
     public static boolean isBedrockPlayer(Player player) {
@@ -45,6 +49,12 @@ public final class BedrockJobForm {
 
         String name = BuilderNpcService.baseNameOf(npc);
         String title = specialization == null ? name : name + " — " + specialization.label();
+        // Scar-choice tag (Kyle's request, 2026-08-14) — same as JavaJobDialog's title and
+        // "<Name> report", the other two places he asked for an on-demand indicator.
+        ScarChoice choice = deathRecordStore.scarChoiceOf(npc.getUniqueId());
+        if (choice != null) {
+            title = title + " [" + choice.name() + "]";
+        }
         String flavor = FlavorLadder.flavorFor(specialization, level);
 
         CustomForm.Builder form = CustomForm.builder().title(title);

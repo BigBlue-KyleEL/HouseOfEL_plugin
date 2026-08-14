@@ -25,6 +25,8 @@ public final class LedgerExpiryTask implements Runnable {
      * TEMPORARY, FOR TESTING ONLY — swap to {@link #REAL_WINDOW_MILLIS} to observe expiry
      * live in a few minutes instead of 7 real days. MUST be reverted before calling Death
      * Policy done, same discipline as item 3's {@code GROUNDWORKER_TICKET_BLOCKS} knob.
+     * Confirmed reverted 2026-08-14 after the 2-minute window verified the rank-floor
+     * fallback live on Thaddeus (level 4 → 1).
      */
     private static final long WINDOW_MILLIS = REAL_WINDOW_MILLIS;
     private static final long CHECK_PERIOD_TICKS = 20L * 60; // once a minute

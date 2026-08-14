@@ -1,5 +1,7 @@
 package com.houseofel.builder.gui;
 
+import com.houseofel.builder.death.DeathRecordStore;
+import com.houseofel.builder.death.ScarChoice;
 import com.houseofel.builder.npc.BuilderNpcService;
 import com.houseofel.builder.npc.Specialization;
 import com.houseofel.builder.region.RegionSelectionService;
@@ -37,10 +39,12 @@ public final class JavaJobDialog {
 
     private final Plugin plugin;
     private final RegionSelectionService regionService;
+    private final DeathRecordStore deathRecordStore;
 
-    public JavaJobDialog(Plugin plugin, RegionSelectionService regionService) {
+    public JavaJobDialog(Plugin plugin, RegionSelectionService regionService, DeathRecordStore deathRecordStore) {
         this.plugin = plugin;
         this.regionService = regionService;
+        this.deathRecordStore = deathRecordStore;
     }
 
     public void open(Player player, NPC npc, Specialization specialization, int level) {
@@ -92,10 +96,17 @@ public final class JavaJobDialog {
                 .type(DialogType.multiAction(buttons).build())));
     }
 
-    /** "<Name> — <Specialization>", or just "<Name>" for a pre-1-F NPC with no assignment. */
-    private static String entryTitle(NPC npc, Specialization specialization) {
+    /**
+     * "<Name> — <Specialization> [WARY]", or just "<Name>" for a pre-1-F NPC with no
+     * assignment. The scar-choice tag (Kyle's request, 2026-08-14 — there was previously
+     * no on-demand way to see which choice a Helper made) is appended here since this
+     * dialog is the other place he asked for it, alongside {@code "<Name> report"}.
+     */
+    private String entryTitle(NPC npc, Specialization specialization) {
         String name = BuilderNpcService.baseNameOf(npc);
-        return specialization == null ? name : name + " — " + specialization.label();
+        String title = specialization == null ? name : name + " — " + specialization.label();
+        ScarChoice choice = deathRecordStore.scarChoiceOf(npc.getUniqueId());
+        return choice == null ? title : title + " [" + choice.name() + "]";
     }
 
     private void showTargetStep(Player player, NPC npc, TaskType taskType) {

@@ -42,13 +42,18 @@ public final class WorkLedgerBook {
     public ItemStack create(NPC npc, Specialization specialization, int level, int bankedToil,
                              List<ScarRecord> scars, ScarChoice scarChoice) {
         String name = BuilderNpcService.baseNameOf(npc);
+        // Null for a pre-1-F Helper that never got a Specialization assigned (confirmed
+        // live 2026-08-14 — Thaddeus crashed this whole method, NPCDeathEvent included,
+        // since specialization.label() isn't null-safe). Same "unassigned" fallback
+        // HelperStatusListener already uses for the same case.
+        String specLabel = specialization == null ? "unassigned" : specialization.label();
         ItemStack item = new ItemStack(Material.WRITTEN_BOOK);
         BookMeta meta = (BookMeta) item.getItemMeta();
         meta.setTitle(name + "'s Work Ledger");
         meta.setAuthor("House of EL");
         meta.addPages(Component.text(name, NamedTextColor.BLACK)
                 .append(Component.newline())
-                .append(Component.text(specialization.label(), NamedTextColor.DARK_GRAY))
+                .append(Component.text(specLabel, NamedTextColor.DARK_GRAY))
                 .append(Component.newline())
                 .append(Component.newline())
                 .append(Component.text("Level " + level, NamedTextColor.BLACK))

@@ -1,6 +1,7 @@
 package com.houseofel.builder.npc;
 
 import com.houseofel.builder.death.DeathRecordStore;
+import com.houseofel.builder.death.ScarChoice;
 import com.houseofel.builder.death.ScarRecord;
 import io.papermc.paper.event.player.AsyncChatEvent;
 import net.citizensnpcs.api.npc.NPC;
@@ -75,8 +76,14 @@ public final class HelperStatusListener implements Listener {
                     NamedTextColor.AQUA));
 
             List<ScarRecord> scars = deathRecordStore.scarsFor(npc.getUniqueId());
+            String scarChoiceSuffix = "";
+            ScarChoice choice = deathRecordStore.scarChoiceOf(npc.getUniqueId());
+            if (choice != null) {
+                scarChoiceSuffix = " — " + choice.name();
+            }
             player.sendMessage(Component.text(
-                    scars.isEmpty() ? "No scars yet." : "Scars: " + scars.size() + " — " + scarSummary(scars),
+                    (scars.isEmpty() ? "No scars yet." : "Scars: " + scars.size() + " — " + scarSummary(scars))
+                            + scarChoiceSuffix,
                     NamedTextColor.DARK_GRAY));
         });
     }

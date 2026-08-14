@@ -1,5 +1,6 @@
 package com.houseofel.builder.death;
 
+import com.houseofel.builder.npc.BuilderNpcService;
 import net.citizensnpcs.api.CitizensAPI;
 import net.citizensnpcs.api.npc.NPC;
 import org.bukkit.Bukkit;
@@ -20,11 +21,11 @@ import java.util.Set;
 import java.util.UUID;
 
 /**
- * One BossBar per currently-rusted Helper, visible only to its owner and only within
- * {@link #VISIBILITY_RADIUS} blocks — proximity-gated per Kyle's call, since Rust doesn't
- * get the nameplate (already carrying name + title). Ticks on its own periodic task,
- * checking distance and Rust's remaining Toil each pass; no existing proximity-visibility
- * mechanism in this codebase to model this on, so this is a new one.
+ * One BossBar per currently-rusted Helper, visible to anyone within
+ * {@link #VISIBILITY_RADIUS} blocks — NOT owner-gated (Kyle's call 2026-08-14, reversing
+ * the original owner-only plan: a household where multiple people actually operate
+ * Helpers shouldn't leave Rust invisible to whoever isn't the original spawner). Ticks on
+ * its own periodic task, checking distance and Rust's remaining Toil each pass.
  */
 public final class RustBossBar {
 
@@ -59,23 +60,27 @@ public final class RustBossBar {
             // anchor a distance check to yet; leave any existing bar as-is until it's back.
             return;
         }
-        Entity entity = npc.getEntity();
-        UUID ownerUuid = store.ownerOf(rust.npcUuid());
-        Player owner = ownerUuid == null ? null : Bukkit.getPlayer(ownerUuid);
+        Location site = npc.getEntity().getLocation();
 
+        // Yellow, not red — red reads as a boss fight/raid warning in vanilla Minecraft,
+        // which isn't the vibe here (Kyle's call, 2026-08-14). Vanilla only offers 7 boss
+        // bar colors (Pink/Blue/Red/Green/Yellow/Purple/White) — no orange exists to pick
+        // instead. Title includes the base name (never npc.getName() — see gotcha #7) so
+        // multiple simultaneous Rust bars are distinguishable.
         BossBar bar = bars.computeIfAbsent(rust.npcUuid(), id -> Bukkit.createBossBar(
-                "Rust — working it off", BarColor.RED, BarStyle.SOLID));
+                BuilderNpcService.baseNameOf(npc) + " — Rust (working it off)", BarColor.YELLOW, BarStyle.SOLID));
         // Draining, per the framework's "loud visible draining bar" requirement — starts
         // full at 200 Toil remaining, empties as Rust clears.
         bar.setProgress(clamp(rust.toilRemaining() / (double) HelperRust.TOTAL_RUST_TOIL));
 
-        boolean nearby = owner != null && isNearby(entity.getLocation(), owner.getLocation());
-        if (nearby) {
-            if (!bar.getPlayers().contains(owner)) {
-                bar.addPlayer(owner);
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            boolean nearby = isNearby(site, player.getLocation());
+            boolean currentlyShown = bar.getPlayers().contains(player);
+            if (nearby && !currentlyShown) {
+                bar.addPlayer(player);
+            } else if (!nearby && currentlyShown) {
+                bar.removePlayer(player);
             }
-        } else {
-            bar.removeAll();
         }
     }
 
@@ -90,11 +95,11 @@ public final class RustBossBar {
         }
     }
 
-    private static boolean isNearby(Location helper, Location owner) {
-        if (!helper.getWorld().equals(owner.getWorld())) {
+    private static boolean isNearby(Location helper, Location viewer) {
+        if (!helper.getWorld().equals(viewer.getWorld())) {
             return false;
         }
-        return helper.distanceSquared(owner) <= VISIBILITY_RADIUS * VISIBILITY_RADIUS;
+        return helper.distanceSquared(viewer) <= VISIBILITY_RADIUS * VISIBILITY_RADIUS;
     }
 
     private static double clamp(double value) {

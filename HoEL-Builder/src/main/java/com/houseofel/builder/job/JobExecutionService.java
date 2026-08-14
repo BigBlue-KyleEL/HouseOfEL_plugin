@@ -1,5 +1,6 @@
 package com.houseofel.builder.job;
 
+import com.houseofel.builder.death.DeathRecordStore;
 import com.houseofel.builder.gui.Target;
 import com.houseofel.builder.gui.TaskType;
 import com.houseofel.builder.npc.BuilderNpcService;
@@ -31,12 +32,15 @@ public final class JobExecutionService {
     private final Logger logger;
     private final JobManager jobManager;
     private final HelperLevelService levelService;
+    private final DeathRecordStore deathRecordStore;
 
-    public JobExecutionService(Plugin plugin, JobManager jobManager, HelperLevelService levelService) {
+    public JobExecutionService(Plugin plugin, JobManager jobManager, HelperLevelService levelService,
+                                DeathRecordStore deathRecordStore) {
         this.plugin = plugin;
         this.logger = plugin.getLogger();
         this.jobManager = jobManager;
         this.levelService = levelService;
+        this.deathRecordStore = deathRecordStore;
     }
 
     public void dispatchClear(Player player, NPC npc, TaskType taskType, Target target,
@@ -58,6 +62,13 @@ public final class JobExecutionService {
                     "Every Helper is tied up right now — check back in " + eta + ".", NamedTextColor.RED));
             return;
         }
+
+        // Ownership (for Rust visibility and recruitment-cost escalation) now tracks
+        // whoever's actually operating a Helper, not just whoever originally recruited
+        // it — reassigned to the dispatching player on every real dispatch, so a
+        // household where several people run Helpers attributes recklessness to whoever's
+        // actually responsible for it, per Kyle's call (2026-08-14).
+        deathRecordStore.setOwner(npc.getUniqueId(), player.getUniqueId());
 
         World world = pointA.getWorld();
         // Warning-only per the Masterfile — no restriction, the job proceeds regardless.
