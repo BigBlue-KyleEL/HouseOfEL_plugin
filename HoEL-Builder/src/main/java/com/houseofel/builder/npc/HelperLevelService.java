@@ -1,5 +1,8 @@
 package com.houseofel.builder.npc;
 
+import com.houseofel.builder.antigrind.DailyTaperStore;
+import com.houseofel.builder.antigrind.PresenceTracker;
+import com.houseofel.builder.antigrind.VarietyTracker;
 import com.houseofel.builder.death.DeathRecordStore;
 import com.houseofel.builder.death.HelperRust;
 import com.houseofel.builder.death.RustState;
@@ -70,21 +73,24 @@ public final class HelperLevelService {
     private final NamespacedKey pdcToilKey;
     private final HelperTitleService titleService;
     private final DeathRecordStore deathRecordStore;
+    private final DailyTaperStore dailyTaperStore;
     private final Map<UUID, HelperLedgerRecord> cache = new HashMap<>();
     /** In-memory ticket progress — see {@link #awardProgress} for why it isn't written through. */
     private record ProgressKey(UUID npcUuid, TicketKind kind) { }
     private final Map<ProgressKey, Integer> progressCache = new HashMap<>();
 
     public HelperLevelService(Plugin plugin, ToilDatabase database, HelperTitleService titleService,
-                               DeathRecordStore deathRecordStore) {
+                               DeathRecordStore deathRecordStore, VarietyTracker varietyTracker,
+                               PresenceTracker presenceTracker, DailyTaperStore dailyTaperStore) {
         this.logger = plugin.getLogger();
         this.store = new ToilLedgerStore(database, logger);
         this.estimator = new BalanceEstimator();
-        this.pipeline = new ToilPipeline();
+        this.pipeline = new ToilPipeline(varietyTracker, presenceTracker, deathRecordStore);
         this.pdcLevelKey = new NamespacedKey(plugin, "toil-level");
         this.pdcToilKey = new NamespacedKey(plugin, "toil-banked");
         this.titleService = titleService;
         this.deathRecordStore = deathRecordStore;
+        this.dailyTaperStore = dailyTaperStore;
     }
 
     /** Called once at spawn time, when the player picks the NPC's specialization. */
@@ -129,7 +135,13 @@ public final class HelperLevelService {
 
         int rawMinutes = estimator.rawMinutesFor(kind);
         String orderId = UUID.randomUUID().toString();
-        TicketContext context = new TicketContext(npc.getUniqueId(), record.specialization(), kind, rawMinutes, orderId);
+        long timestamp = System.currentTimeMillis();
+        // Read once here rather than letting the pipeline's daily-taper stage query it
+        // itself — this same value is reused for the recordAward write below too, so the
+        // row is only ever queried once per ticket, not twice.
+        int dailyCumulativeBefore = dailyTaperStore.cumulativeToilFor(npc.getUniqueId(), timestamp);
+        TicketContext context = new TicketContext(npc.getUniqueId(), record.specialization(), kind, rawMinutes,
+                orderId, timestamp, dailyCumulativeBefore);
         int finalToil = pipeline.award(context);
 
         RustState rust = deathRecordStore.rustFor(npc.getUniqueId());
@@ -140,6 +152,10 @@ public final class HelperLevelService {
         if (!store.logTicket(orderId, npc.getUniqueId(), kind, rawMinutes, finalToil)) {
             return null;
         }
+        // Same timestamp AND same already-read cumulative value the pipeline's daily-taper
+        // stage just checked against — a ticket landing right at a day boundary can't
+        // check and record against two different day keys, and the row isn't queried twice.
+        dailyTaperStore.recordAward(npc.getUniqueId(), timestamp, dailyCumulativeBefore, finalToil);
 
         int oldLevel = record.level();
         int newBankedToil = record.bankedToil() + finalToil;
@@ -222,7 +238,21 @@ public final class HelperLevelService {
      */
     public List<TicketAwardResult> awardProgress(NPC npc, TicketKind kind, int unitsPerTicket, int newUnits) {
         ProgressKey key = new ProgressKey(npc.getUniqueId(), kind);
-        int total = progressCache.computeIfAbsent(key, k -> store.progressFor(k.npcUuid(), k.kind())) + newUnits;
+        int stored = progressCache.computeIfAbsent(key, k -> store.progressFor(k.npcUuid(), k.kind()));
+        if (stored >= unitsPerTicket) {
+            // A healthy value can never persist at or past the threshold — the while loop
+            // below always fires and reduces it below unitsPerTicket before returning. If
+            // we ever read one that's already there, unitsPerTicket itself must have
+            // changed since this was banked (e.g. the anti-grind chassis's per-block
+            // quarter-unit scaling, or a GROUNDWORKER_TICKET_BLOCKS testing-knob flip) —
+            // the stored number no longer means what the current scale thinks it means.
+            // Discard rather than risk an instant burst of tickets from stale-scale data.
+            logger.warning("Discarding stale ticket_progress for NPC " + npc.getId() + "/" + kind
+                    + ": stored " + stored + " already >= current threshold " + unitsPerTicket
+                    + " — likely a unit-scale change since this was banked.");
+            stored = 0;
+        }
+        int total = stored + newUnits;
 
         List<TicketAwardResult> results = new ArrayList<>();
         while (total >= unitsPerTicket) {

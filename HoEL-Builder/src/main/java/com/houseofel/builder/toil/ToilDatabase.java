@@ -110,6 +110,18 @@ public final class ToilDatabase {
                             dropped_at INTEGER NOT NULL
                         )
                         """);
+                // Cumulative Toil banked per Helper per server-local calendar day, backing
+                // the daily-taper pipeline stage. Unlike every other anti-grind tracker,
+                // this one is persisted on purpose — losing it on a force-kill would let
+                // the 150-Toil cap be bypassed by just restarting.
+                statement.execute("""
+                        CREATE TABLE IF NOT EXISTS daily_toil_totals (
+                            npc_uuid TEXT NOT NULL,
+                            day_key TEXT NOT NULL,
+                            cumulative_toil INTEGER NOT NULL,
+                            PRIMARY KEY (npc_uuid, day_key)
+                        )
+                        """);
             }
         } catch (ClassNotFoundException | SQLException e) {
             throw new IllegalStateException("Couldn't open the Toil ledger database", e);

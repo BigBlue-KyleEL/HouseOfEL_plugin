@@ -1,5 +1,7 @@
 package com.houseofel.builder.job;
 
+import com.houseofel.builder.antigrind.FreshLedger;
+import com.houseofel.builder.antigrind.RedundancyTracker;
 import com.houseofel.builder.death.DeathRecordStore;
 import com.houseofel.builder.gui.Target;
 import com.houseofel.builder.gui.TaskType;
@@ -33,14 +35,19 @@ public final class JobExecutionService {
     private final JobManager jobManager;
     private final HelperLevelService levelService;
     private final DeathRecordStore deathRecordStore;
+    private final RedundancyTracker redundancyTracker;
+    private final FreshLedger freshLedger;
 
     public JobExecutionService(Plugin plugin, JobManager jobManager, HelperLevelService levelService,
-                                DeathRecordStore deathRecordStore) {
+                                DeathRecordStore deathRecordStore, RedundancyTracker redundancyTracker,
+                                FreshLedger freshLedger) {
         this.plugin = plugin;
         this.logger = plugin.getLogger();
         this.jobManager = jobManager;
         this.levelService = levelService;
         this.deathRecordStore = deathRecordStore;
+        this.redundancyTracker = redundancyTracker;
+        this.freshLedger = freshLedger;
     }
 
     public void dispatchClear(Player player, NPC npc, TaskType taskType, Target target,
@@ -121,9 +128,9 @@ public final class JobExecutionService {
 
         RegionOutline outline = new RegionOutline(world, minX, minY, minZ, maxX, maxY, maxZ);
 
-        ClearJobTask task = new ClearJobTask(plugin, jobManager, levelService, player, npc,
-                npcEntity, equipment, label, world, target, tool, minX, maxX, minY, maxY, minZ, maxZ, spanX, spanZ,
-                totalCells, storage, storeInChest, surfaceOnly, outline);
+        ClearJobTask task = new ClearJobTask(plugin, jobManager, levelService, redundancyTracker, freshLedger,
+                player, npc, npcEntity, equipment, label, world, target, tool, minX, maxX, minY, maxY, minZ, maxZ,
+                spanX, spanZ, totalCells, storage, storeInChest, surfaceOnly, outline);
         jobManager.register(task);
         task.start();
     }

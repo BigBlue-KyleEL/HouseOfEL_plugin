@@ -1,5 +1,8 @@
 package com.houseofel.builder.job;
 
+import com.houseofel.builder.antigrind.FreshLedger;
+import com.houseofel.builder.antigrind.RedundancyTracker;
+import com.houseofel.builder.antigrind.TaskFingerprint;
 import com.houseofel.builder.gui.Target;
 import com.houseofel.builder.gui.TaskType;
 import com.houseofel.builder.npc.BuilderNpcService;
@@ -103,7 +106,7 @@ public final class ClearJobTask {
     /**
      * Groundworker's real Toil ticket per the framework's XP-sources table: "512 blocks
      * excavated, smoothed or drained, spoil hauled to a real chest — 8 Toil." The only
-     * live-wired ticket source as of Phase 1-F item 1 — see {@link #awardGroundworkerProgress()}.
+     * live-wired ticket source as of Phase 1-F item 1 — see {@link #awardGroundworkerProgress(int)}.
      *
      * <p>Was temporarily dropped to 8 during Phase 1-F item 2 so a Helper could be walked
      * through all ten milestone titles in one sitting; restored to the real value
@@ -112,6 +115,15 @@ public final class ClearJobTask {
      * reset before go-live anyway.
      */
     private static final int GROUNDWORKER_TICKET_BLOCKS = 512;
+    /**
+     * How the anti-grind chassis represents fractional (0.25x) Redundancy Decay credit
+     * without floating point or a SQLite schema change: a block contributes 0, 1, or this
+     * many quarter-units instead of a flat 1, and {@code unitsPerTicket} is scaled by the
+     * same factor at the one call site — everything downstream (progress accumulation,
+     * the {@code ticket_progress} column) stays an opaque int, unaware anything changed.
+     * See {@link #creditUnitsFor(Block)}.
+     */
+    private static final int CREDIT_UNITS_PER_BLOCK = 4;
     /** Squared-distance improvement that counts as real progress toward the target. */
     private static final double PROGRESS_EPSILON = 0.05;
     /**
@@ -143,6 +155,8 @@ public final class ClearJobTask {
     private final Logger logger;
     private final JobManager jobManager;
     private final HelperLevelService levelService;
+    private final RedundancyTracker redundancyTracker;
+    private final FreshLedger freshLedger;
     private final UUID playerId;
     private final NPC npc;
     private final Entity npcEntity;
@@ -212,18 +226,20 @@ public final class ClearJobTask {
     private final long startedAtMillis = System.currentTimeMillis();
 
     /** Fresh job, just dispatched. */
-    ClearJobTask(Plugin plugin, JobManager jobManager, HelperLevelService levelService, Player player,
+    ClearJobTask(Plugin plugin, JobManager jobManager, HelperLevelService levelService,
+                 RedundancyTracker redundancyTracker, FreshLedger freshLedger, Player player,
                  NPC npc, Entity npcEntity, EntityEquipment equipment, TextDisplay label, World world,
                  Target target, Material tool, int minX, int maxX, int minY, int maxY, int minZ, int maxZ,
                  int spanX, int spanZ, long totalCells, JobStorage storage, boolean storeInChest,
                  boolean surfaceOnly, RegionOutline outline) {
-        this(plugin, jobManager, levelService, player.getUniqueId(), npc, npcEntity, equipment,
-                label, world, target, tool, minX, maxX, minY, maxY, minZ, maxZ, spanX, spanZ, totalCells, storage,
-                storeInChest, surfaceOnly, outline,
+        this(plugin, jobManager, levelService, redundancyTracker, freshLedger, player.getUniqueId(), npc, npcEntity,
+                equipment, label, world, target, tool, minX, maxX, minY, maxY, minZ, maxZ, spanX, spanZ, totalCells,
+                storage, storeInChest, surfaceOnly, outline,
                 Phase.SEEKING, 0, 0, 0, 1, 0, 0, 0, 0, new HashMap<>());
     }
 
-    private ClearJobTask(Plugin plugin, JobManager jobManager, HelperLevelService levelService, UUID playerId,
+    private ClearJobTask(Plugin plugin, JobManager jobManager, HelperLevelService levelService,
+                          RedundancyTracker redundancyTracker, FreshLedger freshLedger, UUID playerId,
                           NPC npc, Entity npcEntity, EntityEquipment equipment, TextDisplay label, World world,
                           Target target, Material tool,
                           int minX, int maxX, int minY, int maxY, int minZ, int maxZ,
@@ -237,6 +253,8 @@ public final class ClearJobTask {
         this.logger = plugin.getLogger();
         this.jobManager = jobManager;
         this.levelService = levelService;
+        this.redundancyTracker = redundancyTracker;
+        this.freshLedger = freshLedger;
         this.playerId = playerId;
         this.npc = npc;
         this.npcEntity = npcEntity;
@@ -284,8 +302,8 @@ public final class ClearJobTask {
      * trusting after the world may have changed underneath it. Returns null if the
      * world, target, or tool this job needs no longer resolves.
      */
-    static ClearJobTask resume(Plugin plugin, JobManager jobManager,
-                                HelperLevelService levelService, JobState state, NPC npc) {
+    static ClearJobTask resume(Plugin plugin, JobManager jobManager, HelperLevelService levelService,
+                                RedundancyTracker redundancyTracker, FreshLedger freshLedger, JobState state, NPC npc) {
         World world = Bukkit.getWorld(state.worldName);
         Entity npcEntity = npc.getEntity();
         if (world == null || npcEntity == null) {
@@ -342,10 +360,10 @@ public final class ClearJobTask {
             }
         }
 
-        return new ClearJobTask(plugin, jobManager, levelService, state.playerId, npc, npcEntity,
-                equipment, label, world, target, tool, state.minX, state.maxX, state.minY, state.maxY, state.minZ,
-                state.maxZ, spanX, spanZ, totalCells, storage, state.storeInChest, state.surfaceOnly,
-                outline, Phase.SEEKING, state.processedCells, state.clearedCells,
+        return new ClearJobTask(plugin, jobManager, levelService, redundancyTracker, freshLedger, state.playerId,
+                npc, npcEntity, equipment, label, world, target, tool, state.minX, state.maxX, state.minY,
+                state.maxY, state.minZ, state.maxZ, spanX, spanZ, totalCells, storage, state.storeInChest,
+                state.surfaceOnly, outline, Phase.SEEKING, state.processedCells, state.clearedCells,
                 state.deposited, state.passNumber, state.clearedThisPass, state.skippedThisPass,
                 state.skippedNoPath, state.skippedTimeout, carried);
     }
@@ -845,7 +863,7 @@ public final class ClearJobTask {
         }
         clearedCells++;
         clearedThisPass++;
-        awardGroundworkerProgress();
+        awardGroundworkerProgress(creditUnitsFor(pendingBlock));
         abandonPendingBlock();
         // Duty cycle: pause before getting on with the next one. Shrinks with level.
         hesitationTicks = HelperTempo.hesitationTicksFor(levelService.levelOf(npc));
@@ -960,6 +978,37 @@ public final class ClearJobTask {
     }
 
     /**
+     * The anti-grind chassis's per-block pre-filter, checked before a block is allowed to
+     * contribute toward ticket progress at all — Groundworker batches 512 blocks into one
+     * ticket, so by the time the Toil pipeline runs, individual block identity is gone and
+     * a single multiplier can't fairly represent a batch mixing legitimate and cheaty
+     * blocks. Both trackers are always consulted regardless of which one ends up gating,
+     * so each keeps accurate history. Returns quarter-units: {@link #CREDIT_UNITS_PER_BLOCK}
+     * (full), 1 (Redundancy's 20-minute reduced tier), or 0 (the Fresh rule, or
+     * Redundancy's 5-minute zero tier).
+     */
+    private int creditUnitsFor(Block block) {
+        long now = System.currentTimeMillis();
+        TaskFingerprint fingerprint = new TaskFingerprint(TaskType.CLEAR, block.getWorld().getName(),
+                block.getX(), block.getY(), block.getZ(), target);
+        RedundancyTracker.CreditTier tier = redundancyTracker.check(npc.getUniqueId(), fingerprint, now);
+        if (freshLedger.isFresh(block, now)) {
+            logger.info("[antigrind] Fresh block skipped for " + BuilderNpcService.baseNameOf(npc)
+                    + " at " + block.getX() + "," + block.getY() + "," + block.getZ());
+            return 0;
+        }
+        if (tier != RedundancyTracker.CreditTier.FULL) {
+            logger.info("[antigrind] Redundancy " + tier + " for " + BuilderNpcService.baseNameOf(npc)
+                    + " at " + block.getX() + "," + block.getY() + "," + block.getZ());
+        }
+        return switch (tier) {
+            case ZERO -> 0;
+            case REDUCED -> 1;
+            case FULL -> CREDIT_UNITS_PER_BLOCK;
+        };
+    }
+
+    /**
      * Groundworker's Toil ticket: one per {@link #GROUNDWORKER_TICKET_BLOCKS} cleared.
      * Called once per block broken, so progress accrues steadily as the Helper works and
      * tickets fire one at a time — rather than the whole job's worth landing in a single
@@ -975,21 +1024,28 @@ public final class ClearJobTask {
      * still honoured — the ledger is credited per finished TICKET; only the counter that
      * accumulates toward one ticks per block.
      *
+     * <p>{@code creditUnits} is in quarter-units, not blocks — see {@link #creditUnitsFor}
+     * and {@link #CREDIT_UNITS_PER_BLOCK} for the anti-grind chassis's per-block
+     * pre-filter this now runs through before reaching here.
+     *
      * <p>Gated on the NPC's ASSIGNED specialization, not just the target block — the same
      * gating {@link HelperLevelService#rollBonusDrop} already uses — so a non-Groundworker
      * Helper sent to clear Stone/Dirt still does the job but earns no Groundworker Toil.
      * Farmer/Lumberjack tickets aren't wired yet (they need tree-shape/replant logic this
      * job engine doesn't have) — those Helpers earn no Toil until a later item wires them.
      */
-    private void awardGroundworkerProgress() {
+    private void awardGroundworkerProgress(int creditUnits) {
         if (target != Target.STONE && target != Target.DIRT) {
             return;
         }
         if (levelService.specializationOf(npc) != Specialization.GROUNDWORKER) {
             return;
         }
+        if (creditUnits <= 0) {
+            return;
+        }
         List<TicketAwardResult> results = levelService.awardProgress(
-                npc, TicketKind.GROUNDWORKER_CLEAR_512, GROUNDWORKER_TICKET_BLOCKS, 1);
+                npc, TicketKind.GROUNDWORKER_CLEAR_512, GROUNDWORKER_TICKET_BLOCKS * CREDIT_UNITS_PER_BLOCK, creditUnits);
         for (TicketAwardResult result : results) {
             for (String line : result.announcementLines()) {
                 messagePlayer(Component.text(line, NamedTextColor.GREEN));

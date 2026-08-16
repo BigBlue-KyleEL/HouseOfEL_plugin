@@ -1,5 +1,12 @@
 package com.houseofel.builder;
 
+import com.houseofel.builder.antigrind.DailyTaperStore;
+import com.houseofel.builder.antigrind.FreshLedger;
+import com.houseofel.builder.antigrind.FreshPlacementListener;
+import com.houseofel.builder.antigrind.PresenceActivityListener;
+import com.houseofel.builder.antigrind.PresenceTracker;
+import com.houseofel.builder.antigrind.RedundancyTracker;
+import com.houseofel.builder.antigrind.VarietyTracker;
 import com.houseofel.builder.command.BuilderCommand;
 import com.houseofel.builder.death.DeathRecordStore;
 import com.houseofel.builder.death.HelperDeathListener;
@@ -59,14 +66,21 @@ public final class HoELBuilder extends JavaPlugin {
 
         toilDatabase = new ToilDatabase(this);
         DeathRecordStore deathRecordStore = new DeathRecordStore(toilDatabase, getLogger());
+        DailyTaperStore dailyTaperStore = new DailyTaperStore(toilDatabase, getLogger());
+        VarietyTracker varietyTracker = new VarietyTracker();
+        PresenceTracker presenceTracker = new PresenceTracker();
+        RedundancyTracker redundancyTracker = new RedundancyTracker(getLogger());
+        FreshLedger freshLedger = new FreshLedger();
         HelperTitleService titleService = new HelperTitleService();
-        levelService = new HelperLevelService(this, toilDatabase, titleService, deathRecordStore);
+        levelService = new HelperLevelService(this, toilDatabase, titleService, deathRecordStore,
+                varietyTracker, presenceTracker, dailyTaperStore);
         RecruitmentCost recruitmentCost = new RecruitmentCost(deathRecordStore);
         BuilderNpcService npcService = new BuilderNpcService(levelService, titleService, recruitmentCost, deathRecordStore);
         WorkLedgerBook ledgerBook = new WorkLedgerBook(this);
         SurveyorRod rod = new SurveyorRod(this);
-        jobManager = new JobManager(this, levelService);
-        JobExecutionService jobExecutionService = new JobExecutionService(this, jobManager, levelService, deathRecordStore);
+        jobManager = new JobManager(this, levelService, redundancyTracker, freshLedger);
+        JobExecutionService jobExecutionService = new JobExecutionService(this, jobManager, levelService,
+                deathRecordStore, redundancyTracker, freshLedger);
         RegionSelectionService regionService = new RegionSelectionService(this, rod, jobExecutionService);
         JavaJobDialog javaDialog = new JavaJobDialog(this, regionService, deathRecordStore);
         BedrockJobForm bedrockForm = new BedrockJobForm(this, regionService, deathRecordStore);
@@ -87,6 +101,8 @@ public final class HoELBuilder extends JavaPlugin {
                 new HelperDeathListener(this, npcService, levelService, deathRecordStore, ledgerBook), this);
         getServer().getPluginManager().registerEvents(
                 new WorkLedgerRecoveryListener(this, ledgerBook, deathRecordStore), this);
+        getServer().getPluginManager().registerEvents(new FreshPlacementListener(freshLedger), this);
+        getServer().getPluginManager().registerEvents(new PresenceActivityListener(this, presenceTracker), this);
 
         ledgerExpiryTask = LedgerExpiryTask.start(this, deathRecordStore, levelService);
         rustBossBarTask = RustBossBar.start(this, deathRecordStore);

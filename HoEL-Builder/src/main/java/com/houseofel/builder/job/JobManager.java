@@ -1,5 +1,7 @@
 package com.houseofel.builder.job;
 
+import com.houseofel.builder.antigrind.FreshLedger;
+import com.houseofel.builder.antigrind.RedundancyTracker;
 import com.houseofel.builder.npc.HelperLevelService;
 import net.citizensnpcs.api.CitizensAPI;
 import net.citizensnpcs.api.npc.NPC;
@@ -46,6 +48,8 @@ public final class JobManager {
     private final JobStateStore store;
     private final PendingNotificationStore notifications;
     private final HelperLevelService levelService;
+    private final RedundancyTracker redundancyTracker;
+    private final FreshLedger freshLedger;
     private final Map<Integer, ClearJobTask> jobs = new ConcurrentHashMap<>();
     /**
      * How many jobs currently want each chunk kept loaded. Paper's own chunk-ticket API
@@ -57,12 +61,15 @@ public final class JobManager {
      */
     private final Map<ChunkKey, Integer> chunkRefCounts = new ConcurrentHashMap<>();
 
-    public JobManager(Plugin plugin, HelperLevelService levelService) {
+    public JobManager(Plugin plugin, HelperLevelService levelService, RedundancyTracker redundancyTracker,
+                       FreshLedger freshLedger) {
         this.plugin = plugin;
         this.logger = plugin.getLogger();
         this.store = new JobStateStore(plugin);
         this.notifications = new PendingNotificationStore(plugin);
         this.levelService = levelService;
+        this.redundancyTracker = redundancyTracker;
+        this.freshLedger = freshLedger;
     }
 
     /** Queues a message for a player who's currently offline — delivered the next time they log in. */
@@ -207,7 +214,7 @@ public final class JobManager {
         for (JobState state : store.loadAll()) {
             NPC npc = CitizensAPI.getNPCRegistry().getById(state.npcId);
             ClearJobTask task = npc == null ? null
-                    : ClearJobTask.resume(plugin, this, levelService, state, npc);
+                    : ClearJobTask.resume(plugin, this, levelService, redundancyTracker, freshLedger, state, npc);
             if (task == null) {
                 deferred++;
                 continue;
