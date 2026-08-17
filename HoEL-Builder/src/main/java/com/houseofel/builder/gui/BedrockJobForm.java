@@ -69,14 +69,38 @@ public final class BedrockJobForm {
             answerOffset = 1;
         }
         int offset = answerOffset;
+        // Task Type and Target are both dropdowns on this ONE form, submitted together —
+        // unlike JavaJobDialog's step-by-step wizard, there's no point where Task Type has
+        // already been picked before Target renders. "Anything" (Groundworker's level-3
+        // verb) is gated on specialization/level only, not on whichever Task Type the
+        // player ends up picking — the same looseness this form already has for any other
+        // Task Type/Target mismatch (e.g. Wheat on a Groundworker), which already just
+        // executes without earning Toil rather than being blocked.
+        Target[] availableTargets = targetsFor(specialization, level);
         floodgatePlayer.sendForm(
                 form.dropdown("Task Type", labelsOf(TaskType.values()))
-                        .dropdown("Target", labelsOf(Target.values()))
+                        .dropdown("Target", labelsOf(availableTargets))
                         .toggle("Surface Only", true)
                         .toggle("Store in Chest", true)
-                        .validResultHandler(response -> onSubmit(player, npc, response, offset))
+                        .validResultHandler(response -> onSubmit(player, npc, response, offset, availableTargets))
                         .closedOrInvalidResultHandler(() -> onClosed(player))
                         .build());
+    }
+
+    /** Every {@link Target} the dropdown should offer — "Anything" only for a level-3+ Groundworker. */
+    private Target[] targetsFor(Specialization specialization, int level) {
+        boolean showAnything = specialization == Specialization.GROUNDWORKER && level >= 3;
+        if (showAnything) {
+            return Target.values();
+        }
+        Target[] withoutAny = new Target[Target.values().length - 1];
+        int i = 0;
+        for (Target candidate : Target.values()) {
+            if (candidate != Target.ANY_EARTH) {
+                withoutAny[i++] = candidate;
+            }
+        }
+        return withoutAny;
     }
 
     /** Shown instead of the usual flow when the concurrency ceiling is full. */
@@ -100,12 +124,14 @@ public final class BedrockJobForm {
     }
 
     private void onSubmit(Player player, NPC npc, org.geysermc.cumulus.response.CustomFormResponse response,
-                           int offset) {
+                           int offset, Target[] availableTargets) {
         // A dropdown's answer is the selected index (an int), not its label — reading it
         // as a String is what actually threw the ClassCastException on submit.
         // `offset` accounts for the optional flavour label ahead of these — see open().
+        // Read back against the SAME target list the form was built from (availableTargets),
+        // not the full Target.values() — "Anything" may have been omitted at build time.
         TaskType taskType = TaskType.values()[response.getDropdown(offset)];
-        Target target = Target.values()[response.getDropdown(offset + 1)];
+        Target target = availableTargets[response.getDropdown(offset + 1)];
         boolean surfaceOnly = response.getToggle(offset + 2);
         boolean storeInChest = response.getToggle(offset + 3);
 

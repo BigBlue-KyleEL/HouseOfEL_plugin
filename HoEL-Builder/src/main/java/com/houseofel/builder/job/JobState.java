@@ -39,6 +39,10 @@ final class JobState {
 
     Map<String, Integer> carried = new LinkedHashMap<>();
 
+    // Plugged fluid-breach sources awaiting the settle timer, or left over from a
+    // restart/cancel mid-wait — see ClearJobTask.resume()'s stray-plug cleanup.
+    List<String> bulkheadPlugs = new ArrayList<>();
+
     // Storage layout — only meaningful when storeInChest is true. See JobStorage's
     // persistence accessors for what each of these drives.
     List<String> chests = new ArrayList<>();

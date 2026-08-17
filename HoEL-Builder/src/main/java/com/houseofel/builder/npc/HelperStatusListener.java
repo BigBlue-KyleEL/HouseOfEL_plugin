@@ -85,6 +85,20 @@ public final class HelperStatusListener implements Listener {
                     (scars.isEmpty() ? "No scars yet." : "Scars: " + scars.size() + " — " + scarSummary(scars))
                             + scarChoiceSuffix,
                     NamedTextColor.DARK_GRAY));
+
+            // Groundworker's level-3 verb, "Clears Anything" — keeps the capability
+            // discoverable on demand, not just as a one-time announcement at level-up.
+            if (specialization == Specialization.GROUNDWORKER && level >= 3) {
+                player.sendMessage(Component.text(
+                        "Can clear mixed regions — pick Anything as the target to skip material-by-material jobs.",
+                        NamedTextColor.GRAY));
+            }
+            // Groundworker's level-6 verb, "Bulkhead" — same discoverability pattern.
+            if (specialization == Specialization.GROUNDWORKER && level >= 6) {
+                player.sendMessage(Component.text(
+                        "Handles flooding — sponges up a water breach or plugs a lava one, waits it out, then keeps clearing.",
+                        NamedTextColor.GRAY));
+            }
         });
     }
 

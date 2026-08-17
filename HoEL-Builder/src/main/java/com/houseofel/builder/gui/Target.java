@@ -6,7 +6,15 @@ public enum Target {
     STONE("Stone", Material.STONE),
     DIRT("Dirt", Material.DIRT),
     OAK_LOG("Oak Log", Material.OAK_LOG),
-    WHEAT("Wheat", Material.WHEAT);
+    WHEAT("Wheat", Material.WHEAT),
+    /**
+     * Groundworker's level-3 verb, "Clears Anything" — matches anything {@link #STONE} or
+     * {@link #DIRT} would, so one job can clear a mixed area instead of needing one
+     * dispatch per material. Gated to GROUNDWORKER level 3+ at the GUI layer
+     * ({@code JavaJobDialog}/{@code BedrockJobForm}) — this enum constant itself has no
+     * level awareness, it's just what "anything" resolves to once offered.
+     */
+    ANY_EARTH("Anything", Material.DIRT);
 
     private final String label;
     private final Material icon;
@@ -31,6 +39,9 @@ public enum Target {
         }
         if (this == STONE) {
             return candidate == Material.STONE || isInfested(candidate);
+        }
+        if (this == ANY_EARTH) {
+            return DIRT.matches(candidate) || STONE.matches(candidate);
         }
         return candidate == icon;
     }

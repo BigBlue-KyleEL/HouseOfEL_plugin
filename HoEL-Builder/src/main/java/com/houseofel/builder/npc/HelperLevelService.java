@@ -286,10 +286,17 @@ public final class HelperLevelService {
         if (milestones.contains(MilestoneType.RANK) && rank != null) {
             lines.add(BuilderNpcService.baseNameOf(npc) + " is now a " + rank.label() + "!");
         }
-        // VERB/CHOICE/CAPSTONE slots have no perk content yet (that's a later Phase 1-F
-        // item) — log it server-side rather than claim something player-facing that isn't
-        // actually there yet.
-        if (milestones.contains(MilestoneType.VERB) || milestones.contains(MilestoneType.CHOICE)
+        // Groundworker's level-3 and level-6 verbs, "Clears Anything" and "Bulkhead" —
+        // the only milestone slots with real perk content so far. Every other
+        // VERB/CHOICE/CAPSTONE slot has no content yet (later Phase 1-F items) — log
+        // those server-side rather than claim something player-facing that isn't there.
+        if (newLevel == 3 && specializationOf(npc) == Specialization.GROUNDWORKER) {
+            lines.add(BuilderNpcService.baseNameOf(npc)
+                    + ": No more picking one material at a time — mark a region as Anything and I'll clear everything in it.");
+        } else if (newLevel == 6 && specializationOf(npc) == Specialization.GROUNDWORKER) {
+            lines.add(BuilderNpcService.baseNameOf(npc)
+                    + ": Flooding won't stop me anymore — sponges for water, a plug for lava, then I keep clearing.");
+        } else if (milestones.contains(MilestoneType.VERB) || milestones.contains(MilestoneType.CHOICE)
                 || milestones.contains(MilestoneType.CAPSTONE)) {
             logger.info(BuilderNpcService.baseNameOf(npc) + " (#" + npc.getId() + ") reached level " + newLevel
                     + " — milestone slot(s) " + milestones + " reached, no perk content built yet.");
@@ -366,7 +373,7 @@ public final class HelperLevelService {
      */
     private static TaskType matchingTaskType(Target target) {
         return switch (target) {
-            case STONE, DIRT -> TaskType.CLEAR;
+            case STONE, DIRT, ANY_EARTH -> TaskType.CLEAR;
             case OAK_LOG -> TaskType.LUMBERJACK;
             case WHEAT -> TaskType.FARM;
         };

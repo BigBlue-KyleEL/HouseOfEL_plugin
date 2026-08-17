@@ -48,6 +48,7 @@ final class JobStateStore {
         for (var entry : state.carried.entrySet()) {
             yaml.set("carried." + entry.getKey(), entry.getValue());
         }
+        yaml.set("bulkheadPlugs", state.bulkheadPlugs);
         yaml.set("chests", state.chests);
         yaml.set("occupiedColumns", state.occupiedColumns);
         yaml.set("anchor", state.anchor);
@@ -114,6 +115,7 @@ final class JobStateStore {
                     state.carried.put(key, yaml.getInt("carried." + key));
                 }
             }
+            state.bulkheadPlugs = yaml.getStringList("bulkheadPlugs");
             state.chests = yaml.getStringList("chests");
             state.occupiedColumns = yaml.getStringList("occupiedColumns");
             state.anchor = yaml.getString("anchor");

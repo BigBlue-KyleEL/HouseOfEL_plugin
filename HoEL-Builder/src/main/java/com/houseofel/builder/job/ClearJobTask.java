@@ -26,6 +26,7 @@ import org.bukkit.Sound;
 import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
+import org.bukkit.block.data.Levelled;
 import org.bukkit.entity.Display;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
@@ -40,7 +41,9 @@ import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.scheduler.BukkitTask;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -149,7 +152,75 @@ public final class ClearJobTask {
     /** How often to scan for hostile mobs — no need to check every tick. */
     private static final int MOB_ALERT_CHECK_PERIOD = GLOW_TICK_PERIOD;
 
-    private enum Phase { SEEKING, WALKING, DIGGING, HAULING }
+    private enum Phase { SEEKING, WALKING, DIGGING, HAULING, BULKHEAD }
+
+    /**
+     * Groundworker level-6 verb ("Bulkhead," scoped to flooding only — see the
+     * Development Timeline's item 6 entry for what's deferred). LAVA ONLY — water
+     * breaches are handled with a free-placed {@link Material#SPONGE} instead (see
+     * {@link #beginBulkhead}), since sponges don't absorb lava at all (confirmed against
+     * the real NMS bytecode 2026-08-17: {@code SpongeBlock}'s absorption search checks
+     * water exclusively). Free, matching {@link JobStorage}'s own "conjured for free"
+     * chest placement — no material cost. Cobblestone specifically because it matches
+     * neither {@link Target#STONE} nor {@link Target#DIRT}'s {@code matches()}, so a plug
+     * can never later get misidentified as a real target block by {@link #isClearable}.
+     */
+    private static final Material BULKHEAD_PLUG_MATERIAL = Material.COBBLESTONE;
+    /**
+     * Flat settle timer, not polling until no fluid neighbor remains — a real lake has
+     * many other source blocks that keep flowing nearby regardless of this one plug, so
+     * waiting for "no fluid nearby" could spin for the rest of the job. Matches every
+     * other timeout in this file ({@link #PATH_GRACE_TICKS}, {@link #NO_PROGRESS_TICKS}),
+     * which are all flat constants too. Also long enough for a placed sponge's own
+     * (synchronous, instant-on-placement) absorption to have already happened and for the
+     * surrounding area to read as genuinely handled before the plug is cleared.
+     */
+    private static final int BULKHEAD_SETTLE_TICKS = 60;
+    /**
+     * Caps the LAVA connected-source flood-fill below — a real lava pool is a few dozen
+     * source blocks at most; this stops an ocean-of-lava-scale connection from turning one
+     * dig into an unbounded, server-lag-inducing fill. Doesn't apply to water anymore —
+     * sponges have their own independent, engine-owned 64-block cap per placement (see
+     * {@link #detectWaterBreach}), not something this codebase enforces. A lava fill that
+     * hits this cap only seals part of a genuinely huge body — logged when it happens so
+     * it's visible during verification.
+     */
+    private static final int BULKHEAD_MAX_PLUGS = 64;
+    /**
+     * How many sponges one Bulkhead cycle will place at most. Each independently absorbs
+     * up to 64 connected water blocks (confirmed against real NMS bytecode), so this caps
+     * total reach at roughly {@code BULKHEAD_MAX_SPONGES * 64} blocks if well spread out
+     * (see {@link #BULKHEAD_SPONGE_SPACING_BLOCKS}) — "not that many blocks placed, but
+     * plenty enough to make a difference" (Kyle's own framing) against a genuinely large
+     * body, while keeping the number of synchronous placement-triggered absorption BFS
+     * calls in one tick bounded.
+     */
+    private static final int BULKHEAD_MAX_SPONGES = 8;
+    /**
+     * Minimum distance (in blocks) between two chosen sponge anchor points. Sponges
+     * placed right next to each other mostly compete for the SAME water within their own
+     * 6-block reach rather than covering more area — confirmed live 2026-08-17 that this,
+     * not merely too few sponges, was why "two isn't enough" against a real ocean. Set a
+     * little past the confirmed 6-block absorption radius so two placements' reach barely
+     * touches rather than mostly overlapping.
+     */
+    private static final int BULKHEAD_SPONGE_SPACING_BLOCKS = 8;
+    /**
+     * How many connected water cells {@link #detectWaterBreach} is willing to LOOK AT
+     * (cheap — just reading block types) while searching for well-spread anchor points.
+     * Much larger than {@link #BULKHEAD_MAX_PLUGS}'s lava cap on purpose: this only reads
+     * blocks, it doesn't place anything at most of them, so scanning further to find 8
+     * genuinely spread-out anchors in a large or oddly-shaped body is cheap and safe.
+     *
+     * <p>Confirmed live 2026-08-17 that the original value here (300) was badly
+     * undersized against {@link #BULKHEAD_SPONGE_SPACING_BLOCKS}'s 8-block rule: clearing
+     * just the exclusion disk around a SINGLE already-placed anchor costs roughly
+     * {@code π × 8² ≈ 200} explored cells on its own (math checked, not guessed), leaving
+     * almost no budget to ever find a second, spaced-out anchor — every subsequent one
+     * needs to clear its own zone plus every prior anchor's, compounding fast. Raised well
+     * past the reasoned minimum for finding all 8 anchors in a real, sprawling ocean shape.
+     */
+    private static final int BULKHEAD_WATER_EXPLORE_CELLS = 4096;
 
     private final Plugin plugin;
     private final Logger logger;
@@ -216,6 +287,9 @@ public final class ClearJobTask {
     private BukkitTask task;
     /** Hostile mobs already alerted about, so the same one doesn't re-trigger every scan. */
     private final Set<UUID> alertedMobs = new HashSet<>();
+    /** Fluid source blocks currently plugged, awaiting {@link #tickBulkhead()}'s settle timer. */
+    private final List<Block> bulkheadPlugs = new ArrayList<>();
+    private int bulkheadTicks;
     /** Chunks currently held open via a plugin ticket — see {@link #refreshChunkTickets()}. */
     private final Set<Long> ticketedChunks = new HashSet<>();
     /**
@@ -308,6 +382,20 @@ public final class ClearJobTask {
         Entity npcEntity = npc.getEntity();
         if (world == null || npcEntity == null) {
             return null;
+        }
+        // Bulkhead itself doesn't need to survive a restart — resuming at Phase.SEEKING
+        // and re-detecting fresh is fine, same as every other mid-action phase. But a
+        // plug left over from a restart mid-wait would otherwise be a permanent stray
+        // cobblestone block, since processedCells already advanced past that position
+        // before it was ever dug. Force-clear any saved plugs unconditionally (guarded on
+        // the block still being the plug material, in case a player already dealt with it).
+        for (String encoded : state.bulkheadPlugs) {
+            Block plug = JobStorage.decodeBlock(world, encoded);
+            if (plug.getType() == BULKHEAD_PLUG_MATERIAL) {
+                plug.setType(Material.AIR);
+                plugin.getLogger().info("[groundworker] Bulkhead: cleared stray plug at resume for NPC #"
+                        + state.npcId + " at " + plug.getX() + "," + plug.getY() + "," + plug.getZ());
+            }
         }
         Target target;
         Material tool;
@@ -473,6 +561,10 @@ public final class ClearJobTask {
         }
         npc.getNavigator().cancelNavigation();
         releaseChunkTickets();
+        for (Block plug : bulkheadPlugs) {
+            plug.setType(Material.AIR);
+        }
+        bulkheadPlugs.clear();
         label.remove();
         if (equipment != null) {
             equipment.setItemInMainHand(null);
@@ -564,6 +656,9 @@ public final class ClearJobTask {
         for (var entry : carried.entrySet()) {
             state.carried.put(entry.getKey().name(), entry.getValue());
         }
+        for (Block plug : bulkheadPlugs) {
+            state.bulkheadPlugs.add(JobStorage.encodeBlock(plug));
+        }
         if (storage != null) {
             for (Block block : storage.chests()) {
                 state.chests.add(JobStorage.encodeBlock(block));
@@ -602,6 +697,7 @@ public final class ClearJobTask {
                 case WALKING -> walkToPendingBlock();
                 case DIGGING -> digPendingBlock();
                 case HAULING -> haulToChest();
+                case BULKHEAD -> tickBulkhead();
             }
         }
 
@@ -864,10 +960,200 @@ public final class ClearJobTask {
         clearedCells++;
         clearedThisPass++;
         awardGroundworkerProgress(creditUnitsFor(pendingBlock));
+
+        if (canBreachLava()) {
+            List<Block> waterBreach = detectWaterBreach(pendingBlock);
+            List<Block> lavaBreach = detectLavaBreach(pendingBlock);
+            if (!waterBreach.isEmpty() || !lavaBreach.isEmpty()) {
+                beginBulkhead(waterBreach, lavaBreach);
+                return;
+            }
+        }
+
         abandonPendingBlock();
         // Duty cycle: pause before getting on with the next one. Shrinks with level.
         hesitationTicks = HelperTempo.hesitationTicksFor(levelService.levelOf(npc));
 
+        if (storage != null && carriedTotal >= CARRY_CAPACITY) {
+            startHauling();
+        }
+    }
+
+    /**
+     * True for a Groundworker past the "Bulkhead" milestone (level 6) — gates both the
+     * post-dig fluid-breach reaction below AND the {@link #isNearLava} pre-dig veto in
+     * {@link #isClearable}, since a lava-adjacent block is vetoed before ever reaching a
+     * dig otherwise, which would make the lava half of this feature permanently
+     * unreachable. Every other Helper's behavior (any other spec, any Groundworker below
+     * level 6) is byte-for-byte unchanged.
+     */
+    private boolean canBreachLava() {
+        return levelService.levelOf(npc) >= 6 && levelService.specializationOf(npc) == Specialization.GROUNDWORKER;
+    }
+
+    /**
+     * A small, deliberately SPREAD-OUT set of anchor points across the connected WATER
+     * body touching the just-dug block (source or flowing — sponges absorb both,
+     * confirmed against the real NMS {@code SpongeBlock} bytecode 2026-08-17: its own
+     * breadth-first absorption checks {@code FluidTags.WATER} broadly, not source-only),
+     * one sponge to be placed at each. Explores outward (up to
+     * {@link #BULKHEAD_WATER_EXPLORE_CELLS} cells scanned — cheap, just reading block
+     * types, no placement yet) but only KEEPS a candidate as an anchor if it's at least
+     * {@link #BULKHEAD_SPONGE_SPACING_BLOCKS} away from every anchor already picked, so
+     * each sponge's own engine-owned absorption (confirmed: up to 64 blocks, 6 blocks out
+     * from where it's placed) reaches genuinely new water instead of mostly re-covering
+     * the same ~64 blocks its neighbor already would have. Originally just checked the
+     * dug block's own 6 faces — all touching each other, so even multiple sponges placed
+     * there overlapped almost completely instead of covering more ground. Confirmed live
+     * 2026-08-17 ("two isn't enough" against a real ocean) that clustered placement was
+     * the actual problem, not merely too few sponges. Capped at
+     * {@link #BULKHEAD_MAX_SPONGES} placements so a real ocean can't turn one dig into an
+     * unbounded run of synchronous absorption BFS calls in a single tick.
+     */
+    private List<Block> detectWaterBreach(Block diggedBlock) {
+        List<Block> anchors = new ArrayList<>();
+        Set<String> visited = new HashSet<>();
+        Deque<Block> frontier = new ArrayDeque<>();
+        for (BlockFace face : ADJACENT_FACES) {
+            Block neighbor = diggedBlock.getRelative(face);
+            if (neighbor.getType() == Material.WATER) {
+                frontier.add(neighbor);
+            }
+        }
+        int explored = 0;
+        while (!frontier.isEmpty() && explored < BULKHEAD_WATER_EXPLORE_CELLS && anchors.size() < BULKHEAD_MAX_SPONGES) {
+            Block current = frontier.poll();
+            if (!visited.add(JobStorage.encodeBlock(current))) {
+                continue;
+            }
+            explored++;
+            if (isFarEnoughFromAnchors(current, anchors)) {
+                anchors.add(current);
+            }
+            for (BlockFace face : ADJACENT_FACES) {
+                Block neighbor = current.getRelative(face);
+                if (neighbor.getType() == Material.WATER && !visited.contains(JobStorage.encodeBlock(neighbor))) {
+                    frontier.add(neighbor);
+                }
+            }
+        }
+        return anchors;
+    }
+
+    private static boolean isFarEnoughFromAnchors(Block candidate, List<Block> anchors) {
+        int minDistanceSquared = BULKHEAD_SPONGE_SPACING_BLOCKS * BULKHEAD_SPONGE_SPACING_BLOCKS;
+        for (Block anchor : anchors) {
+            int dx = candidate.getX() - anchor.getX();
+            int dy = candidate.getY() - anchor.getY();
+            int dz = candidate.getZ() - anchor.getZ();
+            if (dx * dx + dy * dy + dz * dz < minDistanceSquared) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Every LAVA source (not a partial flow) connected to the just-dug block, found by a
+     * breadth-first flood-fill capped at {@link #BULKHEAD_MAX_PLUGS}. Sponges don't
+     * absorb lava at all (confirmed: the real {@code SpongeBlock} BFS acceptor checks
+     * {@code FluidTags.WATER} exclusively, no lava branch exists) — lava keeps this
+     * codebase's own manual flood-fill-and-cobblestone-plug approach, unchanged from
+     * before sponges were introduced for water. Plugging only the one block touching the
+     * dig left the rest of a real pond's sources free to keep feeding the flood right back
+     * in, and re-triggered a whole separate Bulkhead cycle (plug/wait/message/unplug) for
+     * every subsequent dig along the shoreline — confirmed live 2026-08-17. Sealing the
+     * whole connected body in one pass fixes that: the settle window is long enough for
+     * the entire pool to actually drain, and a job only triggers one Bulkhead cycle per
+     * genuinely separate body of lava, not one per exposed block. Capped rather than
+     * unbounded so an ocean-of-lava-scale connection can't turn one dig into a
+     * server-lag-inducing fill.
+     */
+    private List<Block> detectLavaBreach(Block diggedBlock) {
+        // Visited set is keyed by encoded coordinate string, not the Block object itself
+        // — same reasoning as JobStorage's own encodeBlock/decodeBlock convention: Block's
+        // equals/hashCode isn't part of the documented Bukkit API contract, so don't lean
+        // on it for correctness (a broken visited-check here would either loop or
+        // re-plug the same source repeatedly).
+        List<Block> found = new ArrayList<>();
+        Set<String> visited = new HashSet<>();
+        Deque<Block> frontier = new ArrayDeque<>();
+        for (BlockFace face : ADJACENT_FACES) {
+            Block neighbor = diggedBlock.getRelative(face);
+            if (isLavaSource(neighbor)) {
+                frontier.add(neighbor);
+            }
+        }
+        while (!frontier.isEmpty() && found.size() < BULKHEAD_MAX_PLUGS) {
+            Block current = frontier.poll();
+            if (!visited.add(JobStorage.encodeBlock(current))) {
+                continue;
+            }
+            found.add(current);
+            for (BlockFace face : ADJACENT_FACES) {
+                Block neighbor = current.getRelative(face);
+                if (isLavaSource(neighbor) && !visited.contains(JobStorage.encodeBlock(neighbor))) {
+                    frontier.add(neighbor);
+                }
+            }
+        }
+        return found;
+    }
+
+    private static boolean isLavaSource(Block block) {
+        return block.getType() == Material.LAVA
+                && block.getBlockData() instanceof Levelled levelled && levelled.getLevel() == 0;
+    }
+
+    /**
+     * Sponges for water (free-placed, vanilla's own engine absorbs the surrounding
+     * connected water and flips the block to {@code WET_SPONGE} — confirmed synchronous
+     * on placement, triggered by the same plain {@code setType(Material)} call already
+     * used everywhere else in this file, no special handling needed), cobblestone for
+     * lava (same convention as {@link JobStorage}'s free chest placement). Both plug
+     * types get cleared back to air identically later in {@link #tickBulkhead()} — the
+     * cleanup doesn't care which material is sitting there.
+     */
+    private void beginBulkhead(List<Block> waterBreach, List<Block> lavaBreach) {
+        npc.getNavigator().cancelNavigation();
+        pendingBlock = null;
+        for (Block source : waterBreach) {
+            source.setType(Material.SPONGE);
+            bulkheadPlugs.add(source);
+        }
+        for (Block source : lavaBreach) {
+            source.setType(BULKHEAD_PLUG_MATERIAL);
+            bulkheadPlugs.add(source);
+        }
+        bulkheadTicks = BULKHEAD_SETTLE_TICKS;
+        phase = Phase.BULKHEAD;
+        // One summary line, not one per plugged block — a real pond/lake can be dozens of
+        // source blocks in a single fill, and this fires once per genuinely separate
+        // flooding encounter now (not once per exposed block), so it isn't the spam it
+        // would have been under the old one-source-at-a-time detection.
+        logger.info("[groundworker] Bulkhead: placed " + waterBreach.size() + " sponge(s) and plugged "
+                + lavaBreach.size() + " lava source(s) for " + BuilderNpcService.baseNameOf(npc)
+                + (lavaBreach.size() >= BULKHEAD_MAX_PLUGS ? " (lava fill hit the cap — partial seal of a larger body)" : ""));
+        messagePlayer(Component.text(
+                BuilderNpcService.baseNameOf(npc) + ": Breach handled — waiting for it to settle.",
+                NamedTextColor.AQUA));
+    }
+
+    /** Counts down the settle timer, then clears every plug and resumes clearing. */
+    private void tickBulkhead() {
+        bulkheadTicks--;
+        if (bulkheadTicks > 0) {
+            return;
+        }
+        for (Block plug : bulkheadPlugs) {
+            plug.setType(Material.AIR);
+        }
+        logger.info("[groundworker] Bulkhead: unplugged, resuming for " + BuilderNpcService.baseNameOf(npc));
+        bulkheadPlugs.clear();
+        messagePlayer(Component.text(
+                BuilderNpcService.baseNameOf(npc) + ": Dry again — back to work.", NamedTextColor.AQUA));
+        phase = Phase.SEEKING;
+        hesitationTicks = HelperTempo.hesitationTicksFor(levelService.levelOf(npc));
         if (storage != null && carriedTotal >= CARRY_CAPACITY) {
             startHauling();
         }
@@ -990,7 +1276,7 @@ public final class ClearJobTask {
     private int creditUnitsFor(Block block) {
         long now = System.currentTimeMillis();
         TaskFingerprint fingerprint = new TaskFingerprint(TaskType.CLEAR, block.getWorld().getName(),
-                block.getX(), block.getY(), block.getZ(), target);
+                block.getX(), block.getY(), block.getZ(), canonicalMaterialClass(block));
         RedundancyTracker.CreditTier tier = redundancyTracker.check(npc.getUniqueId(), fingerprint, now);
         if (freshLedger.isFresh(block, now)) {
             logger.info("[antigrind] Fresh block skipped for " + BuilderNpcService.baseNameOf(npc)
@@ -1006,6 +1292,19 @@ public final class ClearJobTask {
             case REDUCED -> 1;
             case FULL -> CREDIT_UNITS_PER_BLOCK;
         };
+    }
+
+    /**
+     * The fingerprint's material class must be the block's own real family (Stone or
+     * Dirt), never the job's dispatched {@link #target} verbatim — {@link Target#ANY_EARTH}
+     * matches both, so two touches of the SAME block position under two differently-
+     * dispatched jobs (one Stone/Dirt-targeted, one Anything-targeted) would otherwise
+     * fingerprint as different materials and silently dodge Redundancy Decay. Safe to
+     * assume exactly one of Stone/Dirt matches — {@link #isClearable} already confirmed
+     * {@code target.matches(block.getType())} before this is ever called.
+     */
+    private Target canonicalMaterialClass(Block block) {
+        return Target.STONE.matches(block.getType()) ? Target.STONE : Target.DIRT;
     }
 
     /**
@@ -1035,7 +1334,7 @@ public final class ClearJobTask {
      * job engine doesn't have) — those Helpers earn no Toil until a later item wires them.
      */
     private void awardGroundworkerProgress(int creditUnits) {
-        if (target != Target.STONE && target != Target.DIRT) {
+        if (target != Target.STONE && target != Target.DIRT && target != Target.ANY_EARTH) {
             return;
         }
         if (levelService.specializationOf(npc) != Specialization.GROUNDWORKER) {
@@ -1064,8 +1363,9 @@ public final class ClearJobTask {
             return false;
         }
         // Basic hazard-avoidance pathing (warning-only Nether/End dispatch still lets the
-        // job proceed, but the NPC won't walk right up to a lava-adjacent block for it).
-        if (isNearLava(block)) {
+        // job proceed, but the NPC won't walk right up to a lava-adjacent block for it) —
+        // except a level-6+ Groundworker, who can handle what digging into it exposes.
+        if (isNearLava(block) && !canBreachLava()) {
             return false;
         }
         // Surface mode leaves buried material alone. With it off the job hollows the

@@ -71,7 +71,8 @@ public final class JavaJobDialog {
                                 if (audience instanceof Player p) {
                                     // showDialog sends a packet — stays on the main thread,
                                     // same as every other Bukkit call triggered from a click.
-                                    Bukkit.getScheduler().runTask(plugin, () -> showTargetStep(p, npc, type));
+                                    Bukkit.getScheduler().runTask(plugin,
+                                            () -> showTargetStep(p, npc, type, specialization, level));
                                 }
                             },
                             ClickCallback.Options.builder().build())));
@@ -109,9 +110,15 @@ public final class JavaJobDialog {
         return choice == null ? title : title + " [" + choice.name() + "]";
     }
 
-    private void showTargetStep(Player player, NPC npc, TaskType taskType) {
+    private void showTargetStep(Player player, NPC npc, TaskType taskType, Specialization specialization, int level) {
         List<ActionButton> buttons = new ArrayList<>();
         for (Target target : Target.values()) {
+            // "Anything" (Groundworker's level-3 verb, "Clears Anything") only makes sense
+            // for a Clear job, and only once the Helper has actually earned it.
+            if (target == Target.ANY_EARTH
+                    && !(taskType == TaskType.CLEAR && specialization == Specialization.GROUNDWORKER && level >= 3)) {
+                continue;
+            }
             buttons.add(ActionButton.create(Component.text(target.label()), null, 150,
                     DialogAction.customClick(
                             (view, audience) -> {
