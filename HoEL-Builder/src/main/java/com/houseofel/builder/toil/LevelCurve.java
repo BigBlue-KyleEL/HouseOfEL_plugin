@@ -57,7 +57,7 @@ public final class LevelCurve {
         if (isVerb(level)) {
             milestones.add(MilestoneType.VERB);
         }
-        if (isChoice(level)) {
+        if (isChoiceLevel(level)) {
             milestones.add(MilestoneType.CHOICE);
         }
         if (level == MAX_LEVEL) {
@@ -77,7 +77,8 @@ public final class LevelCurve {
         return level == 3 || level == 6 || level == 10 || level == 14 || level == 18;
     }
 
-    private static boolean isChoice(int level) {
+    /** Public — {@code choice} package's registry/listener/GUI need to enumerate Choice-slot levels too. */
+    public static boolean isChoiceLevel(int level) {
         return level == 8 || level == 16;
     }
 }

@@ -7,6 +7,8 @@ import com.houseofel.builder.antigrind.PresenceActivityListener;
 import com.houseofel.builder.antigrind.PresenceTracker;
 import com.houseofel.builder.antigrind.RedundancyTracker;
 import com.houseofel.builder.antigrind.VarietyTracker;
+import com.houseofel.builder.choice.MilestoneChoiceService;
+import com.houseofel.builder.choice.MilestoneChoiceStore;
 import com.houseofel.builder.command.BuilderCommand;
 import com.houseofel.builder.death.DeathRecordStore;
 import com.houseofel.builder.death.HelperDeathListener;
@@ -17,15 +19,19 @@ import com.houseofel.builder.death.WorkLedgerBook;
 import com.houseofel.builder.death.WorkLedgerRecoveryListener;
 import com.houseofel.builder.gui.BedrockJobForm;
 import com.houseofel.builder.gui.JavaJobDialog;
+import com.houseofel.builder.gui.MilestoneChoiceDialog;
+import com.houseofel.builder.gui.MilestoneChoiceForm;
 import com.houseofel.builder.job.JobExecutionService;
 import com.houseofel.builder.job.JobManager;
 import com.houseofel.builder.job.JobNotificationListener;
+import com.houseofel.builder.job.SpongeAbsorptionDiagnosticListener;
 import com.houseofel.builder.npc.BuilderNpcListener;
 import com.houseofel.builder.npc.BuilderNpcService;
 import com.houseofel.builder.npc.CitizensReadyListener;
 import com.houseofel.builder.npc.HelperCommandListener;
 import com.houseofel.builder.npc.HelperLevelService;
 import com.houseofel.builder.npc.HelperStatusListener;
+import com.houseofel.builder.npc.MilestoneChoiceRespecListener;
 import com.houseofel.builder.npc.Specialization;
 import com.houseofel.builder.npc.SpecializationDialog;
 import com.houseofel.builder.npc.SpecializationForm;
@@ -66,6 +72,8 @@ public final class HoELBuilder extends JavaPlugin {
 
         toilDatabase = new ToilDatabase(this);
         DeathRecordStore deathRecordStore = new DeathRecordStore(toilDatabase, getLogger());
+        MilestoneChoiceStore choiceStore = new MilestoneChoiceStore(toilDatabase, getLogger());
+        MilestoneChoiceService choiceService = new MilestoneChoiceService(deathRecordStore, choiceStore);
         DailyTaperStore dailyTaperStore = new DailyTaperStore(toilDatabase, getLogger());
         VarietyTracker varietyTracker = new VarietyTracker();
         PresenceTracker presenceTracker = new PresenceTracker();
@@ -82,18 +90,23 @@ public final class HoELBuilder extends JavaPlugin {
         JobExecutionService jobExecutionService = new JobExecutionService(this, jobManager, levelService,
                 deathRecordStore, redundancyTracker, freshLedger);
         RegionSelectionService regionService = new RegionSelectionService(this, rod, jobExecutionService);
-        JavaJobDialog javaDialog = new JavaJobDialog(this, regionService, deathRecordStore);
-        BedrockJobForm bedrockForm = new BedrockJobForm(this, regionService, deathRecordStore);
+        JavaJobDialog javaDialog = new JavaJobDialog(this, regionService, deathRecordStore, choiceStore);
+        BedrockJobForm bedrockForm = new BedrockJobForm(this, regionService, deathRecordStore, choiceStore);
         SpecializationDialog specializationDialog = new SpecializationDialog(this, npcService);
         SpecializationForm specializationForm = new SpecializationForm(this, npcService);
+        MilestoneChoiceDialog choiceDialog = new MilestoneChoiceDialog(this, choiceStore, choiceService);
+        MilestoneChoiceForm choiceForm = new MilestoneChoiceForm(this, choiceStore, choiceService);
 
         getCommand("builder").setExecutor(
                 new BuilderCommand(specializationDialog, specializationForm, regionService));
         getServer().getPluginManager().registerEvents(
-                new BuilderNpcListener(npcService, levelService, javaDialog, bedrockForm, jobManager), this);
+                new BuilderNpcListener(npcService, levelService, javaDialog, bedrockForm, jobManager,
+                        choiceStore, choiceDialog, choiceForm), this);
         getServer().getPluginManager().registerEvents(new HelperCommandListener(this, npcService, jobManager), this);
         getServer().getPluginManager().registerEvents(
-                new HelperStatusListener(this, npcService, levelService, deathRecordStore), this);
+                new HelperStatusListener(this, npcService, levelService, deathRecordStore, choiceStore), this);
+        getServer().getPluginManager().registerEvents(
+                new MilestoneChoiceRespecListener(this, npcService, levelService, choiceStore, choiceDialog, choiceForm), this);
         getServer().getPluginManager().registerEvents(new SurveyorListener(rod, regionService), this);
         getServer().getPluginManager().registerEvents(new RegionConfirmListener(this, regionService), this);
         getServer().getPluginManager().registerEvents(new JobNotificationListener(jobManager), this);
@@ -103,6 +116,7 @@ public final class HoELBuilder extends JavaPlugin {
                 new WorkLedgerRecoveryListener(this, ledgerBook, deathRecordStore), this);
         getServer().getPluginManager().registerEvents(new FreshPlacementListener(freshLedger), this);
         getServer().getPluginManager().registerEvents(new PresenceActivityListener(this, presenceTracker), this);
+        getServer().getPluginManager().registerEvents(new SpongeAbsorptionDiagnosticListener(this), this);
 
         ledgerExpiryTask = LedgerExpiryTask.start(this, deathRecordStore, levelService);
         rustBossBarTask = RustBossBar.start(this, deathRecordStore);

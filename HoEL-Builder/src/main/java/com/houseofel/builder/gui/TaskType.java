@@ -23,11 +23,6 @@ public enum TaskType {
         return label;
     }
 
-    /** The tool the NPC equips while performing this task in the world. */
-    public Material tool() {
-        return icon;
-    }
-
     /** Readable noun for this task's tool, used for the per-NPC cosmetic name (e.g. "Pickaxe"). */
     public String toolNoun() {
         return toolNoun;

@@ -51,6 +51,12 @@ public final class ToilDatabase {
                 // idempotent ALTER TABLE guarded by a PRAGMA table_info check.
                 ensureColumn(statement, "helper_ledger", "owner_uuid", "TEXT");
                 ensureColumn(statement, "helper_ledger", "scar_choice", "TEXT");
+                // Toil actually spent on Choice-slot respecs — deliberately NOT subtracted
+                // from banked_toil itself, since banked_toil feeds LevelCurve.levelForToil
+                // on every subsequent ticket award and must stay monotonically
+                // non-decreasing (except Death Policy's rank-floor, an intentional
+                // punishment). "Spendable Toil" for a respec = banked_toil - this column.
+                ensureColumn(statement, "helper_ledger", "toil_spent_on_respec", "INTEGER NOT NULL DEFAULT 0");
                 statement.execute("""
                         CREATE TABLE IF NOT EXISTS toil_ticket (
                             order_id TEXT PRIMARY KEY,
@@ -87,6 +93,21 @@ public final class ToilDatabase {
                             y INTEGER NOT NULL,
                             z INTEGER NOT NULL,
                             occurred_at INTEGER NOT NULL
+                        )
+                        """);
+                // One row per (Helper, Choice-slot level) once picked — absent row = not
+                // yet chosen, matching scar_choice's null-until-set convention. Generic
+                // across every specialization's level-8/16 Choice slots on purpose:
+                // interpretation of `choice` depends on (helper_ledger.specialization,
+                // level), resolved at the read site via the relevant per-spec enum (e.g.
+                // GroundworkerL8Choice.valueOf(...)) — this table itself has no opinion.
+                statement.execute("""
+                        CREATE TABLE IF NOT EXISTS helper_milestone_choice (
+                            npc_uuid TEXT NOT NULL,
+                            level INTEGER NOT NULL,
+                            choice TEXT NOT NULL,
+                            chosen_at INTEGER NOT NULL,
+                            PRIMARY KEY (npc_uuid, level)
                         )
                         """);
                 // One row per currently-rusted Helper; deleted the moment Rust clears.

@@ -1,13 +1,21 @@
 package com.houseofel.builder.npc;
 
+import com.houseofel.builder.choice.MilestoneChoiceOption;
+import com.houseofel.builder.choice.MilestoneChoiceRegistry;
+import com.houseofel.builder.choice.MilestoneChoiceStore;
 import com.houseofel.builder.gui.BedrockJobForm;
 import com.houseofel.builder.gui.JavaJobDialog;
+import com.houseofel.builder.gui.MilestoneChoiceDialog;
+import com.houseofel.builder.gui.MilestoneChoiceForm;
 import com.houseofel.builder.job.JobManager;
+import com.houseofel.builder.toil.LevelCurve;
 import net.citizensnpcs.api.event.NPCRightClickEvent;
 import net.citizensnpcs.api.npc.NPC;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
+
+import java.util.List;
 
 /**
  * Opens the task-configuration flow when a player right-clicks a Helper NPC — a native
@@ -27,14 +35,22 @@ public final class BuilderNpcListener implements Listener {
     private final JavaJobDialog javaDialog;
     private final BedrockJobForm bedrockForm;
     private final JobManager jobManager;
+    private final MilestoneChoiceStore choiceStore;
+    private final MilestoneChoiceDialog choiceDialog;
+    private final MilestoneChoiceForm choiceForm;
 
     public BuilderNpcListener(BuilderNpcService npcService, HelperLevelService levelService,
-                               JavaJobDialog javaDialog, BedrockJobForm bedrockForm, JobManager jobManager) {
+                               JavaJobDialog javaDialog, BedrockJobForm bedrockForm, JobManager jobManager,
+                               MilestoneChoiceStore choiceStore, MilestoneChoiceDialog choiceDialog,
+                               MilestoneChoiceForm choiceForm) {
         this.npcService = npcService;
         this.levelService = levelService;
         this.javaDialog = javaDialog;
         this.bedrockForm = bedrockForm;
         this.jobManager = jobManager;
+        this.choiceStore = choiceStore;
+        this.choiceDialog = choiceDialog;
+        this.choiceForm = choiceForm;
     }
 
     @EventHandler
@@ -46,6 +62,29 @@ public final class BuilderNpcListener implements Listener {
         NPC npc = event.getNPC();
         boolean isBedrock = BedrockJobForm.isBedrockPlayer(player);
 
+        // Null for a pre-1-F NPC that was never assigned a specialization — both
+        // open()s fall back to just the Helper's name in that case. The level drives the
+        // flavour line under the header, which changes as the Helper grows.
+        Specialization specialization = levelService.specializationOf(npc);
+        int level = levelService.levelOf(npc);
+
+        // A pending, not-yet-made Choice takes over the right-click entirely — the
+        // Helper "needs help deciding" before it'll take normal job orders again. Once
+        // decided, right-click goes straight back to the usual job menu; reconsidering an
+        // ALREADY-made choice is a separate, deliberate action (the "<Name> respec" chat
+        // trigger — see MilestoneChoiceRespecListener), not something every future
+        // right-click should interrupt.
+        int pendingChoiceLevel = pendingChoiceLevel(npc, specialization, level);
+        if (pendingChoiceLevel > 0) {
+            List<MilestoneChoiceOption> options = MilestoneChoiceRegistry.optionsFor(specialization, pendingChoiceLevel);
+            if (isBedrock) {
+                choiceForm.open(player, npc, pendingChoiceLevel, options);
+            } else {
+                choiceDialog.open(player, npc, pendingChoiceLevel, options);
+            }
+            return;
+        }
+
         if (jobManager.isAtCeiling()) {
             String eta = jobManager.etaOfSoonestJob().orElse("a little while");
             if (isBedrock) {
@@ -56,15 +95,28 @@ public final class BuilderNpcListener implements Listener {
             return;
         }
 
-        // Null for a pre-1-F NPC that was never assigned a specialization — both
-        // open()s fall back to just the Helper's name in that case. The level drives the
-        // flavour line under the header, which changes as the Helper grows.
-        Specialization specialization = levelService.specializationOf(npc);
-        int level = levelService.levelOf(npc);
         if (isBedrock) {
             bedrockForm.open(player, npc, specialization, level);
         } else {
             javaDialog.open(player, npc, specialization, level);
         }
+    }
+
+    /**
+     * The lowest Choice-slot level this Helper has reached but not yet decided, or 0 if
+     * none — checked in level order so an unlikely double-pending case (e.g. a big single
+     * Toil award that jumped past both 8 and 16 at once) always offers the earlier one first.
+     */
+    private int pendingChoiceLevel(NPC npc, Specialization specialization, int level) {
+        for (int candidate = 1; candidate <= level; candidate++) {
+            if (!LevelCurve.isChoiceLevel(candidate)) {
+                continue;
+            }
+            List<MilestoneChoiceOption> options = MilestoneChoiceRegistry.optionsFor(specialization, candidate);
+            if (!options.isEmpty() && choiceStore.find(npc.getUniqueId(), candidate) == null) {
+                return candidate;
+            }
+        }
+        return 0;
     }
 }

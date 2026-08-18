@@ -3,6 +3,9 @@ package com.houseofel.builder.npc;
 import com.houseofel.builder.antigrind.DailyTaperStore;
 import com.houseofel.builder.antigrind.PresenceTracker;
 import com.houseofel.builder.antigrind.VarietyTracker;
+import com.houseofel.builder.choice.MilestoneChoiceOption;
+import com.houseofel.builder.choice.MilestoneChoiceRegistry;
+import com.houseofel.builder.choice.MilestoneChoiceStore;
 import com.houseofel.builder.death.DeathRecordStore;
 import com.houseofel.builder.death.HelperRust;
 import com.houseofel.builder.death.RustState;
@@ -22,10 +25,14 @@ import com.houseofel.builder.toil.ToilDatabase;
 import com.houseofel.builder.toil.ToilLedgerStore;
 import com.houseofel.builder.toil.ToilPipeline;
 import net.citizensnpcs.api.npc.NPC;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.NamedTextColor;
+import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
 import org.bukkit.entity.Entity;
+import org.bukkit.entity.Player;
 import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.plugin.Plugin;
@@ -38,6 +45,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.logging.Logger;
+import java.util.stream.Collectors;
 
 /**
  * Per-NPC Toil ledger, level, dig speed, harvest-tier gating, and specialization
@@ -175,6 +183,7 @@ public final class HelperLevelService {
         if (leveledUp) {
             titleService.applyTitle(npc, record.specialization(), newLevel);
             announcementLines = announcementLinesFor(npc, newLevel);
+            announceChoiceIfApplicable(npc, newLevel, record.specialization());
         } else {
             announcementLines = List.of();
         }
@@ -296,12 +305,50 @@ public final class HelperLevelService {
         } else if (newLevel == 6 && specializationOf(npc) == Specialization.GROUNDWORKER) {
             lines.add(BuilderNpcService.baseNameOf(npc)
                     + ": Flooding won't stop me anymore — sponges for water, a plug for lava, then I keep clearing.");
+            // Rule 9 ("previewed since two levels early") — reads straight off the
+            // registry rather than hardcoding the option names a third time (the picker
+            // GUI and the level-8 offer are the other two), so this line can't drift out
+            // of sync with what's actually offered.
+            List<MilestoneChoiceOption> preview = MilestoneChoiceRegistry.optionsFor(Specialization.GROUNDWORKER, 8);
+            if (!preview.isEmpty()) {
+                String names = preview.stream().map(MilestoneChoiceOption::label).collect(Collectors.joining(" or "));
+                lines.add(BuilderNpcService.baseNameOf(npc)
+                        + ": Two levels from now I'll have a choice to make — " + names + ".");
+            }
         } else if (milestones.contains(MilestoneType.VERB) || milestones.contains(MilestoneType.CHOICE)
                 || milestones.contains(MilestoneType.CAPSTONE)) {
             logger.info(BuilderNpcService.baseNameOf(npc) + " (#" + npc.getId() + ") reached level " + newLevel
                     + " — milestone slot(s) " + milestones + " reached, no perk content built yet.");
         }
         return lines;
+    }
+
+    /**
+     * A real Choice-slot milestone (level 8, eventually 16) gets messaged directly to the
+     * Helper's recorded OWNER, not whoever's currently running a job on it — deliberately
+     * bypassing the {@link #announcementLinesFor}/{@code messagePlayer} pipe above, which
+     * targets the job runner. This mirrors how {@code HelperDeathListener} splits its
+     * public "has fallen" broadcast from its owner-only WARY/HARDENED prompt: a Choice
+     * offer is a decision about the Helper's future, not feedback about a job, so it has
+     * to reach the owner regardless of who dispatched it most recently. A no-op if this
+     * (specialization, level) has no real Choice content registered yet, or if the owner
+     * isn't currently online to receive it — they'll still see it via the right-click
+     * picker or {@code "<Name> report"} whenever they next interact with the Helper.
+     */
+    private void announceChoiceIfApplicable(NPC npc, int newLevel, Specialization specialization) {
+        List<MilestoneChoiceOption> options = MilestoneChoiceRegistry.optionsFor(specialization, newLevel);
+        if (options.isEmpty()) {
+            return;
+        }
+        UUID ownerUuid = deathRecordStore.ownerOf(npc.getUniqueId());
+        Player owner = ownerUuid == null ? null : Bukkit.getPlayer(ownerUuid);
+        if (owner == null) {
+            return;
+        }
+        String name = BuilderNpcService.baseNameOf(npc);
+        owner.sendMessage(Component.text(
+                name + " needs your help deciding which path to take — right-click him to choose.",
+                NamedTextColor.LIGHT_PURPLE));
     }
 
     // Pacing (dig speed, hesitation, error rate) lives in HelperTempo, and the base

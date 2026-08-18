@@ -53,7 +53,10 @@ public final class JobExecutionService {
     public void dispatchClear(Player player, NPC npc, TaskType taskType, Target target,
                                Location pointA, Location pointB, boolean storeInChest,
                                boolean surfaceOnly) {
-        Material tool = taskType.tool();
+        // Purely a cosmetic starting point — ClearJobTask.beginDigging() picks the real
+        // per-block tool (see BlockTool) the moment it reaches its first block, so
+        // whatever's held here is only ever visible for a step or two at most.
+        Material initialTool = Material.IRON_SHOVEL;
         Entity npcEntity = npc.getEntity();
         if (npcEntity == null) {
             player.sendMessage(Component.text(
@@ -99,7 +102,7 @@ public final class JobExecutionService {
         long totalCells = (long) spanX * spanY * spanZ;
 
         TextDisplay label = ClearJobTask.spawnLabel(npcEntity.getLocation());
-        EntityEquipment equipment = ClearJobTask.equipTool(npcEntity, tool, BuilderNpcService.baseNameOf(npc), taskType.toolNoun());
+        EntityEquipment equipment = ClearJobTask.equipTool(npcEntity, initialTool, BuilderNpcService.baseNameOf(npc), taskType.toolNoun());
 
         player.sendMessage(Component.text(BuilderNpcService.baseNameOf(npc) + ": Right, I'll get started on the "
                 + target.label() + " — " + totalCells + " blocks to check.", NamedTextColor.GREEN));
@@ -129,7 +132,7 @@ public final class JobExecutionService {
         RegionOutline outline = new RegionOutline(world, minX, minY, minZ, maxX, maxY, maxZ);
 
         ClearJobTask task = new ClearJobTask(plugin, jobManager, levelService, redundancyTracker, freshLedger,
-                player, npc, npcEntity, equipment, label, world, target, tool, minX, maxX, minY, maxY, minZ, maxZ,
+                player, npc, npcEntity, equipment, label, world, target, initialTool, minX, maxX, minY, maxY, minZ, maxZ,
                 spanX, spanZ, totalCells, storage, storeInChest, surfaceOnly, outline);
         jobManager.register(task);
         task.start();

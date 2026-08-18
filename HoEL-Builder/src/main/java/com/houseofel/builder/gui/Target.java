@@ -1,6 +1,7 @@
 package com.houseofel.builder.gui;
 
 import org.bukkit.Material;
+import org.bukkit.Tag;
 
 public enum Target {
     STONE("Stone", Material.STONE),
@@ -8,9 +9,15 @@ public enum Target {
     OAK_LOG("Oak Log", Material.OAK_LOG),
     WHEAT("Wheat", Material.WHEAT),
     /**
-     * Groundworker's level-3 verb, "Clears Anything" — matches anything {@link #STONE} or
-     * {@link #DIRT} would, so one job can clear a mixed area instead of needing one
-     * dispatch per material. Gated to GROUNDWORKER level 3+ at the GUI layer
+     * Groundworker's level-3 verb, "Clears Anything" — matches every real EARTH/ground
+     * material, not just plain Stone/Dirt (2026-08-18, Kyle's own framing: "the player
+     * should be responsible enough to know that he wants to clear everything on that work
+     * area"). Deliberately as broad as {@link Tag#MINEABLE_PICKAXE}/{@link
+     * Tag#MINEABLE_SHOVEL} allow — every stone variant, ore, and soft-ground material
+     * Mojang itself classifies as pickaxe/shovel-mineable, not a hand-picked subset. Does
+     * NOT include axe/hoe-mineable material (wood, crops) — those already have their own
+     * distinct targets ({@link #OAK_LOG}, {@link #WHEAT}) and read as a different kind of
+     * job, not "ground clearing." Gated to GROUNDWORKER level 3+ at the GUI layer
      * ({@code JavaJobDialog}/{@code BedrockJobForm}) — this enum constant itself has no
      * level awareness, it's just what "anything" resolves to once offered.
      */
@@ -41,7 +48,8 @@ public enum Target {
             return candidate == Material.STONE || isInfested(candidate);
         }
         if (this == ANY_EARTH) {
-            return DIRT.matches(candidate) || STONE.matches(candidate);
+            return Tag.MINEABLE_PICKAXE.isTagged(candidate) || Tag.MINEABLE_SHOVEL.isTagged(candidate)
+                    || isInfested(candidate);
         }
         return candidate == icon;
     }

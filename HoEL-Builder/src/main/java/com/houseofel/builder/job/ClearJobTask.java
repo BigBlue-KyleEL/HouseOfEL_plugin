@@ -3,6 +3,7 @@ package com.houseofel.builder.job;
 import com.houseofel.builder.antigrind.FreshLedger;
 import com.houseofel.builder.antigrind.RedundancyTracker;
 import com.houseofel.builder.antigrind.TaskFingerprint;
+import com.houseofel.builder.gui.BlockTool;
 import com.houseofel.builder.gui.Target;
 import com.houseofel.builder.gui.TaskType;
 import com.houseofel.builder.npc.BuilderNpcService;
@@ -23,6 +24,7 @@ import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.Particle;
 import org.bukkit.Sound;
+import org.bukkit.Tag;
 import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
@@ -43,6 +45,7 @@ import org.bukkit.scheduler.BukkitTask;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -187,40 +190,84 @@ public final class ClearJobTask {
      */
     private static final int BULKHEAD_MAX_PLUGS = 64;
     /**
-     * How many sponges one Bulkhead cycle will place at most. Each independently absorbs
-     * up to 64 connected water blocks (confirmed against real NMS bytecode), so this caps
-     * total reach at roughly {@code BULKHEAD_MAX_SPONGES * 64} blocks if well spread out
-     * (see {@link #BULKHEAD_SPONGE_SPACING_BLOCKS}) — "not that many blocks placed, but
-     * plenty enough to make a difference" (Kyle's own framing) against a genuinely large
-     * body, while keeping the number of synchronous placement-triggered absorption BFS
-     * calls in one tick bounded.
+     * How many sponges one Bulkhead cycle will place at most, across BOTH the flat ring
+     * and the vertical accents below (see {@link #BULKHEAD_MAX_VERTICAL_SPONGES}). Each
+     * independently absorbs up to 64 connected water blocks (confirmed against real NMS
+     * bytecode), so this caps total reach at roughly {@code BULKHEAD_MAX_SPONGES * 64}
+     * blocks if well spread out (see {@link #BULKHEAD_SPONGE_SPACING_BLOCKS}) — "not that
+     * many blocks placed, but plenty enough to make a difference" (Kyle's own framing)
+     * against a genuinely large body, while keeping the number of synchronous
+     * placement-triggered absorption BFS calls bounded (now spread across the wave — see
+     * {@link #BULKHEAD_WAVE_TICKS_PER_STEP} — rather than all in one tick, which is what
+     * makes a much higher count than the original 8 affordable at all).
+     *
+     * <p>Raised 10 → 18 on 2026-08-18: confirmed live that 10, spread thin across a real
+     * water body, read as scattered points rather than the dense mockup Kyle built — a
+     * meaningfully bigger count is what actually makes a dome silhouette legible with only
+     * a few seconds of visible lifetime, not spacing alone.
      */
-    private static final int BULKHEAD_MAX_SPONGES = 8;
+    private static final int BULKHEAD_MAX_SPONGES = 18;
+    /**
+     * Of {@link #BULKHEAD_MAX_SPONGES}'s total, how many slots are reserved for anchors
+     * sitting noticeably above or below the breach (see {@link #BULKHEAD_VERTICAL_DY_THRESHOLD})
+     * rather than the usual flat ring — Kyle's 2026-08-18 request for the dome to "cover
+     * even water sources above and below." Still ADDITIVE, never forced: the flat ring
+     * fills first, and these only get used when real water actually supports them.
+     *
+     * <p>Raised 2 → 6 alongside {@link #BULKHEAD_MAX_SPONGES} on 2026-08-18 — Kyle's
+     * mockup shows height variation across MOST of the shape, not just one or two accent
+     * points, so the vertical share needed to grow proportionally with the total, not stay
+     * fixed at a small constant.
+     */
+    private static final int BULKHEAD_MAX_VERTICAL_SPONGES = 6;
+    /**
+     * Minimum absolute Y-difference from the breach for a candidate to count as a
+     * "vertical accent" instead of part of the flat ring. Live-tuned starting point, not
+     * measured — a sloped lakebed could trip this from ordinary terrain, not real
+     * vertical relief, so nudge upward if the accents don't read as deliberate.
+     */
+    private static final int BULKHEAD_VERTICAL_DY_THRESHOLD = 2;
     /**
      * Minimum distance (in blocks) between two chosen sponge anchor points. Sponges
      * placed right next to each other mostly compete for the SAME water within their own
      * 6-block reach rather than covering more area — confirmed live 2026-08-17 that this,
-     * not merely too few sponges, was why "two isn't enough" against a real ocean. Set a
-     * little past the confirmed 6-block absorption radius so two placements' reach barely
-     * touches rather than mostly overlapping.
+     * not merely too few sponges, was why "two isn't enough" against a real ocean.
+     *
+     * <p>Originally 8 (a little past the 6-block absorption radius, so reach would barely
+     * touch rather than overlap) — confirmed live 2026-08-17 that 8 read as "way too far
+     * apart" in practice, tuned down to 5. Confirmed live AGAIN on 2026-08-18 that 5 still
+     * read as "not even remotely close" to Kyle's dense, near-touching mockup — tuned down
+     * hard to 2, deliberately accepting more overlap between neighboring sponges' own
+     * absorption in exchange for a visibly clustered shape; the higher
+     * {@link #BULKHEAD_MAX_SPONGES} count compensates for the coverage that overlap
+     * costs. Live-tuned, not mathematically derived — nudge further if it still doesn't
+     * look right.
      */
-    private static final int BULKHEAD_SPONGE_SPACING_BLOCKS = 8;
+    private static final int BULKHEAD_SPONGE_SPACING_BLOCKS = 2;
     /**
      * How many connected water cells {@link #detectWaterBreach} is willing to LOOK AT
      * (cheap — just reading block types) while searching for well-spread anchor points.
      * Much larger than {@link #BULKHEAD_MAX_PLUGS}'s lava cap on purpose: this only reads
-     * blocks, it doesn't place anything at most of them, so scanning further to find 8
+     * blocks, it doesn't place anything at most of them, so scanning further to find
      * genuinely spread-out anchors in a large or oddly-shaped body is cheap and safe.
      *
      * <p>Confirmed live 2026-08-17 that the original value here (300) was badly
-     * undersized against {@link #BULKHEAD_SPONGE_SPACING_BLOCKS}'s 8-block rule: clearing
-     * just the exclusion disk around a SINGLE already-placed anchor costs roughly
+     * undersized against {@link #BULKHEAD_SPONGE_SPACING_BLOCKS}'s then-8-block rule:
+     * clearing just the exclusion disk around a SINGLE already-placed anchor costs roughly
      * {@code π × 8² ≈ 200} explored cells on its own (math checked, not guessed), leaving
      * almost no budget to ever find a second, spaced-out anchor — every subsequent one
      * needs to clear its own zone plus every prior anchor's, compounding fast. Raised well
-     * past the reasoned minimum for finding all 8 anchors in a real, sprawling ocean shape.
+     * past the reasoned minimum for finding all anchors in a real, sprawling ocean shape.
      */
     private static final int BULKHEAD_WATER_EXPLORE_CELLS = 4096;
+    /**
+     * Ticks between each sponge landing during the wave rollout (2026-08-18, "back to
+     * front wave kind animation" — Kyle's own framing) — roughly 5 sponges/second. Piggybacks
+     * on this task's own existing per-tick loop ({@link #tick()}) rather than a separate
+     * scheduler, matching how {@link #bulkheadTicks} and {@code outlineTicks} already drive
+     * timed behavior. Live-tuned starting point, not measured.
+     */
+    private static final int BULKHEAD_WAVE_TICKS_PER_STEP = 4;
 
     private final Plugin plugin;
     private final Logger logger;
@@ -235,7 +282,8 @@ public final class ClearJobTask {
     private final TextDisplay label;
     private final World world;
     private final Target target;
-    private final Material tool;
+    /** The tool currently equipped — recomputed per block in {@link #beginDigging()}, not fixed for the whole job. */
+    private Material currentTool;
     private final boolean surfaceOnly;
     private final boolean storeInChest;
     private final int savedMinX;
@@ -290,6 +338,15 @@ public final class ClearJobTask {
     /** Fluid source blocks currently plugged, awaiting {@link #tickBulkhead()}'s settle timer. */
     private final List<Block> bulkheadPlugs = new ArrayList<>();
     private int bulkheadTicks;
+    /**
+     * Water anchors still waiting to land during the wave rollout, in placement order
+     * (flat ring furthest-first, then the vertical accents last) — see
+     * {@link #detectWaterBreach} for how this order is built and {@link #tickBulkhead()}
+     * for how it's drained one anchor at a time.
+     */
+    private final List<Block> bulkheadWaveAnchors = new ArrayList<>();
+    private int bulkheadWaveIndex;
+    private int bulkheadWaveStepTicks;
     /** Chunks currently held open via a plugin ticket — see {@link #refreshChunkTickets()}. */
     private final Set<Long> ticketedChunks = new HashSet<>();
     /**
@@ -336,7 +393,7 @@ public final class ClearJobTask {
         this.label = label;
         this.world = world;
         this.target = target;
-        this.tool = tool;
+        this.currentTool = tool;
         this.savedMinX = minX;
         this.savedMaxX = maxX;
         this.savedMinY = minY;
@@ -386,27 +443,33 @@ public final class ClearJobTask {
         // Bulkhead itself doesn't need to survive a restart — resuming at Phase.SEEKING
         // and re-detecting fresh is fine, same as every other mid-action phase. But a
         // plug left over from a restart mid-wait would otherwise be a permanent stray
-        // cobblestone block, since processedCells already advanced past that position
-        // before it was ever dug. Force-clear any saved plugs unconditionally (guarded on
-        // the block still being the plug material, in case a player already dealt with it).
+        // cobblestone/sponge block, since processedCells already advanced past that
+        // position before it was ever dug. Force-clear any saved plugs unconditionally
+        // (guarded on the block still being a plug material, in case a player already
+        // dealt with it) — sponge auto-converts to wet sponge after absorbing, so both
+        // states need covering.
         for (String encoded : state.bulkheadPlugs) {
             Block plug = JobStorage.decodeBlock(world, encoded);
-            if (plug.getType() == BULKHEAD_PLUG_MATERIAL) {
+            Material plugType = plug.getType();
+            if (plugType == BULKHEAD_PLUG_MATERIAL || plugType == Material.SPONGE || plugType == Material.WET_SPONGE) {
                 plug.setType(Material.AIR);
                 plugin.getLogger().info("[groundworker] Bulkhead: cleared stray plug at resume for NPC #"
                         + state.npcId + " at " + plug.getX() + "," + plug.getY() + "," + plug.getZ());
             }
         }
         Target target;
-        Material tool;
         try {
             target = Target.valueOf(state.target);
-            tool = Material.valueOf(state.tool);
         } catch (IllegalArgumentException e) {
             plugin.getLogger().warning("Couldn't resume job for NPC #" + state.npcId
-                    + " — unrecognised target/tool: " + e.getMessage());
+                    + " — unrecognised target: " + e.getMessage());
             return null;
         }
+        // Purely a cosmetic placeholder for the few ticks before the resumed job reaches
+        // its first block — resume() always restarts at Phase.SEEKING (below), so
+        // beginDigging() corrects this to the real per-block tool before any real
+        // digging happens. There's nothing meaningful to actually resume a tool "to."
+        Material initialTool = Material.IRON_SHOVEL;
 
         int spanX = state.maxX - state.minX + 1;
         int spanZ = state.maxZ - state.minZ + 1;
@@ -435,7 +498,7 @@ public final class ClearJobTask {
                     state.cubeUnitIndex, state.rowSign, state.columnSign);
         }
 
-        EntityEquipment equipment = equipTool(npcEntity, tool, BuilderNpcService.baseNameOf(npc), TaskType.fromTool(tool).toolNoun());
+        EntityEquipment equipment = equipTool(npcEntity, initialTool, BuilderNpcService.baseNameOf(npc), TaskType.fromTool(initialTool).toolNoun());
         TextDisplay label = spawnLabel(npcEntity.getLocation());
         RegionOutline outline = new RegionOutline(world, state.minX, state.minY, state.minZ,
                 state.maxX, state.maxY, state.maxZ);
@@ -449,7 +512,7 @@ public final class ClearJobTask {
         }
 
         return new ClearJobTask(plugin, jobManager, levelService, redundancyTracker, freshLedger, state.playerId,
-                npc, npcEntity, equipment, label, world, target, tool, state.minX, state.maxX, state.minY,
+                npc, npcEntity, equipment, label, world, target, initialTool, state.minX, state.maxX, state.minY,
                 state.maxY, state.minZ, state.maxZ, spanX, spanZ, totalCells, storage, state.storeInChest,
                 state.surfaceOnly, outline, Phase.SEEKING, state.processedCells, state.clearedCells,
                 state.deposited, state.passNumber, state.clearedThisPass, state.skippedThisPass,
@@ -561,10 +624,9 @@ public final class ClearJobTask {
         }
         npc.getNavigator().cancelNavigation();
         releaseChunkTickets();
-        for (Block plug : bulkheadPlugs) {
-            plug.setType(Material.AIR);
-        }
-        bulkheadPlugs.clear();
+        clearBulkheadPlugs();
+        bulkheadWaveAnchors.clear();
+        bulkheadWaveIndex = 0;
         label.remove();
         if (equipment != null) {
             equipment.setItemInMainHand(null);
@@ -572,6 +634,14 @@ public final class ClearJobTask {
         jobManager.onJobEnded(npc.getId());
         logger.info(BuilderNpcService.baseNameOf(npc) + "'s job was cancelled ["
                 + clearedCells + " cleared, " + deposited + " stored]");
+    }
+
+    /** Clears any Bulkhead plug blocks back to air — shared by every teardown path so none of them can strand one. */
+    private void clearBulkheadPlugs() {
+        for (Block plug : bulkheadPlugs) {
+            plug.setType(Material.AIR);
+        }
+        bulkheadPlugs.clear();
     }
 
     /**
@@ -642,7 +712,6 @@ public final class ClearJobTask {
         state.minZ = savedMinZ;
         state.maxZ = savedMaxZ;
         state.target = target.name();
-        state.tool = tool.name();
         state.surfaceOnly = surfaceOnly;
         state.storeInChest = storeInChest;
         state.processedCells = processedCells;
@@ -909,8 +978,18 @@ public final class ClearJobTask {
         }
     }
 
-    /** Starts digging pendingBlock. */
+    /**
+     * Starts digging pendingBlock. Also where the equipped tool gets checked against
+     * what this specific block actually needs (see {@link BlockTool}) and swapped if it
+     * changed — once per block, not per tick, and only when the needed tool is actually
+     * different from what's already held, so a same-material run never re-equips.
+     */
     private void beginDigging() {
+        Material neededTool = BlockTool.bestToolFor(pendingBlock.getType());
+        if (neededTool != currentTool) {
+            currentTool = neededTool;
+            equipTool(npcEntity, currentTool, BuilderNpcService.baseNameOf(npc), TaskType.fromTool(currentTool).toolNoun());
+        }
         digTicks = 0;
         phase = Phase.DIGGING;
     }
@@ -923,7 +1002,7 @@ public final class ClearJobTask {
      */
     private int digTicksForPendingBlock() {
         int vanillaTicks = VanillaTiming.durationFor(
-                TaskType.fromTool(tool), new ItemStack(tool), pendingBlock.getBlockData());
+                TaskType.fromTool(currentTool), new ItemStack(currentTool), pendingBlock.getBlockData());
         return HelperTempo.digTicksFor(levelService.levelOf(npc), vanillaTicks);
     }
 
@@ -1006,12 +1085,20 @@ public final class ClearJobTask {
      * dug block's own 6 faces — all touching each other, so even multiple sponges placed
      * there overlapped almost completely instead of covering more ground. Confirmed live
      * 2026-08-17 ("two isn't enough" against a real ocean) that clustered placement was
-     * the actual problem, not merely too few sponges. Capped at
-     * {@link #BULKHEAD_MAX_SPONGES} placements so a real ocean can't turn one dig into an
-     * unbounded run of synchronous absorption BFS calls in a single tick.
+     * the actual problem, not merely too few sponges.
+     *
+     * <p>2026-08-18: candidates are now split into two pools — a FLAT RING (same rough
+     * level as the breach) and a small VERTICAL ACCENT pool (noticeably above or below,
+     * see {@link #BULKHEAD_VERTICAL_DY_THRESHOLD}), capped separately at
+     * {@link #BULKHEAD_MAX_VERTICAL_SPONGES} out of the shared
+     * {@link #BULKHEAD_MAX_SPONGES} total — so the dome shape only ever uses REAL water
+     * found above/below, never forced, and never at the flat ring's expense. The
+     * returned order (flat ring furthest-from-breach first, vertical accents last) is
+     * also the wave's placement order — see {@link #beginBulkhead}.
      */
     private List<Block> detectWaterBreach(Block diggedBlock) {
-        List<Block> anchors = new ArrayList<>();
+        List<Block> flatRing = new ArrayList<>();
+        List<Block> verticalAccents = new ArrayList<>();
         Set<String> visited = new HashSet<>();
         Deque<Block> frontier = new ArrayDeque<>();
         for (BlockFace face : ADJACENT_FACES) {
@@ -1021,14 +1108,24 @@ public final class ClearJobTask {
             }
         }
         int explored = 0;
-        while (!frontier.isEmpty() && explored < BULKHEAD_WATER_EXPLORE_CELLS && anchors.size() < BULKHEAD_MAX_SPONGES) {
+        while (!frontier.isEmpty() && explored < BULKHEAD_WATER_EXPLORE_CELLS
+                && flatRing.size() + verticalAccents.size() < BULKHEAD_MAX_SPONGES) {
             Block current = frontier.poll();
             if (!visited.add(JobStorage.encodeBlock(current))) {
                 continue;
             }
             explored++;
-            if (isFarEnoughFromAnchors(current, anchors)) {
-                anchors.add(current);
+            if (isFarEnoughFromAnchors(current, flatRing) && isFarEnoughFromAnchors(current, verticalAccents)) {
+                int dy = Math.abs(current.getY() - diggedBlock.getY());
+                if (dy >= BULKHEAD_VERTICAL_DY_THRESHOLD) {
+                    if (verticalAccents.size() < BULKHEAD_MAX_VERTICAL_SPONGES) {
+                        verticalAccents.add(current);
+                    }
+                    // Vertical quota already full — not flat either, so skip rather than
+                    // demote it into the flat ring; keep exploring past it.
+                } else {
+                    flatRing.add(current);
+                }
             }
             for (BlockFace face : ADJACENT_FACES) {
                 Block neighbor = current.getRelative(face);
@@ -1037,20 +1134,30 @@ public final class ClearJobTask {
                 }
             }
         }
-        return anchors;
+        Comparator<Block> byDistanceFromBreachDescending =
+                Comparator.<Block>comparingInt(anchor -> squaredDistance(anchor, diggedBlock)).reversed();
+        flatRing.sort(byDistanceFromBreachDescending);
+        verticalAccents.sort(byDistanceFromBreachDescending);
+        List<Block> ordered = new ArrayList<>(flatRing);
+        ordered.addAll(verticalAccents);
+        return ordered;
     }
 
     private static boolean isFarEnoughFromAnchors(Block candidate, List<Block> anchors) {
         int minDistanceSquared = BULKHEAD_SPONGE_SPACING_BLOCKS * BULKHEAD_SPONGE_SPACING_BLOCKS;
         for (Block anchor : anchors) {
-            int dx = candidate.getX() - anchor.getX();
-            int dy = candidate.getY() - anchor.getY();
-            int dz = candidate.getZ() - anchor.getZ();
-            if (dx * dx + dy * dy + dz * dz < minDistanceSquared) {
+            if (squaredDistance(candidate, anchor) < minDistanceSquared) {
                 return false;
             }
         }
         return true;
+    }
+
+    private static int squaredDistance(Block a, Block b) {
+        int dx = a.getX() - b.getX();
+        int dy = a.getY() - b.getY();
+        int dz = a.getZ() - b.getZ();
+        return dx * dx + dy * dy + dz * dz;
     }
 
     /**
@@ -1106,52 +1213,88 @@ public final class ClearJobTask {
     }
 
     /**
-     * Sponges for water (free-placed, vanilla's own engine absorbs the surrounding
-     * connected water and flips the block to {@code WET_SPONGE} — confirmed synchronous
-     * on placement, triggered by the same plain {@code setType(Material)} call already
-     * used everywhere else in this file, no special handling needed), cobblestone for
-     * lava (same convention as {@link JobStorage}'s free chest placement). Both plug
-     * types get cleared back to air identically later in {@link #tickBulkhead()} — the
-     * cleanup doesn't care which material is sitting there.
+     * Lava gets plugged instantly (cobblestone, same convention as {@link JobStorage}'s
+     * free chest placement) — it's an urgent stop-the-bleeding mechanic, not a decorative
+     * one, so no reason to delay it. Water anchors are queued for
+     * {@link #tickBulkhead()}'s wave rollout instead of placed here directly (2026-08-18,
+     * "back to front wave kind animation" — Kyle's own framing): each still becomes a
+     * real {@link Material#SPONGE} via the same plain {@code setType(Material)} call as
+     * before once its turn comes, vanilla's own engine still does the actual absorbing,
+     * unchanged. Both plug types get cleared back to air identically later — the cleanup
+     * doesn't care which material is sitting there.
      */
     private void beginBulkhead(List<Block> waterBreach, List<Block> lavaBreach) {
         npc.getNavigator().cancelNavigation();
         pendingBlock = null;
-        for (Block source : waterBreach) {
-            source.setType(Material.SPONGE);
-            bulkheadPlugs.add(source);
-        }
         for (Block source : lavaBreach) {
             source.setType(BULKHEAD_PLUG_MATERIAL);
             bulkheadPlugs.add(source);
         }
-        bulkheadTicks = BULKHEAD_SETTLE_TICKS;
+        bulkheadWaveAnchors.clear();
+        bulkheadWaveAnchors.addAll(waterBreach);
+        bulkheadWaveIndex = 0;
+        bulkheadWaveStepTicks = BULKHEAD_WAVE_TICKS_PER_STEP;
+        // A don't-care placeholder when there's a wave to run — tickBulkhead() seeds the
+        // real settle countdown itself once the last sponge actually lands, so the settle
+        // window doesn't burn away while the wave is still rolling out. For a lava-only
+        // breach (no water queued), tickBulkhead()'s wave branch never runs, so this is
+        // the only place that seeds it — matches the old always-instant behavior exactly.
+        bulkheadTicks = bulkheadWaveAnchors.isEmpty() ? BULKHEAD_SETTLE_TICKS : 0;
         phase = Phase.BULKHEAD;
-        // One summary line, not one per plugged block — a real pond/lake can be dozens of
-        // source blocks in a single fill, and this fires once per genuinely separate
-        // flooding encounter now (not once per exposed block), so it isn't the spam it
-        // would have been under the old one-source-at-a-time detection.
-        logger.info("[groundworker] Bulkhead: placed " + waterBreach.size() + " sponge(s) and plugged "
-                + lavaBreach.size() + " lava source(s) for " + BuilderNpcService.baseNameOf(npc)
+        logger.info("[groundworker] Bulkhead: breach detected, " + waterBreach.size() + " sponge(s) queued and "
+                + lavaBreach.size() + " lava source(s) plugged for " + BuilderNpcService.baseNameOf(npc)
                 + (lavaBreach.size() >= BULKHEAD_MAX_PLUGS ? " (lava fill hit the cap — partial seal of a larger body)" : ""));
-        messagePlayer(Component.text(
-                BuilderNpcService.baseNameOf(npc) + ": Breach handled — waiting for it to settle.",
-                NamedTextColor.AQUA));
+        // No chat line here on purpose (2026-08-18) — a shoreline dig can trigger a breach
+        // every few seconds, and the sponge wave itself (particles + sound + the dome
+        // shape appearing) already tells the player what's happening without also
+        // spamming chat once per cycle.
     }
 
-    /** Counts down the settle timer, then clears every plug and resumes clearing. */
+    /**
+     * While a water wave is still queued, places its next anchor every
+     * {@link #BULKHEAD_WAVE_TICKS_PER_STEP} ticks — piggybacks on this task's own
+     * existing per-tick loop ({@link #tick()}) rather than a separate scheduler, the same
+     * way {@link #outlineTicks} already paces itself. Once the wave is exhausted (or
+     * there never was one), falls through to counting down the settle timer, then clears
+     * every plug and resumes clearing.
+     */
     private void tickBulkhead() {
+        if (bulkheadWaveIndex < bulkheadWaveAnchors.size()) {
+            bulkheadWaveStepTicks--;
+            if (bulkheadWaveStepTicks > 0) {
+                return;
+            }
+            Block anchor = bulkheadWaveAnchors.get(bulkheadWaveIndex);
+            anchor.setType(Material.SPONGE);
+            bulkheadPlugs.add(anchor);
+            world.spawnParticle(Particle.SPLASH, anchor.getLocation().add(0.5, 0.5, 0.5),
+                    12, 0.3, 0.3, 0.3, 0.05);
+            world.playSound(anchor.getLocation(), Sound.BLOCK_SPONGE_PLACE, 1.0f, 1.0f);
+            bulkheadWaveIndex++;
+            // One line per placement (not a single batch summary) — logged in placement
+            // order, immediately adjacent to that sponge's own SpongeAbsorbEvent line in
+            // SpongeAbsorptionDiagnosticListener, so the still-open weaker-Helper-sponge
+            // investigation can still correlate each sponge to its actual absorbed count
+            // even though placement is now spread over ~2 seconds instead of one tick.
+            logger.info("[groundworker] Bulkhead: sponge " + bulkheadWaveIndex + "/" + bulkheadWaveAnchors.size()
+                    + " placed at " + anchor.getX() + "," + anchor.getY() + "," + anchor.getZ()
+                    + " for " + BuilderNpcService.baseNameOf(npc));
+            bulkheadWaveStepTicks = BULKHEAD_WAVE_TICKS_PER_STEP;
+            if (bulkheadWaveIndex == bulkheadWaveAnchors.size()) {
+                bulkheadTicks = BULKHEAD_SETTLE_TICKS;
+            }
+            return;
+        }
         bulkheadTicks--;
         if (bulkheadTicks > 0) {
             return;
         }
-        for (Block plug : bulkheadPlugs) {
-            plug.setType(Material.AIR);
-        }
+        clearBulkheadPlugs();
         logger.info("[groundworker] Bulkhead: unplugged, resuming for " + BuilderNpcService.baseNameOf(npc));
-        bulkheadPlugs.clear();
-        messagePlayer(Component.text(
-                BuilderNpcService.baseNameOf(npc) + ": Dry again — back to work.", NamedTextColor.AQUA));
+        bulkheadWaveAnchors.clear();
+        bulkheadWaveIndex = 0;
+        // No chat line here either, for the same reason as beginBulkhead() — the sponges
+        // visibly vanishing and digging resuming already says "back to work" on its own.
         phase = Phase.SEEKING;
         hesitationTicks = HelperTempo.hesitationTicksFor(levelService.levelOf(npc));
         if (storage != null && carriedTotal >= CARRY_CAPACITY) {
@@ -1164,7 +1307,7 @@ public final class ClearJobTask {
         if (storage == null) {
             return;
         }
-        for (ItemStack drop : block.getDrops(new ItemStack(tool))) {
+        for (ItemStack drop : block.getDrops(new ItemStack(currentTool))) {
             int amount = drop.getAmount() * TEST_DROP_MULTIPLIER;
             // Specialization bonus-drop skill: a matching-specialty Helper occasionally
             // pulls one extra unit. Rolled on the plain drop, same material either way —
@@ -1299,12 +1442,15 @@ public final class ClearJobTask {
      * Dirt), never the job's dispatched {@link #target} verbatim — {@link Target#ANY_EARTH}
      * matches both, so two touches of the SAME block position under two differently-
      * dispatched jobs (one Stone/Dirt-targeted, one Anything-targeted) would otherwise
-     * fingerprint as different materials and silently dodge Redundancy Decay. Safe to
-     * assume exactly one of Stone/Dirt matches — {@link #isClearable} already confirmed
-     * {@code target.matches(block.getType())} before this is ever called.
+     * fingerprint as different materials and silently dodge Redundancy Decay. Still a
+     * plain Stone-or-Dirt binary bucket, matching the anti-grind chassis's existing
+     * two-family design — but the Stone side now uses the same broad
+     * {@link Tag#MINEABLE_PICKAXE} check {@link Target#ANY_EARTH} itself matches with
+     * (2026-08-18), not the old plain-Stone-only check, so an ore or a stone variant now
+     * correctly buckets as Stone-family instead of silently defaulting into Dirt.
      */
     private Target canonicalMaterialClass(Block block) {
-        return Target.STONE.matches(block.getType()) ? Target.STONE : Target.DIRT;
+        return Tag.MINEABLE_PICKAXE.isTagged(block.getType()) ? Target.STONE : Target.DIRT;
     }
 
     /**
@@ -1432,6 +1578,7 @@ public final class ClearJobTask {
         }
         npc.getNavigator().cancelNavigation();
         releaseChunkTickets();
+        clearBulkheadPlugs();
         label.remove();
         if (equipment != null) {
             equipment.setItemInMainHand(null);

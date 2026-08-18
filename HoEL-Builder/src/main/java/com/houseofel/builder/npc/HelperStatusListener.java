@@ -1,8 +1,13 @@
 package com.houseofel.builder.npc;
 
+import com.houseofel.builder.choice.MilestoneChoiceOption;
+import com.houseofel.builder.choice.MilestoneChoiceRecord;
+import com.houseofel.builder.choice.MilestoneChoiceRegistry;
+import com.houseofel.builder.choice.MilestoneChoiceStore;
 import com.houseofel.builder.death.DeathRecordStore;
 import com.houseofel.builder.death.ScarChoice;
 import com.houseofel.builder.death.ScarRecord;
+import com.houseofel.builder.toil.LevelCurve;
 import io.papermc.paper.event.player.AsyncChatEvent;
 import net.citizensnpcs.api.npc.NPC;
 import net.kyori.adventure.text.Component;
@@ -16,6 +21,7 @@ import org.bukkit.plugin.Plugin;
 
 import java.util.List;
 import java.util.Locale;
+import java.util.stream.Collectors;
 
 /**
  * "&lt;Helper's name&gt; report" reads back its level, specialization, and banked Toil —
@@ -34,13 +40,15 @@ public final class HelperStatusListener implements Listener {
     private final BuilderNpcService npcService;
     private final HelperLevelService levelService;
     private final DeathRecordStore deathRecordStore;
+    private final MilestoneChoiceStore choiceStore;
 
     public HelperStatusListener(Plugin plugin, BuilderNpcService npcService, HelperLevelService levelService,
-                                 DeathRecordStore deathRecordStore) {
+                                 DeathRecordStore deathRecordStore, MilestoneChoiceStore choiceStore) {
         this.plugin = plugin;
         this.npcService = npcService;
         this.levelService = levelService;
         this.deathRecordStore = deathRecordStore;
+        this.choiceStore = choiceStore;
     }
 
     @EventHandler
@@ -98,6 +106,27 @@ public final class HelperStatusListener implements Listener {
                 player.sendMessage(Component.text(
                         "Handles flooding — sponges up a water breach or plugs a lava one, waits it out, then keeps clearing.",
                         NamedTextColor.GRAY));
+            }
+            // Any reached Choice-slot level: either the pending offer (not yet decided —
+            // matches the picker's own "right-click to choose" framing) or the current
+            // pick, same discoverability pattern as the two blocks above.
+            for (int choiceLevel = 1; choiceLevel <= level; choiceLevel++) {
+                if (!LevelCurve.isChoiceLevel(choiceLevel)) {
+                    continue;
+                }
+                List<MilestoneChoiceOption> options = MilestoneChoiceRegistry.optionsFor(specialization, choiceLevel);
+                if (options.isEmpty()) {
+                    continue;
+                }
+                MilestoneChoiceRecord record = choiceStore.find(npc.getUniqueId(), choiceLevel);
+                if (record == null) {
+                    String names = options.stream().map(MilestoneChoiceOption::label).collect(Collectors.joining(" or "));
+                    player.sendMessage(Component.text(
+                            "Ready to choose a path — " + names + ". Right-click to decide.", NamedTextColor.GRAY));
+                } else {
+                    player.sendMessage(Component.text(
+                            "Chosen path: " + record.choice() + ".", NamedTextColor.GRAY));
+                }
             }
         });
     }

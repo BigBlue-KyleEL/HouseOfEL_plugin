@@ -34,7 +34,6 @@ final class JobStateStore {
         yaml.set("minZ", state.minZ);
         yaml.set("maxZ", state.maxZ);
         yaml.set("target", state.target);
-        yaml.set("tool", state.tool);
         yaml.set("surfaceOnly", state.surfaceOnly);
         yaml.set("storeInChest", state.storeInChest);
         yaml.set("processedCells", state.processedCells);
@@ -99,7 +98,6 @@ final class JobStateStore {
             state.minZ = yaml.getInt("minZ");
             state.maxZ = yaml.getInt("maxZ");
             state.target = yaml.getString("target");
-            state.tool = yaml.getString("tool");
             state.surfaceOnly = yaml.getBoolean("surfaceOnly");
             state.storeInChest = yaml.getBoolean("storeInChest");
             state.processedCells = yaml.getLong("processedCells");

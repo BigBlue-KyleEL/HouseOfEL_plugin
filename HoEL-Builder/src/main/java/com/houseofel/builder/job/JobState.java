@@ -24,7 +24,6 @@ final class JobState {
     int minZ;
     int maxZ;
     String target;
-    String tool;
     boolean surfaceOnly;
     boolean storeInChest;
 

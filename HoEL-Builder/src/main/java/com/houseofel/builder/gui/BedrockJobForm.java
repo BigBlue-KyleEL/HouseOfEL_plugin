@@ -1,7 +1,7 @@
 package com.houseofel.builder.gui;
 
+import com.houseofel.builder.choice.MilestoneChoiceStore;
 import com.houseofel.builder.death.DeathRecordStore;
-import com.houseofel.builder.death.ScarChoice;
 import com.houseofel.builder.npc.BuilderNpcService;
 import com.houseofel.builder.npc.Specialization;
 import com.houseofel.builder.region.RegionSelectionService;
@@ -30,11 +30,14 @@ public final class BedrockJobForm {
     private final Plugin plugin;
     private final RegionSelectionService regionService;
     private final DeathRecordStore deathRecordStore;
+    private final MilestoneChoiceStore choiceStore;
 
-    public BedrockJobForm(Plugin plugin, RegionSelectionService regionService, DeathRecordStore deathRecordStore) {
+    public BedrockJobForm(Plugin plugin, RegionSelectionService regionService, DeathRecordStore deathRecordStore,
+                           MilestoneChoiceStore choiceStore) {
         this.plugin = plugin;
         this.regionService = regionService;
         this.deathRecordStore = deathRecordStore;
+        this.choiceStore = choiceStore;
     }
 
     public static boolean isBedrockPlayer(Player player) {
@@ -47,14 +50,9 @@ public final class BedrockJobForm {
             return;
         }
 
-        String name = BuilderNpcService.baseNameOf(npc);
-        String title = specialization == null ? name : name + " — " + specialization.label();
-        // Scar-choice tag (Kyle's request, 2026-08-14) — same as JavaJobDialog's title and
-        // "<Name> report", the other two places he asked for an on-demand indicator.
-        ScarChoice choice = deathRecordStore.scarChoiceOf(npc.getUniqueId());
-        if (choice != null) {
-            title = title + " [" + choice.name() + "]";
-        }
+        // Bracket tags (scar choice, Choice-slot picks) are built by the shared
+        // HelperTitleFormatter — see it for why this isn't inlined here.
+        String title = HelperTitleFormatter.dispatchTitleOf(npc, specialization, deathRecordStore, choiceStore);
         String flavor = FlavorLadder.flavorFor(specialization, level);
 
         CustomForm.Builder form = CustomForm.builder().title(title);

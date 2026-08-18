@@ -1,7 +1,7 @@
 package com.houseofel.builder.gui;
 
+import com.houseofel.builder.choice.MilestoneChoiceStore;
 import com.houseofel.builder.death.DeathRecordStore;
-import com.houseofel.builder.death.ScarChoice;
 import com.houseofel.builder.npc.BuilderNpcService;
 import com.houseofel.builder.npc.Specialization;
 import com.houseofel.builder.region.RegionSelectionService;
@@ -40,11 +40,14 @@ public final class JavaJobDialog {
     private final Plugin plugin;
     private final RegionSelectionService regionService;
     private final DeathRecordStore deathRecordStore;
+    private final MilestoneChoiceStore choiceStore;
 
-    public JavaJobDialog(Plugin plugin, RegionSelectionService regionService, DeathRecordStore deathRecordStore) {
+    public JavaJobDialog(Plugin plugin, RegionSelectionService regionService, DeathRecordStore deathRecordStore,
+                          MilestoneChoiceStore choiceStore) {
         this.plugin = plugin;
         this.regionService = regionService;
         this.deathRecordStore = deathRecordStore;
+        this.choiceStore = choiceStore;
     }
 
     public void open(Player player, NPC npc, Specialization specialization, int level) {
@@ -98,16 +101,12 @@ public final class JavaJobDialog {
     }
 
     /**
-     * "<Name> — <Specialization> [WARY]", or just "<Name>" for a pre-1-F NPC with no
-     * assignment. The scar-choice tag (Kyle's request, 2026-08-14 — there was previously
-     * no on-demand way to see which choice a Helper made) is appended here since this
-     * dialog is the other place he asked for it, alongside {@code "<Name> report"}.
+     * "<Name> — <Specialization> [WARY] [QUARRYMAN]", or just "<Name>" for a pre-1-F NPC
+     * with no assignment. Bracket tags (scar choice, Choice-slot picks) are built by the
+     * shared {@link HelperTitleFormatter} — see it for why this isn't inlined here.
      */
     private String entryTitle(NPC npc, Specialization specialization) {
-        String name = BuilderNpcService.baseNameOf(npc);
-        String title = specialization == null ? name : name + " — " + specialization.label();
-        ScarChoice choice = deathRecordStore.scarChoiceOf(npc.getUniqueId());
-        return choice == null ? title : title + " [" + choice.name() + "]";
+        return HelperTitleFormatter.dispatchTitleOf(npc, specialization, deathRecordStore, choiceStore);
     }
 
     private void showTargetStep(Player player, NPC npc, TaskType taskType, Specialization specialization, int level) {
