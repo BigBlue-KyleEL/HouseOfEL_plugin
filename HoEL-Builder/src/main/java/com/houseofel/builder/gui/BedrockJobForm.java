@@ -54,17 +54,24 @@ public final class BedrockJobForm {
         // HelperTitleFormatter — see it for why this isn't inlined here.
         String title = HelperTitleFormatter.dispatchTitleOf(npc, specialization, deathRecordStore, choiceStore);
         String flavor = FlavorLadder.flavorFor(specialization, level);
+        // Same shared line the report command and JavaJobDialog use — see rustLineFor.
+        // Replaces the always-on world-space boss bar removed 2026-08-19 (Kyle's call).
+        String rustLine = HelperTitleFormatter.rustLineFor(npc, deathRecordStore);
 
         CustomForm.Builder form = CustomForm.builder().title(title);
-        // Absent for an unassigned or still-green Helper — no empty label in that case.
-        // A label OCCUPIES a response slot (it comes back as null), so its presence
-        // shifts every following component's index — hence answerOffset below. Verified
-        // against Cumulus' own response implementation; getDropdown/getToggle index
-        // absolutely and do not skip labels.
+        // Absent for an unassigned/still-green Helper (flavor) or a non-rusted one (rust
+        // line) — no empty label in either case. A label OCCUPIES a response slot (it
+        // comes back as null), so its presence shifts every following component's index —
+        // hence answerOffset below. Verified against Cumulus' own response implementation;
+        // getDropdown/getToggle index absolutely and do not skip labels.
         int answerOffset = 0;
         if (flavor != null) {
             form.label(flavor);
-            answerOffset = 1;
+            answerOffset++;
+        }
+        if (rustLine != null) {
+            form.label(rustLine);
+            answerOffset++;
         }
         int offset = answerOffset;
         // Task Type and Target are both dropdowns on this ONE form, submitted together —

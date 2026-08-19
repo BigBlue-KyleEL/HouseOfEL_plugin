@@ -199,24 +199,6 @@ public final class DeathRecordStore {
         }
     }
 
-    /** Every currently-rusted Helper — {@code RustBossBar}'s sweep input. */
-    public List<RustState> allRusted() {
-        String sql = "SELECT npc_uuid, toil_remaining, death_world, death_x, death_y, death_z, started_at "
-                + "FROM helper_rust";
-        List<RustState> rusted = new ArrayList<>();
-        try (PreparedStatement statement = connection.prepareStatement(sql);
-             ResultSet rs = statement.executeQuery()) {
-            while (rs.next()) {
-                rusted.add(new RustState(UUID.fromString(rs.getString("npc_uuid")), rs.getInt("toil_remaining"),
-                        rs.getString("death_world"), rs.getInt("death_x"), rs.getInt("death_y"),
-                        rs.getInt("death_z"), rs.getLong("started_at")));
-            }
-        } catch (SQLException e) {
-            logger.warning("Couldn't read rusted Helpers: " + e.getMessage());
-        }
-        return rusted;
-    }
-
     public void clearRust(UUID npcUuid) {
         String sql = "DELETE FROM helper_rust WHERE npc_uuid = ?";
         try (PreparedStatement statement = connection.prepareStatement(sql)) {

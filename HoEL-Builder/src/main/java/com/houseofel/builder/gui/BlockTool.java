@@ -27,7 +27,13 @@ public final class BlockTool {
 
     public static Material bestToolFor(Material blockType) {
         if (Tag.MINEABLE_PICKAXE.isTagged(blockType) || Target.isInfested(blockType)) {
-            return Material.IRON_PICKAXE;
+            // Iron satisfies every pickaxe-mineable block's drop-tier requirement except
+            // a small top-tier handful (Netherite Block, Ancient Debris, Obsidian, Crying
+            // Obsidian, Respawn Anchor) — confirmed live 2026-08-19: Horace cleared a
+            // Netherite Block with an Iron Pickaxe and it dropped nothing, Minecraft's own
+            // requiresCorrectToolForDrops gate silently eating it, same bug family as the
+            // zero-cobblestone fix above but for tool TIER rather than tool TYPE.
+            return Tag.NEEDS_DIAMOND_TOOL.isTagged(blockType) ? Material.DIAMOND_PICKAXE : Material.IRON_PICKAXE;
         }
         if (Tag.MINEABLE_SHOVEL.isTagged(blockType)) {
             return Material.IRON_SHOVEL;

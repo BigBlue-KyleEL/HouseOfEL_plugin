@@ -14,7 +14,6 @@ import com.houseofel.builder.region.RegionOutline;
 import com.houseofel.builder.timing.HelperTempo;
 import com.houseofel.builder.timing.VanillaTiming;
 import com.houseofel.builder.toil.TicketKind;
-import net.citizensnpcs.api.ai.TeleportStuckAction;
 import net.citizensnpcs.api.npc.NPC;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
@@ -37,6 +36,7 @@ import org.bukkit.entity.Monster;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.Silverfish;
 import org.bukkit.entity.TextDisplay;
+import org.bukkit.event.player.PlayerTeleportEvent;
 import org.bukkit.inventory.EntityEquipment;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
@@ -83,7 +83,20 @@ public final class ClearJobTask {
     private static final float WALK_SPEED_MODIFIER = 1.3f;
     /** Pathfinding range in blocks. Citizens defaults to 25 and caps at 100. */
     private static final float PATHFINDING_RANGE = 100.0f;
-    /** Basic ledge/fall-risk avoidance — how far a path is allowed to drop the NPC in one go. */
+    /**
+     * Basic ledge/fall-risk avoidance — how far a path is allowed to drop the NPC in one
+     * go. Also doubles as the dig-band height {@link #seekNextBlock()} uses (2026-08-18):
+     * a tall region is worked in stacked Y-bands of at most this many layers, each fully
+     * exhausted (through its own full multi-pass retry budget) before the band below it
+     * is ever touched — so the floor immediately under wherever the NPC is currently
+     * digging is never more than this many blocks down, even in the worst case where
+     * every reachable block in the current band ends up cleared. Confirmed live
+     * 2026-08-18 that without this, a tall region's second/third retry pass (mopping up
+     * scattered stragglers the first pass missed) can leave a Helper's own footing as the
+     * literal last block standing in an otherwise fully hollow column — digging it out
+     * dropped Horace clean through the shaft he'd already dug. {@link JobFallProtectionListener}
+     * is a separate, additional safety net on top of this, not a replacement for it.
+     */
     private static final int MAX_TOLERATED_FALL = 3;
     /** Grace period for the navigator to actually start moving before we call it a failed path. */
     private static final int PATH_GRACE_TICKS = 20;
@@ -93,11 +106,26 @@ public final class ClearJobTask {
      */
     private static final double MAX_WORK_DISTANCE = 12.0;
     /**
-     * From this sweep onward the working distance is unbounded. By now the NPC has
-     * genuinely walked at this block twice and failed, so it finishes the job from
-     * wherever it stands rather than leaving stragglers behind.
+     * "GhostDig" (Kyle's own name, from this project's very first pathing pass) — the
+     * original spec: "unbounded [reach] from pass 3, once IT has genuinely tried twice."
+     * Corrected 2026-08-19: the original implementation approximated "tried twice" with
+     * this BAND's shared sweep-pass counter, which works fine when only a few cells are
+     * ever simultaneously stuck, but breaks down hard when many are (a narrow stairway
+     * next to an old pit, live-confirmed) — every stuck cell then has to wait on every
+     * OTHER stuck cell in the same band to also fail twice before any of them gets
+     * unbounded reach, since they all share one counter. Replaced with a genuinely
+     * per-candidate attempt count (see {@link #stuckAttempts}), matching the spec's own
+     * "once IT has tried twice" wording literally instead of approximating it band-wide.
      */
-    private static final int UNLIMITED_REACH_FROM_PASS = 3;
+    private static final int GHOST_DIG_MIN_ATTEMPTS = 3;
+    /**
+     * How long a scaffold climb (see {@link #attemptScaffoldUp}) stays up before it's
+     * cleared away — long enough to dig the block that triggered it plus maybe a couple
+     * more nearby, short enough not to visibly linger for the rest of the job. Kyle's own
+     * follow-up call, 2026-08-19: "make it disappear like sponges and cobblestone" (see
+     * {@link #beginBulkhead}) rather than staying up until the whole job ends.
+     */
+    private static final int SCAFFOLD_LINGER_TICKS = 100;
     /**
      * How much the NPC hauls before walking a load back to the chest. Deliberately a
      * few stacks rather than a full chest's worth — a large capacity means a job of a
@@ -321,12 +349,19 @@ public final class ClearJobTask {
     private long skippedNoPath;
     private long skippedTimeout;
     private int passNumber;
+    /** True once every band has been swept at least once and the final whole-region mop-up pass has started. */
+    private boolean reconciling;
     private Block pendingBlock;
+    /** Flat sweep index of {@link #pendingBlock} — the key {@link #stuckAttempts} tracks failures by. */
+    private long pendingBlockIndex;
+    /** Per-candidate failure count, keyed by sweep index — see GHOST_DIG_MIN_ATTEMPTS. Small and self-bounded (never bigger than the region's own cell count), no explicit cleanup needed. */
+    private final Map<Long, Integer> stuckAttempts = new HashMap<>();
     private int walkTicks;
     private int noProgressTicks;
     private double closestApproachSquared;
     private int digTicks;
     private boolean usedStraightLine;
+    private boolean usedScaffold;
     private boolean jobComplete;
     private boolean paused;
     /** Guards the 50%/85% progress pings so each fires exactly once per job. */
@@ -337,6 +372,8 @@ public final class ClearJobTask {
     private final Set<UUID> alertedMobs = new HashSet<>();
     /** Fluid source blocks currently plugged, awaiting {@link #tickBulkhead()}'s settle timer. */
     private final List<Block> bulkheadPlugs = new ArrayList<>();
+    /** Temporary scaffolding placed by {@link #attemptScaffoldUp}, cleared back to air at job end. */
+    private final List<Block> scaffoldBlocks = new ArrayList<>();
     private int bulkheadTicks;
     /**
      * Water anchors still waiting to land during the wave rollout, in placement order
@@ -590,11 +627,14 @@ public final class ClearJobTask {
         // fallDistance caps how far a path is allowed to drop the NPC in one go — Citizens'
         // NavigatorParameters has no dedicated "avoid lava" flag (checked against the real
         // jar), so lava-adjacency is handled separately via isNearLava() in isClearable().
+        // stuckAction: Citizens' own bundled TeleportStuckAction can teleport onto
+        // unconfirmed-solid ground when it can't find any nearby — see SafeStuckAction's
+        // own doc comment for why that's a real, confirmed hazard on irregular terrain.
         npc.getNavigator().getDefaultParameters()
                 .speedModifier(WALK_SPEED_MODIFIER)
                 .range(PATHFINDING_RANGE)
                 .fallDistance(MAX_TOLERATED_FALL)
-                .stuckAction(TeleportStuckAction.INSTANCE);
+                .stuckAction(SafeStuckAction.INSTANCE);
         paused = false;
         refreshChunkTickets();
         task = Bukkit.getScheduler().runTaskTimer(plugin, this::tick, 0L, 1L);
@@ -625,6 +665,7 @@ public final class ClearJobTask {
         npc.getNavigator().cancelNavigation();
         releaseChunkTickets();
         clearBulkheadPlugs();
+        clearScaffoldBlocks();
         bulkheadWaveAnchors.clear();
         bulkheadWaveIndex = 0;
         label.remove();
@@ -851,9 +892,45 @@ public final class ClearJobTask {
         return Character.toUpperCase(name.charAt(0)) + name.substring(1);
     }
 
+    /**
+     * How many cells make up one dig band — {@link #MAX_TOLERATED_FALL} full Y-layers.
+     * {@link #blockAt(long)} walks the region top layer first, so a contiguous run of
+     * this many layers' worth of cells (starting anywhere aligned to a band boundary) is
+     * exactly one band, top to bottom.
+     */
+    private long cellsPerBand() {
+        return cellsPerLayer() * MAX_TOLERATED_FALL;
+    }
+
+    private long cellsPerLayer() {
+        return (long) spanX * spanZ;
+    }
+
+    /** Start (inclusive) of whichever band {@code processedCells} currently sits in — the whole region once {@link #reconciling}. */
+    private long currentBandStart() {
+        if (reconciling) {
+            return 0;
+        }
+        long cellsPerBand = cellsPerBand();
+        return (processedCells / cellsPerBand) * cellsPerBand;
+    }
+
+    /**
+     * End (exclusive) of whichever band {@code processedCells} currently sits in — the
+     * last band may be shorter, and it's the whole region once {@link #reconciling}.
+     */
+    private long currentBandEnd() {
+        if (reconciling) {
+            return totalCells;
+        }
+        return Math.min(totalCells, currentBandStart() + cellsPerBand());
+    }
+
     /** Scans forward for the next clearable block and starts walking to it. */
     private void seekNextBlock() {
-        long scanLimit = Math.min(processedCells + MAX_CELLS_SCANNED_PER_TICK, totalCells);
+        long bandStart = currentBandStart();
+        long bandEnd = currentBandEnd();
+        long scanLimit = Math.min(processedCells + MAX_CELLS_SCANNED_PER_TICK, bandEnd);
         while (processedCells < scanLimit) {
             Block candidate = blockAt(processedCells);
             processedCells++;
@@ -878,29 +955,65 @@ public final class ClearJobTask {
                     continue;
                 }
                 pendingBlock = candidate;
+                pendingBlockIndex = processedCells - 1;
                 walkTicks = 0;
                 noProgressTicks = 0;
                 closestApproachSquared = Double.MAX_VALUE;
                 usedStraightLine = false;
+                usedScaffold = false;
                 npc.getNavigator().setTarget(candidate.getLocation().add(0.5, 1.0, 0.5));
                 phase = Phase.WALKING;
                 return;
             }
         }
 
-        if (processedCells < totalCells) {
+        if (processedCells < bandEnd) {
             return;
         }
 
         // A block skipped this pass (unreachable, or buried under one that was) can
-        // become clearable once its neighbours go, so sweep again until a pass both
-        // clears nothing and skips nothing. Counting skips matters: a pass that only
-        // skipped would otherwise end the job before the unlimited-reach sweep.
+        // become clearable once its neighbours go, so sweep this BAND again until a pass
+        // both clears nothing and skips nothing. Counting skips matters: a pass that only
+        // skipped would otherwise end the band before the unlimited-reach sweep. Never
+        // rescans a lower band — the whole point of banding is that a band's floor stays
+        // solid ground until the band itself is fully exhausted (see MAX_TOLERATED_FALL).
         if ((clearedThisPass > 0 || skippedThisPass > 0) && passNumber < MAX_PASSES) {
             passNumber++;
             clearedThisPass = 0;
             skippedThisPass = 0;
+            processedCells = bandStart;
+            return;
+        }
+
+        // This band is as done as it'll get. If there's another band below, drop into it
+        // — its own floor (the top of the band after that) is still fully solid, so this
+        // never exposes the NPC to more than MAX_TOLERATED_FALL of open air beneath it.
+        if (bandEnd < totalCells) {
+            processedCells = bandEnd;
+            passNumber = 1;
+            clearedThisPass = 0;
+            skippedThisPass = 0;
+            return;
+        }
+
+        // Every band is done, but a gravity block from outside the dispatched box (or
+        // dislodged by digging near its edge) can resettle into a band that already
+        // closed out and would otherwise never get revisited — confirmed live
+        // 2026-08-19 (painted sand/gravel sitting just above the job's own top edge fell
+        // back into an already-swept cell once that layer was cleared). One final pass
+        // over the WHOLE region, not just the last band, catches exactly that — reusing
+        // the same pass-retry budget above (MAX_PASSES), just scoped to everything
+        // instead of one band. Safe even though this briefly drops the per-band fall
+        // guarantee back to "the whole region": by now almost everything is already air,
+        // so there's little left to dig, and JobFallProtectionListener's blanket
+        // fall-immunity (active for the entire job, this phase included) already covers
+        // whatever residual risk that reintroduces.
+        if (!reconciling) {
+            reconciling = true;
             processedCells = 0;
+            passNumber = 1;
+            clearedThisPass = 0;
+            skippedThisPass = 0;
             return;
         }
 
@@ -941,11 +1054,21 @@ public final class ClearJobTask {
             noProgressTicks++;
         }
 
-        // The pathfinder gave up (or never found a route). Before writing the block
-        // off, try walking straight at it — most "unreachable" blocks on an open
-        // site are perfectly walkable, the A* search just wouldn't commit to them.
+        // The pathfinder gave up (or never found a route). Real A* checks footing at
+        // every step against Citizens' own BlockExaminer chain — but the straight-line
+        // fallback below does NOT (confirmed 2026-08-19 by decompiling Citizens'
+        // StraightLineNavigationStrategy: pure aim-and-walk, zero ledge/pit awareness).
+        // So it's only ever worth the risk as a short last-stretch nudge — already
+        // within MAX_WORK_DISTANCE, same "close enough to just work it" threshold used
+        // below — never as a stand-in for a real route across unknown or irregular
+        // terrain. That's exactly what sent a Helper repeatedly off the edge of a
+        // player-built stairway next to an open pit: A* kept giving up within this
+        // 1-second grace window, and blind straight-line walking from far away kept
+        // aiming it straight through the gap. Skipping instead when too far away loses
+        // nothing — the multi-pass sweep, or the pass-3 force-dig fallback right below,
+        // still gets this block eventually, without ever walking blind.
         if (walkTicks > PATH_GRACE_TICKS && !npc.getNavigator().isNavigating()) {
-            if (!usedStraightLine) {
+            if (!usedStraightLine && distanceSquared <= MAX_WORK_DISTANCE * MAX_WORK_DISTANCE) {
                 usedStraightLine = true;
                 walkTicks = 0;
                 noProgressTicks = 0;
@@ -954,28 +1077,136 @@ public final class ClearJobTask {
                         pendingBlock.getLocation().add(0.5, 1.0, 0.5));
                 return;
             }
+            // Last resort before giving up on this block entirely: if the reason it
+            // can't be reached is mostly a VERTICAL gap, stop trusting Citizens'
+            // pathfinding for that gap and just build a way up instead (see
+            // attemptScaffoldUp — Kyle's own idea, 2026-08-19, after two rounds of
+            // hardening the stuck-response still couldn't fully tame this terrain).
+            if (!usedScaffold && attemptScaffoldUp(pendingBlock)) {
+                usedScaffold = true;
+                walkTicks = 0;
+                noProgressTicks = 0;
+                closestApproachSquared = Double.MAX_VALUE;
+                npc.getNavigator().setTarget(pendingBlock.getLocation().add(0.5, 1.0, 0.5));
+                return;
+            }
+            if (ghostDigIfEarned(distanceSquared)) {
+                return;
+            }
             skippedNoPath++;
             skippedThisPass++;
+            logger.info("[groundworker] " + BuilderNpcService.baseNameOf(npc) + ": gave up reaching "
+                    + pendingBlock.getX() + "," + pendingBlock.getY() + "," + pendingBlock.getZ()
+                    + " — no path found" + (usedStraightLine ? " (straight-line also failed)" : " (too far for a blind nudge)"));
             abandonPendingBlock();
             return;
         }
 
         if (noProgressTicks > NO_PROGRESS_TICKS || walkTicks > WALK_TIMEOUT_TICKS) {
             // It stopped making headway — usually a pit it dug or terrain in the way.
-            // Rather than leave a hole in the job, let it work from where it stands,
-            // and drop the distance cap entirely once it has tried honestly for a
-            // couple of full sweeps.
-            boolean withinWorkingRange = passNumber >= UNLIMITED_REACH_FROM_PASS
-                    || distanceSquared <= MAX_WORK_DISTANCE * MAX_WORK_DISTANCE;
-            if (withinWorkingRange) {
-                npc.getNavigator().cancelNavigation();
-                beginDigging();
+            // Already close enough to just reach out and work it? Do that immediately,
+            // same "GhostDig" fast path as always. Otherwise try building a way up
+            // before resorting to GhostDig's other half — see ghostDigIfEarned and
+            // GHOST_DIG_MIN_ATTEMPTS for why this is no longer gated on the shared
+            // band-wide pass count.
+            if (ghostDigIfEarned(distanceSquared)) {
+                return;
+            }
+            if (!usedScaffold && attemptScaffoldUp(pendingBlock)) {
+                usedScaffold = true;
+                walkTicks = 0;
+                noProgressTicks = 0;
+                closestApproachSquared = Double.MAX_VALUE;
+                npc.getNavigator().setTarget(pendingBlock.getLocation().add(0.5, 1.0, 0.5));
                 return;
             }
             skippedTimeout++;
             skippedThisPass++;
+            logger.info("[groundworker] " + BuilderNpcService.baseNameOf(npc) + ": gave up reaching "
+                    + pendingBlock.getX() + "," + pendingBlock.getY() + "," + pendingBlock.getZ()
+                    + " — timed out, still " + String.format("%.1f", Math.sqrt(distanceSquared)) + " blocks away");
             abandonPendingBlock();
         }
+    }
+
+    /**
+     * Builds a temporary scaffolding column straight up from wherever the Helper is
+     * currently standing, when a block it's trying to reach sits notably above it —
+     * Kyle's own idea, 2026-08-19, after live-confirming that no amount of hardening
+     * Citizens' stuck-recovery (the straight-line-fallback distance gate, then
+     * {@link SafeStuckAction} replacing the teleport-into-air behavior) fully tamed a
+     * narrow player-built stairway next to an old dig pit. Rather than keep chasing
+     * pathfinding edge cases, this sidesteps the problem: stop trying to find a safe
+     * route and just build one. Only fills cells that are actually empty — solid ground
+     * already in the column is left alone, so this can never overwrite un-dug target
+     * material or grief anything outside what's genuinely missing. Free, conjured
+     * placement, same convention as {@link #beginBulkhead}'s cobblestone plugs and
+     * sponges — no {@link JobStorage} withdrawal, since it's temporary and self-clearing.
+     * Cleared automatically after {@link #SCAFFOLD_LINGER_TICKS} (Kyle's own follow-up
+     * call — it was staying up for the whole job, he wanted it gone like a sponge/plug
+     * instead), with {@link #scaffoldBlocks}/{@link #clearScaffoldBlocks} as the job-end
+     * safety net in case the job itself ends first.
+     *
+     * @return true if a column was built and the walk is worth retrying; false if this
+     *         candidate isn't actually a vertical-gap case (the normal give-up path
+     *         should proceed as before).
+     */
+    private boolean attemptScaffoldUp(Block target) {
+        int npcX = npcEntity.getLocation().getBlockX();
+        int npcZ = npcEntity.getLocation().getBlockZ();
+        int startY = npcEntity.getLocation().getBlockY();
+        int targetY = target.getY();
+        if (targetY <= startY) {
+            return false;
+        }
+        List<Block> placed = new ArrayList<>();
+        for (int y = startY; y <= targetY; y++) {
+            Block cell = world.getBlockAt(npcX, y, npcZ);
+            if (!cell.getType().isSolid()) {
+                cell.setType(Material.SCAFFOLDING);
+                placed.add(cell);
+            }
+        }
+        scaffoldBlocks.addAll(placed);
+        npc.teleport(new Location(world, npcX + 0.5, targetY + 1, npcZ + 0.5), PlayerTeleportEvent.TeleportCause.PLUGIN);
+        world.playSound(new Location(world, npcX, targetY, npcZ), Sound.BLOCK_SCAFFOLDING_PLACE, 1.0f, 1.0f);
+        logger.info("[groundworker] " + BuilderNpcService.baseNameOf(npc) + ": scaffolded up to "
+                + npcX + "," + (targetY + 1) + "," + npcZ + " to reach a stuck block.");
+        Bukkit.getScheduler().runTaskLater(plugin, () -> {
+            for (Block scaffold : placed) {
+                if (scaffold.getType() == Material.SCAFFOLDING) {
+                    scaffold.setType(Material.AIR);
+                }
+            }
+            scaffoldBlocks.removeAll(placed);
+        }, SCAFFOLD_LINGER_TICKS);
+        return true;
+    }
+
+    /** Clears any scaffolding this job placed back to air — the job-end safety net for whatever a linger timer hasn't caught yet. */
+    private void clearScaffoldBlocks() {
+        for (Block scaffold : scaffoldBlocks) {
+            scaffold.setType(Material.AIR);
+        }
+        scaffoldBlocks.clear();
+    }
+
+    /**
+     * "GhostDig" — see {@link #GHOST_DIG_MIN_ATTEMPTS}'s own comment for the corrected,
+     * genuinely-per-candidate version of the original spec. Called once walking has
+     * already failed on {@link #pendingBlock} this attempt; digs it from wherever the
+     * Helper stands if it's earned that (close enough, or failed enough times), clearing
+     * its entry from {@link #stuckAttempts} either way it's no longer needed.
+     */
+    private boolean ghostDigIfEarned(double distanceSquared) {
+        boolean earned = distanceSquared <= MAX_WORK_DISTANCE * MAX_WORK_DISTANCE
+                || stuckAttempts.merge(pendingBlockIndex, 1, Integer::sum) >= GHOST_DIG_MIN_ATTEMPTS;
+        if (earned) {
+            npc.getNavigator().cancelNavigation();
+            beginDigging();
+            stuckAttempts.remove(pendingBlockIndex);
+        }
+        return earned;
     }
 
     /**
@@ -1393,6 +1624,7 @@ public final class ClearJobTask {
         }
 
         usedStraightLine = false;
+        usedScaffold = false;
 
         if (jobComplete) {
             finish(BuilderNpcService.baseNameOf(npc) + " finished clearing — " + clearedCells + " " + target.label()
@@ -1579,6 +1811,7 @@ public final class ClearJobTask {
         npc.getNavigator().cancelNavigation();
         releaseChunkTickets();
         clearBulkheadPlugs();
+        clearScaffoldBlocks();
         label.remove();
         if (equipment != null) {
             equipment.setItemInMainHand(null);

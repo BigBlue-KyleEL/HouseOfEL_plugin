@@ -17,6 +17,7 @@ import io.papermc.paper.registry.data.dialog.type.DialogType;
 import net.citizensnpcs.api.npc.NPC;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.event.ClickCallback;
+import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.format.TextDecoration;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
@@ -89,10 +90,20 @@ public final class JavaJobDialog {
         // bar visibly empty. The gap is the least-bad of the three. Absent for an
         // unassigned or still-green Helper, which just gets the header on its own.
         String flavor = FlavorLadder.flavorFor(specialization, level);
+        // Rust line: same shared text the report command uses (see rustLineFor) — absent
+        // entirely while not rusted, matching the flavor line's own convention. Replaces
+        // the always-on world-space boss bar removed 2026-08-19 (Kyle's call).
+        String rustLine = HelperTitleFormatter.rustLineFor(npc, deathRecordStore);
         DialogBase.Builder base = DialogBase.builder(Component.text(entryTitle(npc, specialization)));
+        List<DialogBody> body = new ArrayList<>();
         if (flavor != null) {
-            base.body(List.of(DialogBody.plainMessage(
-                    Component.text(flavor).decorate(TextDecoration.ITALIC))));
+            body.add(DialogBody.plainMessage(Component.text(flavor).decorate(TextDecoration.ITALIC)));
+        }
+        if (rustLine != null) {
+            body.add(DialogBody.plainMessage(Component.text(rustLine, NamedTextColor.GOLD)));
+        }
+        if (!body.isEmpty()) {
+            base.body(body);
         }
 
         player.showDialog(Dialog.create(factory -> factory.empty()

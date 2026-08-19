@@ -7,6 +7,7 @@ import com.houseofel.builder.choice.MilestoneChoiceStore;
 import com.houseofel.builder.death.DeathRecordStore;
 import com.houseofel.builder.death.ScarChoice;
 import com.houseofel.builder.death.ScarRecord;
+import com.houseofel.builder.gui.HelperTitleFormatter;
 import com.houseofel.builder.toil.LevelCurve;
 import io.papermc.paper.event.player.AsyncChatEvent;
 import net.citizensnpcs.api.npc.NPC;
@@ -93,6 +94,13 @@ public final class HelperStatusListener implements Listener {
                     (scars.isEmpty() ? "No scars yet." : "Scars: " + scars.size() + " — " + scarSummary(scars))
                             + scarChoiceSuffix,
                     NamedTextColor.DARK_GRAY));
+
+            // Same shared line the dispatch menu uses — see HelperTitleFormatter.rustLineFor.
+            // Replaces the always-on world-space boss bar removed 2026-08-19 (Kyle's call).
+            String rustLine = HelperTitleFormatter.rustLineFor(npc, deathRecordStore);
+            if (rustLine != null) {
+                player.sendMessage(Component.text(rustLine, NamedTextColor.GOLD));
+            }
 
             // Groundworker's level-3 verb, "Clears Anything" — keeps the capability
             // discoverable on demand, not just as a one-time announcement at level-up.

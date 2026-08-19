@@ -14,7 +14,6 @@ import com.houseofel.builder.death.DeathRecordStore;
 import com.houseofel.builder.death.HelperDeathListener;
 import com.houseofel.builder.death.LedgerExpiryTask;
 import com.houseofel.builder.death.RecruitmentCost;
-import com.houseofel.builder.death.RustBossBar;
 import com.houseofel.builder.death.WorkLedgerBook;
 import com.houseofel.builder.death.WorkLedgerRecoveryListener;
 import com.houseofel.builder.gui.BedrockJobForm;
@@ -22,6 +21,7 @@ import com.houseofel.builder.gui.JavaJobDialog;
 import com.houseofel.builder.gui.MilestoneChoiceDialog;
 import com.houseofel.builder.gui.MilestoneChoiceForm;
 import com.houseofel.builder.job.JobExecutionService;
+import com.houseofel.builder.job.JobFallProtectionListener;
 import com.houseofel.builder.job.JobManager;
 import com.houseofel.builder.job.JobNotificationListener;
 import com.houseofel.builder.job.SpongeAbsorptionDiagnosticListener;
@@ -57,7 +57,6 @@ public final class HoELBuilder extends JavaPlugin {
     private ToilDatabase toilDatabase;
     private HelperLevelService levelService;
     private BukkitTask ledgerExpiryTask;
-    private BukkitTask rustBossBarTask;
 
     @Override
     public void onEnable() {
@@ -110,6 +109,7 @@ public final class HoELBuilder extends JavaPlugin {
         getServer().getPluginManager().registerEvents(new SurveyorListener(rod, regionService), this);
         getServer().getPluginManager().registerEvents(new RegionConfirmListener(this, regionService), this);
         getServer().getPluginManager().registerEvents(new JobNotificationListener(jobManager), this);
+        getServer().getPluginManager().registerEvents(new JobFallProtectionListener(jobManager), this);
         getServer().getPluginManager().registerEvents(
                 new HelperDeathListener(this, npcService, levelService, deathRecordStore, ledgerBook), this);
         getServer().getPluginManager().registerEvents(
@@ -119,7 +119,6 @@ public final class HoELBuilder extends JavaPlugin {
         getServer().getPluginManager().registerEvents(new SpongeAbsorptionDiagnosticListener(this), this);
 
         ledgerExpiryTask = LedgerExpiryTask.start(this, deathRecordStore, levelService);
-        rustBossBarTask = RustBossBar.start(this, deathRecordStore);
 
         jobManager.resumeAllOnEnable();
         // Citizens loads its NPC registry AFTER plugins enable, so this can't run inline
@@ -163,9 +162,6 @@ public final class HoELBuilder extends JavaPlugin {
     public void onDisable() {
         if (ledgerExpiryTask != null) {
             ledgerExpiryTask.cancel();
-        }
-        if (rustBossBarTask != null) {
-            rustBossBarTask.cancel();
         }
         if (jobManager != null) {
             jobManager.saveAllOnDisable();
