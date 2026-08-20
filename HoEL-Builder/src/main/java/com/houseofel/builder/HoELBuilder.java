@@ -89,8 +89,8 @@ public final class HoELBuilder extends JavaPlugin {
         JobExecutionService jobExecutionService = new JobExecutionService(this, jobManager, levelService,
                 deathRecordStore, redundancyTracker, freshLedger);
         RegionSelectionService regionService = new RegionSelectionService(this, rod, jobExecutionService);
-        JavaJobDialog javaDialog = new JavaJobDialog(this, regionService, deathRecordStore, choiceStore);
-        BedrockJobForm bedrockForm = new BedrockJobForm(this, regionService, deathRecordStore, choiceStore);
+        JavaJobDialog javaDialog = new JavaJobDialog(this, regionService, deathRecordStore, choiceStore, levelService);
+        BedrockJobForm bedrockForm = new BedrockJobForm(this, regionService, deathRecordStore, choiceStore, levelService);
         SpecializationDialog specializationDialog = new SpecializationDialog(this, npcService);
         SpecializationForm specializationForm = new SpecializationForm(this, npcService);
         MilestoneChoiceDialog choiceDialog = new MilestoneChoiceDialog(this, choiceStore, choiceService);
@@ -100,8 +100,9 @@ public final class HoELBuilder extends JavaPlugin {
                 new BuilderCommand(specializationDialog, specializationForm, regionService));
         getServer().getPluginManager().registerEvents(
                 new BuilderNpcListener(npcService, levelService, javaDialog, bedrockForm, jobManager,
-                        choiceStore, choiceDialog, choiceForm), this);
-        getServer().getPluginManager().registerEvents(new HelperCommandListener(this, npcService, jobManager), this);
+                        jobExecutionService, choiceStore, choiceDialog, choiceForm), this);
+        getServer().getPluginManager().registerEvents(
+                new HelperCommandListener(this, npcService, jobManager, jobExecutionService), this);
         getServer().getPluginManager().registerEvents(
                 new HelperStatusListener(this, npcService, levelService, deathRecordStore, choiceStore), this);
         getServer().getPluginManager().registerEvents(

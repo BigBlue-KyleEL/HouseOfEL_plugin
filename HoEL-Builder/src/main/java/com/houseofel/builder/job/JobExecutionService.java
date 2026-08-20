@@ -14,12 +14,17 @@ import net.kyori.adventure.text.format.NamedTextColor;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.World;
+import org.bukkit.block.Block;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.TextDisplay;
 import org.bukkit.inventory.EntityEquipment;
 import org.bukkit.plugin.Plugin;
 
+import java.util.Deque;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Logger;
 
 /**
@@ -37,6 +42,13 @@ public final class JobExecutionService {
     private final DeathRecordStore deathRecordStore;
     private final RedundancyTracker redundancyTracker;
     private final FreshLedger freshLedger;
+    /**
+     * Quarryman's own tiny job registry — NOT {@link JobManager}, deliberately (see
+     * {@link QuarrymanJobTask}'s class doc). Just enough to stop a double-dispatch and to
+     * let {@link com.houseofel.builder.npc.HelperCommandListener}'s cancel-by-chat trigger
+     * find a running job that {@code JobManager.find} can't see.
+     */
+    private final Map<Integer, QuarrymanJobTask> activeQuarrymanJobs = new ConcurrentHashMap<>();
 
     public JobExecutionService(Plugin plugin, JobManager jobManager, HelperLevelService levelService,
                                 DeathRecordStore deathRecordStore, RedundancyTracker redundancyTracker,
@@ -136,5 +148,141 @@ public final class JobExecutionService {
                 spanX, spanZ, totalCells, storage, storeInChest, surfaceOnly, outline);
         jobManager.register(task);
         task.start();
+    }
+
+    /**
+     * Quarryman Phase B — the bench-planner walking skeleton. {@code target}/{@code
+     * surfaceOnly} are accepted for signature symmetry with {@link #dispatchClear} but
+     * genuinely unused: Quarryman has no material choice (it digs everything within its
+     * fixed shape, via {@link Target#ANY_EARTH} internally) and always digs regardless of
+     * sky exposure. See {@link QuarrymanJobTask}'s class doc for why this deliberately
+     * doesn't go through {@link JobManager} the way Clear jobs do.
+     */
+    public void dispatchQuarryman(Player player, NPC npc, TaskType taskType, Target target,
+                                   Location pointA, Location pointB, boolean storeInChest,
+                                   boolean surfaceOnly, Integer requestedLevels, Integer requestedTargetY) {
+        Material initialTool = Material.IRON_PICKAXE;
+        Entity npcEntity = npc.getEntity();
+        if (npcEntity == null) {
+            player.sendMessage(Component.text(
+                    BuilderNpcService.baseNameOf(npc) + " isn't spawned right now — can't start the job.", NamedTextColor.RED));
+            return;
+        }
+        if (activeQuarrymanJobs.containsKey(npc.getId())) {
+            player.sendMessage(Component.text(
+                    BuilderNpcService.baseNameOf(npc) + " is already quarrying — wait for that to finish first.", NamedTextColor.RED));
+            return;
+        }
+
+        deathRecordStore.setOwner(npc.getUniqueId(), player.getUniqueId());
+
+        World world = pointA.getWorld();
+
+        int minX = Math.min(pointA.getBlockX(), pointB.getBlockX());
+        int maxX = Math.max(pointA.getBlockX(), pointB.getBlockX());
+        int minZ = Math.min(pointA.getBlockZ(), pointB.getBlockZ());
+        int maxZ = Math.max(pointA.getBlockZ(), pointB.getBlockZ());
+        // The lower of the two marked points' Y is deliberately ignored — depth is now
+        // always an explicit player choice (Level or Coordinates, picked before this area
+        // was even marked), never inferred from the marked volume's own height.
+        int topY = Math.max(pointA.getBlockY(), pointB.getBlockY());
+
+        // Coordinates mode gives a target Y directly; Level mode gives a block count
+        // directly. Both resolve to the same requestedDepth. Kyle's explicit call,
+        // 2026-08-20: the marked footprint's own size is NOT a constraint on depth — any
+        // footprint can reach any depth (see buildDigOrder's own doc for how a footprint
+        // too narrow for a full graduated staircase still digs safely, as a shaft
+        // instead). The one real, physically-necessary check is Coordinates mode's own
+        // target genuinely being below the marked area — "that doesn't make sense",
+        // Kyle's own words — plus not digging below the world's own floor.
+        int requestedDepth;
+        if (requestedTargetY != null) {
+            if (requestedTargetY >= topY) {
+                player.sendMessage(Component.text(BuilderNpcService.baseNameOf(npc)
+                        + ": Y coordinate destination and work area is invalid — " + requestedTargetY
+                        + " isn't below where you marked (top is " + topY + ").", NamedTextColor.RED));
+                return;
+            }
+            requestedDepth = topY - requestedTargetY + 1;
+        } else if (requestedLevels != null) {
+            requestedDepth = requestedLevels;
+        } else {
+            // Defensive only — both the Java wizard and the Bedrock form always resolve
+            // one or the other before a Quarry dispatch ever reaches here.
+            requestedDepth = 1;
+        }
+
+        if (requestedDepth < 1) {
+            player.sendMessage(Component.text(BuilderNpcService.baseNameOf(npc)
+                    + ": Can't dig a negative number of blocks — ask for at least 1.", NamedTextColor.RED));
+            return;
+        }
+        int bottomY = topY - requestedDepth + 1;
+        if (bottomY < world.getMinHeight()) {
+            player.sendMessage(Component.text(BuilderNpcService.baseNameOf(npc)
+                    + ": That goes below the bottom of the world (Y " + world.getMinHeight()
+                    + ") — ask for a shallower depth.", NamedTextColor.RED));
+            return;
+        }
+
+        Deque<Block> digOrder = QuarrymanJobTask.buildDigOrder(world, minX, maxX, minZ, maxZ, topY, requestedDepth);
+
+        TextDisplay label = ClearJobTask.spawnLabel(npcEntity.getLocation());
+        EntityEquipment equipment = ClearJobTask.equipTool(npcEntity, initialTool, BuilderNpcService.baseNameOf(npc), taskType.toolNoun());
+
+        player.sendMessage(Component.text(BuilderNpcService.baseNameOf(npc) + ": Right, I'll step this down as I go "
+                + "— one block deeper each row, " + requestedDepth + " block(s) deep by the far end. "
+                + digOrder.size() + " blocks to check.", NamedTextColor.GREEN));
+        logger.info(player.getName() + " dispatched QUARRY job over " + digOrder.size() + " cells, depth "
+                + requestedDepth);
+
+        JobStorage storage = storeInChest
+                ? new JobStorage(plugin, world, minX, maxX, bottomY, topY, minZ, maxZ)
+                : null;
+
+        if (storage != null) {
+            Location chestAt = storage.depositPoint();
+            if (chestAt == null) {
+                player.sendMessage(Component.text(
+                        "Couldn't find anywhere to place a storage chest — " + BuilderNpcService.baseNameOf(npc)
+                                + " will work without one.", NamedTextColor.RED));
+            } else {
+                String coords = "(" + chestAt.getBlockX() + ", " + chestAt.getBlockY() + ", "
+                        + chestAt.getBlockZ() + ")";
+                player.sendMessage(Component.text("Storage chest placed at " + coords, NamedTextColor.AQUA));
+                logger.info("Storage chest placed at " + coords + " for " + player.getName() + "'s job");
+            }
+        }
+
+        RegionOutline outline = new RegionOutline(world, minX, bottomY, minZ, maxX, topY, maxZ);
+
+        QuarrymanJobTask task = new QuarrymanJobTask(plugin, levelService, player.getUniqueId(), npc, npcEntity,
+                equipment, label, world, initialTool, digOrder, storage, outline,
+                () -> activeQuarrymanJobs.remove(npc.getId()));
+        activeQuarrymanJobs.put(npc.getId(), task);
+        task.start();
+    }
+
+    /** Existence-only check for {@link com.houseofel.builder.npc.HelperCommandListener}'s cancel trigger — safe off the main thread, same reasoning as {@link JobManager#find}. */
+    public boolean hasQuarrymanJob(int npcId) {
+        return activeQuarrymanJobs.containsKey(npcId);
+    }
+
+    /**
+     * Cancels a running Quarry job by chat, mirroring {@link JobManager#cancel}'s
+     * ownership check even though this doesn't go through {@code JobManager} itself.
+     * Must run on the main thread. Returns null if the job already ended in the gap
+     * between the async chat-event check and this running.
+     */
+    public JobManager.Outcome cancelQuarrymanJob(int npcId, UUID requester) {
+        QuarrymanJobTask task = activeQuarrymanJobs.get(npcId);
+        if (task == null) {
+            return null;
+        }
+        if (!task.playerId().equals(requester)) {
+            return JobManager.Outcome.NOT_OWNER;
+        }
+        task.cancelJob();
+        return JobManager.Outcome.OK;
     }
 }

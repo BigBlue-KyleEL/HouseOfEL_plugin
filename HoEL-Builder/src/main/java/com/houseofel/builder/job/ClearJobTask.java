@@ -147,6 +147,10 @@ public final class ClearJobTask {
      * 2026-08-13 once that was confirmed working. Helpers levelled during that window
      * (Bartholomew reached 20) keep their levels — deliberate, since the dev world is
      * reset before go-live anyway.
+     *
+     * <p>Dropped to 8 again briefly, 2026-08-19 — same knob, same reason: Horace set up 1
+     * Toil short of Level 8 to watch the owner-ping fire live, without a full 512-block
+     * dispatch. Confirmed working and restored to 512 the same session.
      */
     private static final int GROUNDWORKER_TICKET_BLOCKS = 512;
     /**
@@ -949,7 +953,7 @@ public final class ClearJobTask {
                 // job still finishes clean, the mistake just costs time. Exactly what a
                 // future "works the face clean without doubling back" verb removes.
                 if (ThreadLocalRandom.current().nextDouble()
-                        < HelperTempo.errorRateFor(levelService.levelOf(npc))) {
+                        < levelService.errorRateOf(npc)) {
                     fumbled++;
                     skippedThisPass++;
                     continue;
@@ -1282,7 +1286,7 @@ public final class ClearJobTask {
 
         abandonPendingBlock();
         // Duty cycle: pause before getting on with the next one. Shrinks with level.
-        hesitationTicks = HelperTempo.hesitationTicksFor(levelService.levelOf(npc));
+        hesitationTicks = HelperTempo.hesitationTicksForDuty(levelService.dutyCycleOf(npc));
 
         if (storage != null && carriedTotal >= CARRY_CAPACITY) {
             startHauling();
@@ -1527,7 +1531,7 @@ public final class ClearJobTask {
         // No chat line here either, for the same reason as beginBulkhead() — the sponges
         // visibly vanishing and digging resuming already says "back to work" on its own.
         phase = Phase.SEEKING;
-        hesitationTicks = HelperTempo.hesitationTicksFor(levelService.levelOf(npc));
+        hesitationTicks = HelperTempo.hesitationTicksForDuty(levelService.dutyCycleOf(npc));
         if (storage != null && carriedTotal >= CARRY_CAPACITY) {
             startHauling();
         }

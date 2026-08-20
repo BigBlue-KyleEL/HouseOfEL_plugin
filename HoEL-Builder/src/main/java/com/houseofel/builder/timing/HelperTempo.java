@@ -73,7 +73,16 @@ public final class HelperTempo {
      * around. "Every point of duty cycle is a specific nameable stupidity being removed."
      */
     public static int hesitationTicksFor(int level) {
-        double duty = dutyCycleFor(level);
+        return hesitationTicksForDuty(dutyCycleFor(level));
+    }
+
+    /**
+     * Same conversion as {@link #hesitationTicksFor}, but from an already-resolved duty
+     * cycle rather than a raw level — the caller's entry point when Rust/WARY have
+     * adjusted duty away from {@link #dutyCycleFor}'s level curve (see
+     * {@code HelperLevelService.dutyCycleOf}).
+     */
+    public static int hesitationTicksForDuty(double duty) {
         return (int) Math.round(NOMINAL_WORK_TICKS * (1.0 - duty) / duty);
     }
 

@@ -7,9 +7,12 @@ import com.houseofel.builder.death.HelperRust;
 import com.houseofel.builder.death.RustState;
 import com.houseofel.builder.death.ScarChoice;
 import com.houseofel.builder.npc.BuilderNpcService;
+import com.houseofel.builder.npc.HelperLevelService;
 import com.houseofel.builder.npc.Specialization;
 import com.houseofel.builder.toil.LevelCurve;
 import net.citizensnpcs.api.npc.NPC;
+import org.bukkit.entity.Damageable;
+import org.bukkit.entity.Entity;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -23,6 +26,8 @@ import java.util.List;
  * copy never happens.
  */
 public final class HelperTitleFormatter {
+
+    private static final int XP_BAR_SEGMENTS = 10;
 
     private HelperTitleFormatter() {
     }
@@ -71,11 +76,65 @@ public final class HelperTitleFormatter {
      * isn't currently rusted, matching the flavor line's own "absent when not applicable"
      * convention.
      */
+    /**
+     * This Helper's current health as a row of hearts — e.g. "❤❤❤❤❤❤❤♡♡♡ 14/20 HP". Real,
+     * live health, not cosmetic: Death Policy made Helpers genuinely damageable
+     * (Citizens#setProtected(false)) — this reads {@link Damageable#getHealth()} directly
+     * off the spawned entity. One heart per 2 HP, rounded to the nearest whole heart —
+     * Minecraft's own half-heart granularity isn't worth a second glyph on a menu line.
+     * Null if the Helper isn't currently spawned (nothing to read health off of).
+     */
+    public static String heartsFor(NPC npc) {
+        Entity entity = npc.getEntity();
+        if (!(entity instanceof Damageable damageable)) {
+            return null;
+        }
+        double health = damageable.getHealth();
+        double maxHealth = damageable.getMaxHealth();
+        int maxHearts = Math.max(1, (int) Math.round(maxHealth / 2.0));
+        int filledHearts = Math.max(0, Math.min(maxHearts, (int) Math.round(health / 2.0)));
+
+        StringBuilder hearts = new StringBuilder();
+        for (int i = 0; i < maxHearts; i++) {
+            hearts.append(i < filledHearts ? '❤' : '♡');
+        }
+        return hearts + " " + Math.round(health) + "/" + Math.round(maxHealth) + " HP";
+    }
+
     public static String rustLineFor(NPC npc, DeathRecordStore deathRecordStore) {
         RustState rust = deathRecordStore.rustFor(npc.getUniqueId());
         if (rust == null) {
             return null;
         }
         return "Rusted — " + rust.toilRemaining() + "/" + HelperRust.TOTAL_RUST_TOIL + " Toil to clear.";
+    }
+
+    /**
+     * Toil progress toward this Helper's next level, as a text bar — e.g.
+     * "██████░░░░ 62/90 Toil to Level 7". Ten segments, matching the level curve's own
+     * round-number philosophy. Null for an unassigned Helper (no specialization yet,
+     * matching the flavor/rust lines' own "absent when not applicable" convention); a flat
+     * "max level" line once level 20 is reached, where there's no next level to bar toward.
+     */
+    public static String xpBarFor(NPC npc, Specialization specialization, HelperLevelService levelService) {
+        if (specialization == null) {
+            return null;
+        }
+        int level = levelService.levelOf(npc);
+        int banked = levelService.bankedToilOf(npc);
+        if (level >= LevelCurve.MAX_LEVEL) {
+            return "Level " + LevelCurve.MAX_LEVEL + " (max) — " + banked + " Toil banked.";
+        }
+        int currentThreshold = LevelCurve.toilThresholdFor(level);
+        int nextThreshold = LevelCurve.toilThresholdFor(level + 1);
+        int intoLevel = banked - currentThreshold;
+        int span = nextThreshold - currentThreshold;
+        int filled = (int) Math.round(XP_BAR_SEGMENTS * (intoLevel / (double) span));
+
+        StringBuilder bar = new StringBuilder();
+        for (int i = 0; i < XP_BAR_SEGMENTS; i++) {
+            bar.append(i < filled ? '█' : '░');
+        }
+        return bar + " " + intoLevel + "/" + span + " Toil to Level " + (level + 1);
     }
 }

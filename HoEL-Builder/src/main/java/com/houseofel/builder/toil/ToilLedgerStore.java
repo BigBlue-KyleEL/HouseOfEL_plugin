@@ -38,10 +38,18 @@ public final class ToilLedgerStore {
         }
     }
 
-    /** Upsert — used both for the initial spawn-time record and every later progress update. */
+    /**
+     * Upsert — used both for the initial spawn-time record and every later progress update.
+     * A true upsert (ON CONFLICT DO UPDATE), not INSERT OR REPLACE — REPLACE deletes and
+     * reinserts the whole row on conflict, which was silently resetting owner_uuid/
+     * scar_choice/toil_spent_on_respec to their defaults on every progress save since this
+     * method never lists those columns.
+     */
     public void save(HelperLedgerRecord record) {
-        String sql = "INSERT OR REPLACE INTO helper_ledger (npc_uuid, specialization, level, banked_toil) "
-                + "VALUES (?, ?, ?, ?)";
+        String sql = "INSERT INTO helper_ledger (npc_uuid, specialization, level, banked_toil) "
+                + "VALUES (?, ?, ?, ?) "
+                + "ON CONFLICT(npc_uuid) DO UPDATE SET "
+                + "specialization = excluded.specialization, level = excluded.level, banked_toil = excluded.banked_toil";
         try (PreparedStatement statement = connection.prepareStatement(sql)) {
             statement.setString(1, record.npcUuid().toString());
             statement.setString(2, record.specialization().name());

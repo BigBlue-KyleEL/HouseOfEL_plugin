@@ -58,6 +58,12 @@ public final class RegionSelectionService {
     /** Called once the job is configured and sent off from the Helper NPC's GUI. */
     public void beginJob(Player player, NPC npc, TaskType taskType, Target target,
                           boolean storeInChest, boolean surfaceOnly) {
+        beginJob(player, npc, taskType, target, storeInChest, surfaceOnly, null, null);
+    }
+
+    /** Quarry-dispatch overload — carries the depth choice made before this area was ever marked. */
+    public void beginJob(Player player, NPC npc, TaskType taskType, Target target, boolean storeInChest,
+                          boolean surfaceOnly, Integer requestedLevels, Integer requestedTargetY) {
         clearJob(player.getUniqueId());
         if (!rod.giveTo(player, BuilderNpcService.baseNameOf(npc))) {
             player.sendMessage(Component.text(
@@ -66,7 +72,7 @@ public final class RegionSelectionService {
             return;
         }
         jobs.put(player.getUniqueId(),
-                new PendingJob(npc, taskType, target, storeInChest, surfaceOnly));
+                new PendingJob(npc, taskType, target, storeInChest, surfaceOnly, requestedLevels, requestedTargetY));
     }
 
     /**
@@ -108,6 +114,15 @@ public final class RegionSelectionService {
             finish(player);
             jobExecutionService.dispatchClear(player, job.npc, job.taskType, job.target,
                     pointA, pointB, job.storeInChest, job.surfaceOnly);
+            return;
+        }
+
+        if (job.taskType == TaskType.QUARRY) {
+            Location pointA = job.pointA;
+            Location pointB = job.pointB;
+            finish(player);
+            jobExecutionService.dispatchQuarryman(player, job.npc, job.taskType, job.target,
+                    pointA, pointB, job.storeInChest, job.surfaceOnly, job.requestedLevels, job.requestedTargetY);
             return;
         }
 
@@ -225,19 +240,24 @@ public final class RegionSelectionService {
         private final Target target;
         private final boolean storeInChest;
         private final boolean surfaceOnly;
+        /** Quarry-only depth choice, made before this area was even marked — see JobExecutionService.dispatchQuarryman for how these resolve. Both null for every other TaskType. */
+        private final Integer requestedLevels;
+        private final Integer requestedTargetY;
         private Location pointA;
         private Location pointB;
         private long lastClickMillis;
         private BukkitTask particleTask;
         private BukkitTask timeoutTask;
 
-        private PendingJob(NPC npc, TaskType taskType, Target target,
-                            boolean storeInChest, boolean surfaceOnly) {
+        private PendingJob(NPC npc, TaskType taskType, Target target, boolean storeInChest, boolean surfaceOnly,
+                            Integer requestedLevels, Integer requestedTargetY) {
             this.npc = npc;
             this.taskType = taskType;
             this.target = target;
             this.storeInChest = storeInChest;
             this.surfaceOnly = surfaceOnly;
+            this.requestedLevels = requestedLevels;
+            this.requestedTargetY = requestedTargetY;
         }
 
         private boolean locked() {

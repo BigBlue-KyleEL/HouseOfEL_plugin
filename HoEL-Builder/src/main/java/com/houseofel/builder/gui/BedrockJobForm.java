@@ -3,6 +3,7 @@ package com.houseofel.builder.gui;
 import com.houseofel.builder.choice.MilestoneChoiceStore;
 import com.houseofel.builder.death.DeathRecordStore;
 import com.houseofel.builder.npc.BuilderNpcService;
+import com.houseofel.builder.npc.HelperLevelService;
 import com.houseofel.builder.npc.Specialization;
 import com.houseofel.builder.region.RegionSelectionService;
 import com.houseofel.builder.title.FlavorLadder;
@@ -31,13 +32,15 @@ public final class BedrockJobForm {
     private final RegionSelectionService regionService;
     private final DeathRecordStore deathRecordStore;
     private final MilestoneChoiceStore choiceStore;
+    private final HelperLevelService levelService;
 
     public BedrockJobForm(Plugin plugin, RegionSelectionService regionService, DeathRecordStore deathRecordStore,
-                           MilestoneChoiceStore choiceStore) {
+                           MilestoneChoiceStore choiceStore, HelperLevelService levelService) {
         this.plugin = plugin;
         this.regionService = regionService;
         this.deathRecordStore = deathRecordStore;
         this.choiceStore = choiceStore;
+        this.levelService = levelService;
     }
 
     public static boolean isBedrockPlayer(Player player) {
@@ -54,19 +57,30 @@ public final class BedrockJobForm {
         // HelperTitleFormatter — see it for why this isn't inlined here.
         String title = HelperTitleFormatter.dispatchTitleOf(npc, specialization, deathRecordStore, choiceStore);
         String flavor = FlavorLadder.flavorFor(specialization, level);
+        String hearts = HelperTitleFormatter.heartsFor(npc);
+        // Same shared line JavaJobDialog uses — see xpBarFor. Absent for an unassigned Helper.
+        String xpBar = HelperTitleFormatter.xpBarFor(npc, specialization, levelService);
         // Same shared line the report command and JavaJobDialog use — see rustLineFor.
         // Replaces the always-on world-space boss bar removed 2026-08-19 (Kyle's call).
         String rustLine = HelperTitleFormatter.rustLineFor(npc, deathRecordStore);
 
         CustomForm.Builder form = CustomForm.builder().title(title);
-        // Absent for an unassigned/still-green Helper (flavor) or a non-rusted one (rust
-        // line) — no empty label in either case. A label OCCUPIES a response slot (it
+        // Absent for an unassigned/still-green Helper (flavor/XP bar) or a non-rusted one
+        // (rust line) — no empty label in either case. A label OCCUPIES a response slot (it
         // comes back as null), so its presence shifts every following component's index —
         // hence answerOffset below. Verified against Cumulus' own response implementation;
         // getDropdown/getToggle index absolutely and do not skip labels.
         int answerOffset = 0;
         if (flavor != null) {
             form.label(flavor);
+            answerOffset++;
+        }
+        if (hearts != null) {
+            form.label(hearts);
+            answerOffset++;
+        }
+        if (xpBar != null) {
+            form.label(xpBar);
             answerOffset++;
         }
         if (rustLine != null) {
@@ -82,11 +96,23 @@ public final class BedrockJobForm {
         // Task Type/Target mismatch (e.g. Wheat on a Groundworker), which already just
         // executes without earning Toil rather than being blocked.
         Target[] availableTargets = targetsFor(specialization, level);
+        // Depth section — Quarrying only, but Cumulus's CustomForm has no conditional/
+        // reactive fields at all (confirmed against the real jar, 2026-08-20: no
+        // "enabled if" hook anywhere, everything submits as one flat atomic batch), and
+        // Task Type itself is just another dropdown on this SAME form, not decided until
+        // submit. So these fields always render regardless of which Task Type ends up
+        // picked, and onSubmit() below only reads/uses them when Task Type resolves to
+        // QUARRY — same trade-off as no true divider existing either (see the "— Depth —"
+        // label immediately below).
         floodgatePlayer.sendForm(
-                form.dropdown("Task Type", labelsOf(TaskType.values()))
+                form.dropdown("Task Type", labelsOf(TaskType.values(), specialization))
                         .dropdown("Target", labelsOf(availableTargets))
                         .toggle("Surface Only", true)
                         .toggle("Store in Chest", true)
+                        .label("— Depth — (Quarrying only)")
+                        .dropdown("Depth Mode", "Level", "Coordinates")
+                        .input("Blocks deep", "e.g. 12")
+                        .input("Target Y coordinate", "e.g. 64")
                         .validResultHandler(response -> onSubmit(player, npc, response, offset, availableTargets))
                         .closedOrInvalidResultHandler(() -> onClosed(player))
                         .build());
@@ -106,6 +132,45 @@ public final class BedrockJobForm {
             }
         }
         return withoutAny;
+    }
+
+    /**
+     * Shown instead of the usual task dropdowns when this Helper is already mid-job — a
+     * read-only status view (flavour/hearts/XP bar/Rust), same content JavaJobDialog's
+     * equivalent shows, since there's nothing to dispatch right now. Kyle's report,
+     * 2026-08-20: right-clicking a busy Helper was still opening the full job form.
+     */
+    public void showStatusOnly(Player player, NPC npc, Specialization specialization, int level) {
+        FloodgatePlayer floodgatePlayer = floodgatePlayer(player);
+        if (floodgatePlayer == null) {
+            return;
+        }
+
+        String title = HelperTitleFormatter.dispatchTitleOf(npc, specialization, deathRecordStore, choiceStore);
+        StringBuilder content = new StringBuilder(BuilderNpcService.baseNameOf(npc) + " is busy working right now.");
+        String flavor = FlavorLadder.flavorFor(specialization, level);
+        String hearts = HelperTitleFormatter.heartsFor(npc);
+        String xpBar = HelperTitleFormatter.xpBarFor(npc, specialization, levelService);
+        String rustLine = HelperTitleFormatter.rustLineFor(npc, deathRecordStore);
+        if (flavor != null) {
+            content.append("\n\n").append(flavor);
+        }
+        if (hearts != null) {
+            content.append("\n").append(hearts);
+        }
+        if (xpBar != null) {
+            content.append("\n").append(xpBar);
+        }
+        if (rustLine != null) {
+            content.append("\n").append(rustLine);
+        }
+
+        floodgatePlayer.sendForm(
+                SimpleForm.builder()
+                        .title(title)
+                        .content(content.toString())
+                        .button("Okay")
+                        .build());
     }
 
     /** Shown instead of the usual flow when the concurrency ceiling is full. */
@@ -140,10 +205,52 @@ public final class BedrockJobForm {
         boolean surfaceOnly = response.getToggle(offset + 2);
         boolean storeInChest = response.getToggle(offset + 3);
 
+        // Depth fields always render (see open()'s comment on why) but only mean anything
+        // once Task Type has actually resolved to QUARRY — reading them for any other
+        // task type would just be acting on values the player had no reason to fill in.
+        Integer requestedLevels = null;
+        Integer requestedTargetY = null;
+        if (taskType == TaskType.QUARRY) {
+            // offset+4 is the "— Depth —" label itself — occupies a slot exactly like the
+            // flavour/hearts/xpBar/rustLine labels above, confirmed against the real
+            // Cumulus response implementation the same way those already were.
+            boolean coordinatesMode = response.getDropdown(offset + 5) == 1;
+            if (coordinatesMode) {
+                requestedTargetY = parseFormInt(player, npc, response.getInput(offset + 7));
+            } else {
+                requestedLevels = parseFormInt(player, npc, response.getInput(offset + 6));
+            }
+            if (requestedLevels == null && requestedTargetY == null) {
+                // parseFormInt already messaged the player about the bad number.
+                return;
+            }
+        }
+
+        Integer finalRequestedLevels = requestedLevels;
+        Integer finalRequestedTargetY = requestedTargetY;
         // The form response arrives off the main thread — beginJob() hands out an item
         // and drives the region-selection flow, both of which need to run on it.
         Bukkit.getScheduler().runTask(plugin, () ->
-                regionService.beginJob(player, npc, taskType, target, storeInChest, surfaceOnly));
+                regionService.beginJob(player, npc, taskType, target, storeInChest, surfaceOnly,
+                        finalRequestedLevels, finalRequestedTargetY));
+    }
+
+    /**
+     * Cumulus's input fields are unvalidated free text (confirmed against the real jar,
+     * 2026-08-20 — no numeric-only mode exists on InputComponent) — parses it, or
+     * messages the player and returns null on anything non-numeric.
+     */
+    private Integer parseFormInt(Player player, NPC npc, String rawText) {
+        if (rawText != null) {
+            try {
+                return Integer.parseInt(rawText.trim());
+            } catch (NumberFormatException ignored) {
+                // Falls through to the message below.
+            }
+        }
+        player.sendMessage(Component.text(
+                BuilderNpcService.baseNameOf(npc) + ": That's not a whole number — try again.", NamedTextColor.RED));
+        return null;
     }
 
     private void onClosed(Player player) {
@@ -151,10 +258,17 @@ public final class BedrockJobForm {
                 player.sendMessage(Component.text("No job configured.", NamedTextColor.RED)));
     }
 
-    private String[] labelsOf(TaskType[] types) {
+    /**
+     * Spec-distinct styling's Bedrock half: {@code CustomForm} dropdown options are plain
+     * text with no color/tooltip lever (see the Custom GUI Pathway reference note), so the
+     * task type matching this Helper's specialization gets a text marker instead of
+     * JavaJobDialog's color+tooltip. Absent entirely for an unassigned Helper.
+     */
+    private String[] labelsOf(TaskType[] types, Specialization specialization) {
         String[] labels = new String[types.length];
         for (int i = 0; i < types.length; i++) {
-            labels[i] = types[i].label();
+            boolean isSpecialty = specialization != null && types[i] == specialization.taskType();
+            labels[i] = isSpecialty ? types[i].label() + " ★ (specialty)" : types[i].label();
         }
         return labels;
     }

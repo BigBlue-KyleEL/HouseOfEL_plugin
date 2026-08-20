@@ -7,7 +7,8 @@ public enum TaskType {
     MINE("Mining", Material.IRON_PICKAXE, "Pickaxe"),
     LUMBERJACK("Lumberjacking", Material.IRON_AXE, "Axe"),
     FARM("Farming", Material.IRON_HOE, "Hoe"),
-    CLEAR("Clearing", Material.IRON_SHOVEL, "Shovel");
+    CLEAR("Clearing", Material.IRON_SHOVEL, "Shovel"),
+    QUARRY("Quarrying", Material.DIAMOND_PICKAXE, "Pickaxe");
 
     private final String label;
     private final Material icon;
