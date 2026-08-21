@@ -1,6 +1,5 @@
 package com.houseofel.builder.npc;
 
-import com.houseofel.builder.job.JobExecutionService;
 import com.houseofel.builder.job.JobManager;
 import com.houseofel.builder.job.JobManager.Outcome;
 import io.papermc.paper.event.player.AsyncChatEvent;
@@ -53,14 +52,11 @@ public final class HelperCommandListener implements Listener {
     private final Plugin plugin;
     private final BuilderNpcService npcService;
     private final JobManager jobManager;
-    private final JobExecutionService jobExecutionService;
 
-    public HelperCommandListener(Plugin plugin, BuilderNpcService npcService, JobManager jobManager,
-                                  JobExecutionService jobExecutionService) {
+    public HelperCommandListener(Plugin plugin, BuilderNpcService npcService, JobManager jobManager) {
         this.plugin = plugin;
         this.npcService = npcService;
         this.jobManager = jobManager;
-        this.jobExecutionService = jobExecutionService;
     }
 
     @EventHandler
@@ -82,18 +78,14 @@ public final class HelperCommandListener implements Listener {
         }
 
         int npcId = npc.getId();
-        // Existence-only checks — safe off the main thread, both registries are
-        // ConcurrentHashMaps. Not a command for this Helper right now, so let the
-        // message through as ordinary chat rather than eating it for nothing.
-        boolean clearJobExists = jobManager.find(npcId) != null;
-        if (!clearJobExists) {
-            // A Quarry job (see JobExecutionService) isn't tracked by JobManager at all
-            // (deliberately — see QuarrymanJobTask's class doc) and doesn't support
-            // pause/resume yet, only cancel. So: no Clear job, and either this isn't a
-            // cancel trigger or there's no Quarry job either — nothing to command.
-            if (cancel == null || !jobExecutionService.hasQuarrymanJob(npcId)) {
-                return;
-            }
+        // Existence-only check — safe off the main thread, JobManager's registry is a
+        // ConcurrentHashMap. Not a command for this Helper right now (nothing running),
+        // so let the message through as ordinary chat rather than eating it for nothing.
+        // Clear and Quarry jobs share this same registry since 2026-08-21, so this one
+        // check now covers both — a "hold"/"wait" said to a Quarry-only Helper used to
+        // silently do nothing; it correctly pauses it now.
+        if (jobManager.find(npcId) == null) {
+            return;
         }
 
         event.setCancelled(true);
@@ -103,12 +95,7 @@ public final class HelperCommandListener implements Listener {
         Bukkit.getScheduler().runTask(plugin, () -> {
             Outcome outcome;
             String response;
-            if (!clearJobExists) {
-                // Must be the Quarry-cancel path — the guard above already ruled out
-                // every other case reaching here.
-                outcome = jobExecutionService.cancelQuarrymanJob(npcId, requester);
-                response = cancel.response();
-            } else if (pause != null) {
+            if (pause != null) {
                 outcome = jobManager.pause(npcId, requester);
                 response = pause.response();
             } else if (resume != null) {

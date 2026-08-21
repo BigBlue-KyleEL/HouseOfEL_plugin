@@ -14,6 +14,9 @@ import java.util.UUID;
  */
 final class JobState {
 
+    /** Which concrete job this belongs to — defaults to CLEAR so every file written before this field existed still loads correctly. */
+    JobType jobType = JobType.CLEAR;
+
     int npcId;
     UUID playerId;
     String worldName;
@@ -26,6 +29,16 @@ final class JobState {
     String target;
     boolean surfaceOnly;
     boolean storeInChest;
+
+    // Quarryman-only dig-order parameters — meaningful only when jobType == QUARRY.
+    // Combined with minX/maxX/minZ/maxZ above, these are the exact inputs
+    // QuarrymanJobTask.buildDigOrder() needs to regenerate an identical dig order
+    // deterministically, so processedCells (below) is all that's needed to fast-forward
+    // it — the queue itself never needs to be serialized.
+    int topY;
+    int requestedDepth;
+    boolean stepsAlongX;
+    int stepDirection;
 
     long processedCells;
     long clearedCells;

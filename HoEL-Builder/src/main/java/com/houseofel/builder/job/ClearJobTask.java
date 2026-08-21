@@ -69,7 +69,7 @@ import java.util.logging.Logger;
  * a job from a saved {@link JobState} and always restarts at the top of a seek, since a
  * stale mid-walk/mid-dig target genuinely isn't safe to trust after time has passed.
  */
-public final class ClearJobTask {
+public final class ClearJobTask implements JobTask {
 
     /**
      * How close the NPC must be to dig a block. Deliberately past the vanilla ~4.5
@@ -593,15 +593,18 @@ public final class ClearJobTask {
         return equipment;
     }
 
-    NPC npc() {
+    @Override
+    public NPC npc() {
         return npc;
     }
 
-    UUID playerId() {
+    @Override
+    public UUID playerId() {
         return playerId;
     }
 
-    boolean isPaused() {
+    @Override
+    public boolean isPaused() {
         return paused;
     }
 
@@ -615,7 +618,8 @@ public final class ClearJobTask {
      * Only meaningful once some real progress has been made; returns {@code Long.MAX_VALUE}
      * before that so a caller can treat "unknown" distinctly from "almost done."
      */
-    long estimatedRemainingMillis() {
+    @Override
+    public long estimatedRemainingMillis() {
         int percent = percentComplete();
         if (percent <= 0) {
             return Long.MAX_VALUE;
@@ -625,7 +629,8 @@ public final class ClearJobTask {
         return Math.max(0, estimatedTotal - elapsed);
     }
 
-    void start() {
+    @Override
+    public void start() {
         // Citizens defaults to a 25-block pathfinding range and simply gives up past it,
         // which strands the NPC on anything across a decent-sized site. 100 is the max.
         // fallDistance caps how far a path is allowed to drop the NPC in one go — Citizens'
@@ -645,7 +650,8 @@ public final class ClearJobTask {
     }
 
     /** Stops ticking but keeps every in-memory field intact, so {@link #resumeTicking()} picks up mid-stride. */
-    void pause() {
+    @Override
+    public void pause() {
         if (task != null) {
             task.cancel();
             task = null;
@@ -655,14 +661,16 @@ public final class ClearJobTask {
         paused = true;
     }
 
-    void resumeTicking() {
+    @Override
+    public void resumeTicking() {
         if (paused) {
             start();
         }
     }
 
     /** Stops the job for good — not a natural completion, so no "finished clearing" summary. */
-    void cancelJob() {
+    @Override
+    public void cancelJob() {
         if (task != null) {
             task.cancel();
         }
@@ -745,8 +753,10 @@ public final class ClearJobTask {
     }
 
     /** Snapshots current progress for persistence — see {@link #resume} for the inverse. */
-    JobState toJobState() {
+    @Override
+    public JobState toJobState() {
         JobState state = new JobState();
+        state.jobType = JobType.CLEAR;
         state.npcId = npc.getId();
         state.playerId = playerId;
         state.worldName = world.getName();

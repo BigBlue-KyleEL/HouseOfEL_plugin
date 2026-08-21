@@ -100,9 +100,9 @@ public final class HoELBuilder extends JavaPlugin {
                 new BuilderCommand(specializationDialog, specializationForm, regionService));
         getServer().getPluginManager().registerEvents(
                 new BuilderNpcListener(npcService, levelService, javaDialog, bedrockForm, jobManager,
-                        jobExecutionService, choiceStore, choiceDialog, choiceForm), this);
+                        choiceStore, choiceDialog, choiceForm), this);
         getServer().getPluginManager().registerEvents(
-                new HelperCommandListener(this, npcService, jobManager, jobExecutionService), this);
+                new HelperCommandListener(this, npcService, jobManager), this);
         getServer().getPluginManager().registerEvents(
                 new HelperStatusListener(this, npcService, levelService, deathRecordStore, choiceStore), this);
         getServer().getPluginManager().registerEvents(
@@ -121,12 +121,19 @@ public final class HoELBuilder extends JavaPlugin {
 
         ledgerExpiryTask = LedgerExpiryTask.start(this, deathRecordStore, levelService);
 
-        jobManager.resumeAllOnEnable();
-        // Citizens loads its NPC registry AFTER plugins enable, so this can't run inline
-        // here — at this point the registry is still empty. CitizensEnableEvent fires
-        // once its NPCs are actually loaded.
+        // Citizens loads its NPC registry AFTER plugins enable, so neither this nor
+        // resumeAllOnEnable() can run inline here — at this point the registry is still
+        // empty. CitizensEnableEvent fires once its NPCs are actually loaded; both wait
+        // for it, combined into one callback so there's only one fire-once listener
+        // instead of two. (Confirmed live 2026-08-21: resumeAllOnEnable() used to be
+        // called inline right here, which meant CitizensAPI.getNPCRegistry().getById(...)
+        // always returned null for every saved job on every boot — resume was silently a
+        // no-op in production the whole time. Do not move this back to an inline call.)
         getServer().getPluginManager().registerEvents(
-                new CitizensReadyListener(() -> refreshHelperTitles(npcService, levelService, titleService)), this);
+                new CitizensReadyListener(() -> {
+                    jobManager.resumeAllOnEnable();
+                    refreshHelperTitles(npcService, levelService, titleService);
+                }), this);
 
         getLogger().info("HoEL-Builder enabled.");
     }

@@ -7,7 +7,6 @@ import com.houseofel.builder.gui.BedrockJobForm;
 import com.houseofel.builder.gui.JavaJobDialog;
 import com.houseofel.builder.gui.MilestoneChoiceDialog;
 import com.houseofel.builder.gui.MilestoneChoiceForm;
-import com.houseofel.builder.job.JobExecutionService;
 import com.houseofel.builder.job.JobManager;
 import com.houseofel.builder.toil.LevelCurve;
 import net.citizensnpcs.api.event.NPCRightClickEvent;
@@ -36,21 +35,19 @@ public final class BuilderNpcListener implements Listener {
     private final JavaJobDialog javaDialog;
     private final BedrockJobForm bedrockForm;
     private final JobManager jobManager;
-    private final JobExecutionService jobExecutionService;
     private final MilestoneChoiceStore choiceStore;
     private final MilestoneChoiceDialog choiceDialog;
     private final MilestoneChoiceForm choiceForm;
 
     public BuilderNpcListener(BuilderNpcService npcService, HelperLevelService levelService,
                                JavaJobDialog javaDialog, BedrockJobForm bedrockForm, JobManager jobManager,
-                               JobExecutionService jobExecutionService, MilestoneChoiceStore choiceStore,
+                               MilestoneChoiceStore choiceStore,
                                MilestoneChoiceDialog choiceDialog, MilestoneChoiceForm choiceForm) {
         this.npcService = npcService;
         this.levelService = levelService;
         this.javaDialog = javaDialog;
         this.bedrockForm = bedrockForm;
         this.jobManager = jobManager;
-        this.jobExecutionService = jobExecutionService;
         this.choiceStore = choiceStore;
         this.choiceDialog = choiceDialog;
         this.choiceForm = choiceForm;
@@ -88,13 +85,12 @@ public final class BuilderNpcListener implements Listener {
             return;
         }
 
-        // This SPECIFIC Helper already working (Clear via JobManager, or Quarry via its
-        // own small registry — see QuarrymanJobTask's class doc for why that's separate)
-        // is a different condition from the server-wide ceiling below: right-clicking a
-        // busy Helper should show its stats, not another set of dispatch buttons that
-        // would just orphan the job already running. Kyle's report, 2026-08-20.
-        boolean thisHelperBusy = jobManager.find(npc.getId()) != null || jobExecutionService.hasQuarrymanJob(npc.getId());
-        if (thisHelperBusy) {
+        // This SPECIFIC Helper already working (Clear or Quarry — both share JobManager's
+        // registry since 2026-08-21) is a different condition from the server-wide
+        // ceiling below: right-clicking a busy Helper should show its stats, not another
+        // set of dispatch buttons that would just orphan the job already running. Kyle's
+        // report, 2026-08-20.
+        if (jobManager.find(npc.getId()) != null) {
             if (isBedrock) {
                 bedrockForm.showStatusOnly(player, npc, specialization, level);
             } else {

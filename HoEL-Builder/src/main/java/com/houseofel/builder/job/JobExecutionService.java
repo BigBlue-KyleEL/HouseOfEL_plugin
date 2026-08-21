@@ -22,9 +22,6 @@ import org.bukkit.inventory.EntityEquipment;
 import org.bukkit.plugin.Plugin;
 
 import java.util.Deque;
-import java.util.Map;
-import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Logger;
 
 /**
@@ -42,13 +39,6 @@ public final class JobExecutionService {
     private final DeathRecordStore deathRecordStore;
     private final RedundancyTracker redundancyTracker;
     private final FreshLedger freshLedger;
-    /**
-     * Quarryman's own tiny job registry — NOT {@link JobManager}, deliberately (see
-     * {@link QuarrymanJobTask}'s class doc). Just enough to stop a double-dispatch and to
-     * let {@link com.houseofel.builder.npc.HelperCommandListener}'s cancel-by-chat trigger
-     * find a running job that {@code JobManager.find} can't see.
-     */
-    private final Map<Integer, QuarrymanJobTask> activeQuarrymanJobs = new ConcurrentHashMap<>();
 
     public JobExecutionService(Plugin plugin, JobManager jobManager, HelperLevelService levelService,
                                 DeathRecordStore deathRecordStore, RedundancyTracker redundancyTracker,
@@ -82,6 +72,15 @@ public final class JobExecutionService {
             String eta = jobManager.etaOfSoonestJob().orElse("a little while");
             player.sendMessage(Component.text(
                     "Every Helper is tied up right now — check back in " + eta + ".", NamedTextColor.RED));
+            return;
+        }
+        // Same belt-and-suspenders reasoning, added 2026-08-21: this NPC-specific check
+        // didn't exist before Quarryman shared JobManager's own registry — a latent
+        // double-dispatch race (this NPC already mid-Quarry-job) that a single shared
+        // find() now makes trivial to close here too.
+        if (jobManager.find(npc.getId()) != null) {
+            player.sendMessage(Component.text(
+                    BuilderNpcService.baseNameOf(npc) + " is already busy — wait for that to finish first.", NamedTextColor.RED));
             return;
         }
 
@@ -151,12 +150,12 @@ public final class JobExecutionService {
     }
 
     /**
-     * Quarryman Phase B — the bench-planner walking skeleton. {@code target}/{@code
-     * surfaceOnly} are accepted for signature symmetry with {@link #dispatchClear} but
-     * genuinely unused: Quarryman has no material choice (it digs everything within its
-     * fixed shape, via {@link Target#ANY_EARTH} internally) and always digs regardless of
-     * sky exposure. See {@link QuarrymanJobTask}'s class doc for why this deliberately
-     * doesn't go through {@link JobManager} the way Clear jobs do.
+     * Quarryman Phase B/C. {@code target}/{@code surfaceOnly} are accepted for signature
+     * symmetry with {@link #dispatchClear} but genuinely unused: Quarryman has no
+     * material choice (it digs everything within its fixed shape, via
+     * {@link Target#ANY_EARTH} internally) and always digs regardless of sky exposure.
+     * Shares {@link JobManager}'s registry/ceiling/persistence with Clear jobs since
+     * 2026-08-21 — see {@link QuarrymanJobTask}'s class doc.
      */
     public void dispatchQuarryman(Player player, NPC npc, TaskType taskType, Target target,
                                    Location pointA, Location pointB, boolean storeInChest,
@@ -168,9 +167,15 @@ public final class JobExecutionService {
                     BuilderNpcService.baseNameOf(npc) + " isn't spawned right now — can't start the job.", NamedTextColor.RED));
             return;
         }
-        if (activeQuarrymanJobs.containsKey(npc.getId())) {
+        if (jobManager.isAtCeiling()) {
+            String eta = jobManager.etaOfSoonestJob().orElse("a little while");
             player.sendMessage(Component.text(
-                    BuilderNpcService.baseNameOf(npc) + " is already quarrying — wait for that to finish first.", NamedTextColor.RED));
+                    "Every Helper is tied up right now — check back in " + eta + ".", NamedTextColor.RED));
+            return;
+        }
+        if (jobManager.find(npc.getId()) != null) {
+            player.sendMessage(Component.text(
+                    BuilderNpcService.baseNameOf(npc) + " is already busy — wait for that to finish first.", NamedTextColor.RED));
             return;
         }
 
@@ -274,33 +279,10 @@ public final class JobExecutionService {
 
         RegionOutline outline = new RegionOutline(world, minX, bottomY, minZ, maxX, topY, maxZ);
 
-        QuarrymanJobTask task = new QuarrymanJobTask(plugin, levelService, player.getUniqueId(), npc, npcEntity,
-                equipment, label, world, initialTool, digOrder, storage, outline,
-                () -> activeQuarrymanJobs.remove(npc.getId()));
-        activeQuarrymanJobs.put(npc.getId(), task);
+        QuarrymanJobTask task = new QuarrymanJobTask(plugin, jobManager, levelService, player.getUniqueId(), npc,
+                npcEntity, equipment, label, world, initialTool, minX, maxX, minZ, maxZ, topY, requestedDepth,
+                stepsAlongX, stepDirection, digOrder, storage, outline);
+        jobManager.register(task);
         task.start();
-    }
-
-    /** Existence-only check for {@link com.houseofel.builder.npc.HelperCommandListener}'s cancel trigger — safe off the main thread, same reasoning as {@link JobManager#find}. */
-    public boolean hasQuarrymanJob(int npcId) {
-        return activeQuarrymanJobs.containsKey(npcId);
-    }
-
-    /**
-     * Cancels a running Quarry job by chat, mirroring {@link JobManager#cancel}'s
-     * ownership check even though this doesn't go through {@code JobManager} itself.
-     * Must run on the main thread. Returns null if the job already ended in the gap
-     * between the async chat-event check and this running.
-     */
-    public JobManager.Outcome cancelQuarrymanJob(int npcId, UUID requester) {
-        QuarrymanJobTask task = activeQuarrymanJobs.get(npcId);
-        if (task == null) {
-            return null;
-        }
-        if (!task.playerId().equals(requester)) {
-            return JobManager.Outcome.NOT_OWNER;
-        }
-        task.cancelJob();
-        return JobManager.Outcome.OK;
     }
 }

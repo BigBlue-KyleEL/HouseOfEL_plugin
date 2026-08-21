@@ -24,30 +24,38 @@ final class JobStateStore {
     void save(JobState state) {
         jobsFolder.mkdirs();
         YamlConfiguration yaml = new YamlConfiguration();
+        yaml.set("jobType", state.jobType.name());
         yaml.set("npcId", state.npcId);
         yaml.set("playerId", state.playerId.toString());
         yaml.set("worldName", state.worldName);
         yaml.set("minX", state.minX);
         yaml.set("maxX", state.maxX);
-        yaml.set("minY", state.minY);
-        yaml.set("maxY", state.maxY);
         yaml.set("minZ", state.minZ);
         yaml.set("maxZ", state.maxZ);
-        yaml.set("target", state.target);
-        yaml.set("surfaceOnly", state.surfaceOnly);
         yaml.set("storeInChest", state.storeInChest);
         yaml.set("processedCells", state.processedCells);
         yaml.set("clearedCells", state.clearedCells);
         yaml.set("deposited", state.deposited);
-        yaml.set("passNumber", state.passNumber);
-        yaml.set("clearedThisPass", state.clearedThisPass);
-        yaml.set("skippedThisPass", state.skippedThisPass);
-        yaml.set("skippedNoPath", state.skippedNoPath);
-        yaml.set("skippedTimeout", state.skippedTimeout);
         for (var entry : state.carried.entrySet()) {
             yaml.set("carried." + entry.getKey(), entry.getValue());
         }
-        yaml.set("bulkheadPlugs", state.bulkheadPlugs);
+        if (state.jobType == JobType.CLEAR) {
+            yaml.set("minY", state.minY);
+            yaml.set("maxY", state.maxY);
+            yaml.set("target", state.target);
+            yaml.set("surfaceOnly", state.surfaceOnly);
+            yaml.set("passNumber", state.passNumber);
+            yaml.set("clearedThisPass", state.clearedThisPass);
+            yaml.set("skippedThisPass", state.skippedThisPass);
+            yaml.set("skippedNoPath", state.skippedNoPath);
+            yaml.set("skippedTimeout", state.skippedTimeout);
+            yaml.set("bulkheadPlugs", state.bulkheadPlugs);
+        } else if (state.jobType == JobType.QUARRY) {
+            yaml.set("topY", state.topY);
+            yaml.set("requestedDepth", state.requestedDepth);
+            yaml.set("stepsAlongX", state.stepsAlongX);
+            yaml.set("stepDirection", state.stepDirection);
+        }
         yaml.set("chests", state.chests);
         yaml.set("occupiedColumns", state.occupiedColumns);
         yaml.set("anchor", state.anchor);
@@ -88,32 +96,45 @@ final class JobStateStore {
         YamlConfiguration yaml = YamlConfiguration.loadConfiguration(file);
         try {
             JobState state = new JobState();
+            // Defaults to CLEAR (JobType's own field default) when the key is missing —
+            // every file written before this field existed has no jobType key at all.
+            String jobTypeName = yaml.getString("jobType");
+            if (jobTypeName != null) {
+                state.jobType = JobType.valueOf(jobTypeName);
+            }
             state.npcId = yaml.getInt("npcId");
             state.playerId = UUID.fromString(yaml.getString("playerId"));
             state.worldName = yaml.getString("worldName");
             state.minX = yaml.getInt("minX");
             state.maxX = yaml.getInt("maxX");
-            state.minY = yaml.getInt("minY");
-            state.maxY = yaml.getInt("maxY");
             state.minZ = yaml.getInt("minZ");
             state.maxZ = yaml.getInt("maxZ");
-            state.target = yaml.getString("target");
-            state.surfaceOnly = yaml.getBoolean("surfaceOnly");
             state.storeInChest = yaml.getBoolean("storeInChest");
             state.processedCells = yaml.getLong("processedCells");
             state.clearedCells = yaml.getLong("clearedCells");
             state.deposited = yaml.getLong("deposited");
-            state.passNumber = yaml.getInt("passNumber", 1);
-            state.clearedThisPass = yaml.getLong("clearedThisPass");
-            state.skippedThisPass = yaml.getLong("skippedThisPass");
-            state.skippedNoPath = yaml.getLong("skippedNoPath");
-            state.skippedTimeout = yaml.getLong("skippedTimeout");
             if (yaml.isConfigurationSection("carried")) {
                 for (String key : yaml.getConfigurationSection("carried").getKeys(false)) {
                     state.carried.put(key, yaml.getInt("carried." + key));
                 }
             }
-            state.bulkheadPlugs = yaml.getStringList("bulkheadPlugs");
+            if (state.jobType == JobType.CLEAR) {
+                state.minY = yaml.getInt("minY");
+                state.maxY = yaml.getInt("maxY");
+                state.target = yaml.getString("target");
+                state.surfaceOnly = yaml.getBoolean("surfaceOnly");
+                state.passNumber = yaml.getInt("passNumber", 1);
+                state.clearedThisPass = yaml.getLong("clearedThisPass");
+                state.skippedThisPass = yaml.getLong("skippedThisPass");
+                state.skippedNoPath = yaml.getLong("skippedNoPath");
+                state.skippedTimeout = yaml.getLong("skippedTimeout");
+                state.bulkheadPlugs = yaml.getStringList("bulkheadPlugs");
+            } else if (state.jobType == JobType.QUARRY) {
+                state.topY = yaml.getInt("topY");
+                state.requestedDepth = yaml.getInt("requestedDepth");
+                state.stepsAlongX = yaml.getBoolean("stepsAlongX");
+                state.stepDirection = yaml.getInt("stepDirection");
+            }
             state.chests = yaml.getStringList("chests");
             state.occupiedColumns = yaml.getStringList("occupiedColumns");
             state.anchor = yaml.getString("anchor");

@@ -50,7 +50,7 @@ public final class JobManager {
     private final HelperLevelService levelService;
     private final RedundancyTracker redundancyTracker;
     private final FreshLedger freshLedger;
-    private final Map<Integer, ClearJobTask> jobs = new ConcurrentHashMap<>();
+    private final Map<Integer, JobTask> jobs = new ConcurrentHashMap<>();
     /**
      * How many jobs currently want each chunk kept loaded. Paper's own chunk-ticket API
      * is keyed by (chunk, plugin), not (chunk, job) — with several jobs able to run at
@@ -85,7 +85,7 @@ public final class JobManager {
         }
     }
 
-    void register(ClearJobTask task) {
+    void register(JobTask task) {
         jobs.put(task.npc().getId(), task);
     }
 
@@ -130,7 +130,7 @@ public final class JobManager {
     public Optional<String> etaOfSoonestJob() {
         return jobs.values().stream()
                 .filter(task -> !task.isPaused())
-                .min(Comparator.comparingLong(ClearJobTask::estimatedRemainingMillis))
+                .min(Comparator.comparingLong(JobTask::estimatedRemainingMillis))
                 .map(task -> formatEta(task.estimatedRemainingMillis()));
     }
 
@@ -148,12 +148,12 @@ public final class JobManager {
         return "about " + minutes + " minutes";
     }
 
-    public ClearJobTask find(int npcId) {
+    public JobTask find(int npcId) {
         return jobs.get(npcId);
     }
 
     public Outcome pause(int npcId, UUID requester) {
-        ClearJobTask task = jobs.get(npcId);
+        JobTask task = jobs.get(npcId);
         if (task == null) {
             return Outcome.ALREADY_IN_THAT_STATE;
         }
@@ -169,7 +169,7 @@ public final class JobManager {
     }
 
     public Outcome resume(int npcId, UUID requester) {
-        ClearJobTask task = jobs.get(npcId);
+        JobTask task = jobs.get(npcId);
         if (task == null) {
             return Outcome.ALREADY_IN_THAT_STATE;
         }
@@ -184,7 +184,7 @@ public final class JobManager {
     }
 
     public Outcome cancel(int npcId, UUID requester) {
-        ClearJobTask task = jobs.get(npcId);
+        JobTask task = jobs.get(npcId);
         if (task == null) {
             return Outcome.ALREADY_IN_THAT_STATE;
         }
@@ -197,7 +197,7 @@ public final class JobManager {
 
     /** Snapshots every tracked job (running or paused) to disk — the restart safety net. */
     public void saveAllOnDisable() {
-        for (ClearJobTask task : jobs.values()) {
+        for (JobTask task : jobs.values()) {
             store.save(task.toJobState());
         }
         logger.info("Saved " + jobs.size() + " in-progress job(s) for resume.");
@@ -207,14 +207,18 @@ public final class JobManager {
      * Resumes every job whose NPC is already spawned at boot. A job whose NPC isn't
      * available yet (chunk not loaded — nobody was nearby) is left on disk untouched;
      * bringing that case back is the offline-job problem, tracked separately as 1-D-3.
+     * A static factory can't be part of {@link JobTask}, so this branches on the
+     * persisted {@link JobType} to call the right concrete one.
      */
     public void resumeAllOnEnable() {
         int resumed = 0;
         int deferred = 0;
         for (JobState state : store.loadAll()) {
             NPC npc = CitizensAPI.getNPCRegistry().getById(state.npcId);
-            ClearJobTask task = npc == null ? null
-                    : ClearJobTask.resume(plugin, this, levelService, redundancyTracker, freshLedger, state, npc);
+            JobTask task = npc == null ? null : switch (state.jobType) {
+                case CLEAR -> ClearJobTask.resume(plugin, this, levelService, redundancyTracker, freshLedger, state, npc);
+                case QUARRY -> QuarrymanJobTask.resume(plugin, this, levelService, state, npc);
+            };
             if (task == null) {
                 deferred++;
                 continue;
