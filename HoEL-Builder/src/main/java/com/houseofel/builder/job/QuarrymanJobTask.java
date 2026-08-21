@@ -18,6 +18,7 @@ import org.bukkit.Particle;
 import org.bukkit.Sound;
 import org.bukkit.World;
 import org.bukkit.block.Block;
+import org.bukkit.block.BlockFace;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
 import org.bukkit.entity.LivingEntity;
@@ -42,8 +43,9 @@ import java.util.logging.Logger;
 
 /**
  * Runs one Quarryman job for one Helper — Phase B, the bench-planner walking skeleton.
- * Digs a small, fixed shape (a genuine one-block-per-row staircase, see
- * {@link #buildDigOrder} — Kyle's own redesign, 2026-08-20, replacing an earlier
+ * Digs a small, fixed shape (a fixed-size footprint that slides one block deeper per
+ * level, along whichever horizontal axis the player's own two marked points call for,
+ * see {@link #buildDigOrder} — Kyle's own redesign, 2026-08-20, replacing an earlier
  * two-fixed-bench-plus-ramp shape that turned out both more complex and less correct)
  * rather than a general player-marked volume, so both the dig order and the fact that
  * every reachable cell really is reachable are known up front — none of
@@ -73,6 +75,23 @@ import java.util.logging.Logger;
  * "stuck" with nothing actually blocking anything. 3 is still more than enough headroom
  * for the dig geometry's own 1-block steps; it just stops being tighter than the terrain
  * the Helper has to cross to ever reach them.
+ *
+ * <p>That per-step guarantee covers the intended path, not real movement physics or
+ * Citizens' own pathing choices. Two distinct failures confirmed live 2026-08-20: walking
+ * fast ({@link #WALK_SPEED_MODIFIER}) across several consecutive 1-block steps in one
+ * continuous walk can carry the Helper past more than one step's edge before gravity
+ * catches up, landing it below grade instead of cleanly stepping down (Kyle: falls while
+ * running, then "jumps up and down beside the stairs" instead of climbing back); separately,
+ * Citizens can also route itself up and completely out of the pit while trying to reach a
+ * cell close by, then never find its own way back down (Kyle: the next block was "right in
+ * front of him" but Horace "would go up the quarry, stay up top"). {@link #walkToPendingCell}
+ * now detects "not closing the distance to pendingCell" itself, in either direction (same
+ * closest-approach/{@code noProgressTicks} idiom {@link ClearJobTask} already uses), and
+ * recovers by teleporting into a confirmed-clear spot near the pending cell (see
+ * {@link #safeLandingAbove}) — safe because every layer above a queued cell that a
+ * shallower layer's own window already reached is already clear by construction, and
+ * {@code safeLandingAbove} searches rather than assumes for the columns where that's not
+ * true (see {@link #buildDigOrder}'s own doc for why those columns exist).
  */
 public final class QuarrymanJobTask {
 
@@ -92,6 +111,16 @@ public final class QuarrymanJobTask {
     private static final int WALK_TIMEOUT_TICKS = 20 * 30;
     /** Grace period before checking whether Citizens ever actually started navigating — see the one-shot retry in {@link #walkToPendingCell}. */
     private static final int RETRY_GRACE_TICKS = 20;
+    /**
+     * How long a walk can go without closing the distance to {@code pendingCell} before
+     * {@link #walkToPendingCell} treats it as genuinely stuck — Citizens unable to find its
+     * own way there, in either direction — rather than an ordinary walk that just takes a
+     * while (e.g. resuming digging after a haul trip). Same tuning as {@code ClearJobTask}'s
+     * own proven {@code NO_PROGRESS_TICKS}.
+     */
+    private static final int STUCK_RECOVERY_NO_PROGRESS_TICKS = 20 * 3;
+    /** Same tuning as {@code ClearJobTask}'s own proven {@code PROGRESS_EPSILON}. */
+    private static final double PROGRESS_EPSILON = 0.05;
     private static final int CARRY_CAPACITY = 4 * 64;
 
     private static final double LABEL_HEIGHT_OFFSET = 2.3;
@@ -132,6 +161,8 @@ public final class QuarrymanJobTask {
     private Block pendingCell;
     private int walkTicks;
     private boolean retriedWalk;
+    private int noProgressTicks;
+    private double closestApproachSquared;
     private int digTicks;
 
     private BukkitTask task;
@@ -165,60 +196,58 @@ public final class QuarrymanJobTask {
     /**
      * Builds the fixed dig order — Kyle's own redesign, 2026-08-20, replacing an earlier
      * two-fixed-bench-plus-ramp shape, then extended the same day to take an explicit
-     * requested depth (Level/Coordinates picker), then generalized once more the same
-     * night so ANY marked footprint can reach ANY requested depth, not just ones long
-     * enough to give every layer its own row.
+     * requested depth (Level/Coordinates picker), then corrected twice more after live
+     * testing: first for the shrinking-footprint shape being wrong (fixed 2026-08-20 —
+     * the footprint is the SAME size at every level, sliding one block per level rather
+     * than shrinking), then for the stepping axis being hardcoded to Z (fixed 2026-08-21
+     * — {@code stepsAlongX} is Kyle's own rule, cross-validated against 8 worked examples
+     * across two differently-shaped marked areas: compare the sign of the click's own X
+     * delta to its own Z delta, not either axis's span. Same sign steps along X; opposite
+     * signs steps along Z — see where {@code JobExecutionService#dispatchQuarryman}
+     * derives {@code stepsAlongX}/{@code stepDirection} for the actual comparison).
      *
-     * <p>Row {@code r} (0-indexed from whichever end of the longer axis is closer to its
-     * own minimum coordinate) gets dug {@code min(axisSpan, requestedDepth) - r} layers
-     * deep, for as many rows as the footprint actually has — so with a footprint at least
-     * as long as the requested depth, this is the original "one row, one step" shape
-     * exactly as before. Once the footprint runs out of rows before reaching the
-     * requested depth, row 0 alone (the deepest row) keeps going, one layer at a time,
-     * for however many layers remain — a narrow shaft rather than a wide staircase from
-     * that point down, dug the exact same way a player safely mines straight down: always
-     * breaking only the block directly below the last one, never more. That's still a
-     * uniform 1-block-drop-per-step everywhere, just concentrated into one row/column
-     * instead of spread across many once there aren't enough rows to spread across —
-     * confirmed live 2026-08-20 that requiring extra rows to exist at all (the previous
-     * version's behavior) was a real, unwanted limitation, not a safety necessity: Kyle's
-     * own words, "regardless if the work area is 2x1x2 and the given Levels to be
-     * quarried is 17, Quarryman should still be able to."
+     * <p>Layer {@code layer} (0-indexed from {@code topY} down) keeps the cross axis
+     * ({@code [minZ, maxZ]} when stepping along X, {@code [minX, maxX]} when stepping
+     * along Z) unchanged, and shifts the stepping axis's own range by
+     * {@code layer * stepDirection} — so layer 0 is exactly the marked box, and every
+     * layer below it is the identical size, just shifted one block further along the
+     * stepping axis. Deliberately uncapped by the marked footprint's own size: Kyle's own
+     * words, "the work area boundary only serves as [the] starting point of the
+     * quarry... [it] takes regions of unlimited depth, down to bedrock if you ask" — a
+     * footprint marked 2 blocks long in the stepping axis can still take a depth of 50,
+     * sliding 50 blocks past its own original edge by the time it's done. The only
+     * remaining cap is the physical one already enforced by the caller: not digging below
+     * {@code world.getMinHeight()}.
      *
-     * <p>Rows beyond {@code requestedDepth} (when the marked footprint is longer than the
-     * requested depth needs) are left completely untouched — the excavation only occupies
-     * as much of the marked footprint as the requested depth actually needs, not the whole
-     * thing.
-     *
-     * <p>The earlier two-bench-plus-ramp version dug a second full-footprint room at a
-     * fixed depth after the ramp — which flattened the ramp's own partial steps right
-     * back into a uniform pit, confirmed live 2026-08-20 ("no ramp, just pure cube"). This
-     * version has no second full-footprint pass to accidentally undo anything with: every
-     * cell is queued, and dug, exactly once.
+     * <p>Consecutive levels overlap heavily along the stepping axis (a 7-long footprint
+     * at adjacent levels shares 6 of those 7 rows) — each shared row is still queued
+     * exactly once per level, since the two levels dig it at different Y values, not the
+     * same cell twice. Each level's leading edge reaches one block further than the level
+     * above's own leading edge ever did, which is what makes this a walkable staircase
+     * rather than a vertical-walled pit — the same "nosing" a real stair tread has over
+     * the riser below it.
      */
     static Deque<Block> buildDigOrder(World world, int minX, int maxX, int minZ, int maxZ, int topY,
-                                       int requestedDepth) {
+                                       int requestedDepth, boolean stepsAlongX, int stepDirection) {
         Deque<Block> cells = new ArrayDeque<>();
-        boolean stepsAlongX = (maxX - minX) >= (maxZ - minZ);
-        int axisSpan = stepsAlongX ? (maxX - minX + 1) : (maxZ - minZ + 1);
-        int gradedRows = Math.min(axisSpan, requestedDepth);
-
+        boolean forward = true;
         for (int layer = 0; layer < requestedDepth; layer++) {
             int y = topY - layer;
-            // Shrinks by one row per layer while there are enough rows to spread across
-            // (the original graduated staircase); once that runs out, clamps to 1 — row 0
-            // alone becomes a straight shaft for however many layers remain.
-            int rowsThisLayer = Math.max(1, gradedRows - layer);
-            boolean forward = true;
-            for (int row = 0; row < rowsThisLayer; row++) {
-                if (stepsAlongX) {
-                    int x = minX + row;
-                    sweepCrossAxis(cells, world, x, y, minZ, maxZ, forward, true);
-                } else {
-                    int z = minZ + row;
-                    sweepCrossAxis(cells, world, z, y, minX, maxX, forward, false);
+            int shift = layer * stepDirection;
+            if (stepsAlongX) {
+                int layerMinX = minX + shift;
+                int layerMaxX = maxX + shift;
+                for (int x = layerMinX; x <= layerMaxX; x++) {
+                    sweepRow(cells, world, x, y, minZ, maxZ, forward, true);
+                    forward = !forward;
                 }
-                forward = !forward;
+            } else {
+                int layerMinZ = minZ + shift;
+                int layerMaxZ = maxZ + shift;
+                for (int z = layerMinZ; z <= layerMaxZ; z++) {
+                    sweepRow(cells, world, z, y, minX, maxX, forward, false);
+                    forward = !forward;
+                }
             }
         }
 
@@ -226,8 +255,8 @@ public final class QuarrymanJobTask {
     }
 
     /** One row's full width across the cross axis, alternating sweep direction per row (serpentine) so the walk never has to run back across an already-finished row. */
-    private static void sweepCrossAxis(Deque<Block> cells, World world, int fixedCoord, int y,
-                                        int crossMin, int crossMax, boolean forward, boolean fixedIsX) {
+    private static void sweepRow(Deque<Block> cells, World world, int fixedCoord, int y,
+                                  int crossMin, int crossMax, boolean forward, boolean fixedIsX) {
         if (forward) {
             for (int c = crossMin; c <= crossMax; c++) {
                 cells.add(fixedIsX ? world.getBlockAt(fixedCoord, y, c) : world.getBlockAt(c, y, fixedCoord));
@@ -332,6 +361,8 @@ public final class QuarrymanJobTask {
         pendingCell = candidate;
         walkTicks = 0;
         retriedWalk = false;
+        noProgressTicks = 0;
+        closestApproachSquared = Double.MAX_VALUE;
         npc.getNavigator().setTarget(candidate.getLocation().add(0.5, 1.0, 0.5));
         phase = Phase.WALKING;
     }
@@ -350,18 +381,17 @@ public final class QuarrymanJobTask {
         // stationary spot before ever moving down into the hole — confirmed live
         // 2026-08-20, a 6-block reach-then-stuck gap ("navigating=false"), because
         // Citizens' A* has no walkable floor to path across inside an open vertical
-        // shaft, no matter how generous fallDistance is set. Every layer above this cell
-        // is ALREADY fully cleared by construction (top-down, one whole layer at a time),
-        // so teleporting straight down through known-clear, self-dug space is safe with
-        // certainty — the same "stop trusting pathfinding for a known shape, move through
-        // it directly instead" call attemptScaffoldUp already made for climbing up, just
-        // this is its descending counterpart.
+        // shaft, no matter how generous fallDistance is set. Teleporting straight down
+        // through this column is safe with certainty (see safeLandingAbove for why it's
+        // not simply "one block up") — the same "stop trusting pathfinding for a known
+        // shape, move through it directly instead" call attemptScaffoldUp already made
+        // for climbing up, just this is its descending counterpart.
         double horizontalOffsetSquared = square(current.getX() - cellCenter.getX())
                 + square(current.getZ() - cellCenter.getZ());
         double verticalDrop = current.getY() - cellCenter.getY();
         if (horizontalOffsetSquared <= 1.0 && verticalDrop > MAX_TOLERATED_FALL) {
             npc.getNavigator().cancelNavigation();
-            npc.teleport(cellCenter.clone().add(0, 0.5, 0), PlayerTeleportEvent.TeleportCause.PLUGIN);
+            npc.teleport(safeLandingAbove(pendingCell), PlayerTeleportEvent.TeleportCause.PLUGIN);
             beginDigging();
             return;
         }
@@ -375,6 +405,18 @@ public final class QuarrymanJobTask {
 
         walkTicks++;
 
+        // Tracks whether Citizens is actually closing the distance to pendingCell — same
+        // closest-approach/noProgressTicks idiom ClearJobTask already uses, not scoped to
+        // above- or below-grade: a genuine walk (however long, however it starts) keeps
+        // this at zero as long as SOME progress keeps happening; it only accumulates once
+        // Citizens has truly stalled, regardless of which direction that stall is in.
+        if (distanceSquared < closestApproachSquared - PROGRESS_EPSILON) {
+            closestApproachSquared = distanceSquared;
+            noProgressTicks = 0;
+        } else {
+            noProgressTicks++;
+        }
+
         // One free retry if Citizens never actually engaged shortly after being told to —
         // a transient pathfinding hiccup is cheap to rule out before waiting out the full
         // timeout on it. Not a real diagnosis (still no straight-line fallback, scaffold-
@@ -384,6 +426,35 @@ public final class QuarrymanJobTask {
             logger.info(BuilderNpcService.baseNameOf(npc) + ": navigation hadn't engaged after "
                     + RETRY_GRACE_TICKS + " ticks — retrying the same target once.");
             npc.getNavigator().setTarget(pendingCell.getLocation().add(0.5, 1.0, 0.5));
+            return;
+        }
+
+        // Genuinely stuck — not closing the distance for STUCK_RECOVERY_NO_PROGRESS_TICKS.
+        // Confirmed live 2026-08-20 in two different shapes: falling off the staircase
+        // while running and landing below grade unable to climb back (jumping in place at
+        // the bottom — the case this was first built for), and — after the sliding-window
+        // shape landed the same night — the opposite direction: Citizens routing itself up
+        // and completely out of the pit while trying to reach a cell close by, then never
+        // finding its own way back down (real log line: "from 71,66,9 to 72,58,9,
+        // navigating=false" — 1 block over, 8 blocks up, stuck at the rim; Kyle: "the next
+        // block was just right in front of him" but Horace "would go up the quarry, stay up
+        // top"). That case is close enough to the shaft-descent check above to look like it
+        // should have caught it — but that check fires immediately, with no patience, so
+        // it's deliberately narrow (near-exact same column) to avoid misfiring during
+        // ordinary walks; this one has already waited out
+        // STUCK_RECOVERY_NO_PROGRESS_TICKS, so it can afford to be the broader net. Citizens'
+        // own stuck-recovery (SafeStuckAction, wired into start()) should catch cases like
+        // this but apparently doesn't fire reliably (see SafeStuckAction's own doc).
+        // Recovering here instead of waiting on that or the full 30-second timeout —
+        // teleport into a confirmed-clear spot near pendingCell regardless of which
+        // direction the Helper actually got stuck in.
+        if (noProgressTicks > STUCK_RECOVERY_NO_PROGRESS_TICKS) {
+            logger.warning(BuilderNpcService.baseNameOf(npc) + ": no progress toward "
+                    + pendingCell.getX() + "," + pendingCell.getY() + "," + pendingCell.getZ()
+                    + " for " + STUCK_RECOVERY_NO_PROGRESS_TICKS + " ticks — recovering from a stuck path.");
+            npc.getNavigator().cancelNavigation();
+            npc.teleport(safeLandingAbove(pendingCell), PlayerTeleportEvent.TeleportCause.PLUGIN);
+            beginDigging();
             return;
         }
 
@@ -401,6 +472,32 @@ public final class QuarrymanJobTask {
                     + pendingCell.getX() + "," + pendingCell.getY() + "," + pendingCell.getZ()
                     + " and I can't work around it — stopping here rather than getting stuck.");
         }
+    }
+
+    /**
+     * Finds a genuinely clear spot to teleport onto directly above {@code cell}, for both
+     * teleport-recovery cases in {@link #walkToPendingCell}. "One block above the cell" is
+     * NOT always safe under {@link #buildDigOrder}'s sliding-window shape: only the Z rows
+     * a shallower layer already happened to share get cleared above them by construction —
+     * each layer's own newest row (the one row no shallower layer's window ever reached)
+     * can have solid, never-dug rock stacked above it, as many blocks deep as the dig
+     * currently is. Searches straight up for the first already-air block instead of
+     * assuming one, same "confirm before you land on it" precedent {@link SafeStuckAction}
+     * already sets for its own upward search — bounded by the world ceiling, so it always
+     * terminates.
+     */
+    private Location safeLandingAbove(Block cell) {
+        Block probe = cell;
+        int maxSearch = world.getMaxHeight() - cell.getY();
+        for (int i = 0; i < maxSearch; i++) {
+            probe = probe.getRelative(BlockFace.UP);
+            if (probe.getType() == Material.AIR) {
+                return probe.getLocation().add(0.5, 0, 0.5);
+            }
+        }
+        // Every block above is solid all the way to the world ceiling — shouldn't happen
+        // in practice, but land on top of the cell itself rather than searching forever.
+        return cell.getLocation().add(0.5, 1.0, 0.5);
     }
 
     private void beginDigging() {

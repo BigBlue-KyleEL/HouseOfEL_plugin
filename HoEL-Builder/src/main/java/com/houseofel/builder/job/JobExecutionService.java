@@ -186,6 +186,23 @@ public final class JobExecutionService {
         // always an explicit player choice (Level or Coordinates, picked before this area
         // was even marked), never inferred from the marked volume's own height.
         int topY = Math.max(pointA.getBlockY(), pointB.getBlockY());
+        // Which axis the staircase's footprint slides along as it goes deeper, and which
+        // way — Kyle's own rule (2026-08-21), cross-validated against 8 worked examples
+        // across two differently-shaped marked areas (not an assumption: every one of the
+        // 8 checks out exactly). Compare the click's own X delta to its own Z delta, not
+        // either axis's span and not a fixed axis: same sign (point B is diagonally
+        // "ahead" of point A along the X=Z line — both coordinates moved the same way)
+        // steps along X, using that shared sign. Opposite signs (point B is diagonally
+        // "ahead" along the X=-Z line) steps along Z, using Z's own sign. Defaults to +1
+        // for the degenerate all-zero case (no real diagonal to read a direction from)
+        // rather than leaving the footprint direction undefined.
+        int dx = pointB.getBlockX() - pointA.getBlockX();
+        int dz = pointB.getBlockZ() - pointA.getBlockZ();
+        boolean stepsAlongX = Integer.signum(dx) == Integer.signum(dz);
+        int stepDirection = stepsAlongX ? Integer.signum(dx) : Integer.signum(dz);
+        if (stepDirection == 0) {
+            stepDirection = 1;
+        }
 
         // Coordinates mode gives a target Y directly; Level mode gives a block count
         // directly. Both resolve to the same requestedDepth. Kyle's explicit call,
@@ -225,7 +242,8 @@ public final class JobExecutionService {
             return;
         }
 
-        Deque<Block> digOrder = QuarrymanJobTask.buildDigOrder(world, minX, maxX, minZ, maxZ, topY, requestedDepth);
+        Deque<Block> digOrder = QuarrymanJobTask.buildDigOrder(world, minX, maxX, minZ, maxZ, topY, requestedDepth,
+                stepsAlongX, stepDirection);
 
         TextDisplay label = ClearJobTask.spawnLabel(npcEntity.getLocation());
         EntityEquipment equipment = ClearJobTask.equipTool(npcEntity, initialTool, BuilderNpcService.baseNameOf(npc), taskType.toolNoun());
