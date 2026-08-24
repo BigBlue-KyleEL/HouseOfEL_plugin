@@ -214,12 +214,21 @@ public final class QuarrymanJobTask implements JobTask {
      */
     private static final int TORCH_LIGHT_THRESHOLD = 7;
     /**
-     * Rule 11: a permanent placement (unlike a self-clearing Bulkhead plug) needs a real
-     * chest-sourced cost, not a free conjure — see [[House of EL — Development Timeline]]'s
-     * own risk note flagging this exact question as needing an explicit decision before
-     * Phase D. Decided here: real cost, with a graceful skip (not a blocked dig) if the
-     * chest is simply out of torches — same "storage optional, dig proceeds regardless"
-     * philosophy {@link #storage} already has everywhere else in this class.
+     * Placed FREE, not withdrawn from {@link #storage} — Kyle's explicit call 2026-08-24,
+     * matching the same precedent Bulkhead's own sponges and cobblestone plugs already set.
+     *
+     * <p>This reverses an earlier same-session decision (real chest-sourced cost, reasoned
+     * from Rule 11's "permanent placements need real material"). That reasoning was sound
+     * in principle but wrong in practice, caught before it ever ran live: a Quarryman job's
+     * storage chest is created EMPTY by the job itself and only ever fills with what the
+     * dig produces — stone, dirt, ore. Torches are never among them, so a chest-sourced
+     * torch could only ever come from a player manually stocking the chest mid-job, making
+     * the whole face-lighting feature silently dead by default. Free placement is what
+     * makes the perk actually function as {@code V1 Perk Ladders} describes it ("lights the
+     * face as it descends" — an automatic property of the Helper, not a consumable it can
+     * run out of). {@code JobStorage.withdraw()}, built for the reverted version, is kept:
+     * Landscaper Phase A needs exactly that method for its topsoil/replant material, per
+     * the Development Timeline's own "needs something genuinely new" list.
      */
     private static final Material TORCH_MATERIAL = Material.TORCH;
     private static final Material WALL_TORCH_MATERIAL = Material.WALL_TORCH;
@@ -1331,25 +1340,22 @@ public final class QuarrymanJobTask implements JobTask {
     /**
      * Phase D face-lighting. {@code cell} is freshly dug (just set to air) and already
      * confirmed no fluid breach — checked for real darkness (see
-     * {@link #TORCH_LIGHT_THRESHOLD}) and, if dark, lit with a real, chest-withdrawn torch
-     * (see {@link #TORCH_MATERIAL}'s own doc for why this one isn't free like a Bulkhead
-     * plug). Prefers a wall torch on whichever adjacent solid face it finds first — a
-     * quarry staircase always has at least one solid wall immediately beside the walking
-     * path, by {@link #buildDigOrder}'s own shape — falling back to a standing torch on
-     * the floor below if none turns up (a genuinely open, multi-cell-wide gap). Does
-     * nothing, silently, if storage is missing or simply out of torches — lighting is a
-     * quality improvement, never a reason to block the dig.
+     * {@link #TORCH_LIGHT_THRESHOLD}) and, if dark, lit with a free-placed torch (see
+     * {@link #TORCH_MATERIAL}'s own doc for why free rather than chest-sourced). Prefers a
+     * wall torch on whichever adjacent solid face it finds first — a quarry staircase
+     * always has at least one solid wall immediately beside the walking path, by
+     * {@link #buildDigOrder}'s own shape — falling back to a standing torch on the floor
+     * below if none turns up (a genuinely open, multi-cell-wide gap). Deliberately
+     * independent of {@link #storage}: lighting works even on a no-chest job, since it
+     * costs nothing to place.
      */
     private void placeFaceTorch(Block cell) {
-        if (storage == null || cell.getLightLevel() > TORCH_LIGHT_THRESHOLD) {
+        if (cell.getLightLevel() > TORCH_LIGHT_THRESHOLD) {
             return;
         }
         for (BlockFace face : HORIZONTAL_FACES) {
             Block wall = cell.getRelative(face);
             if (wall.getType().isSolid()) {
-                if (storage.withdraw(TORCH_MATERIAL, 1) < 1) {
-                    return;
-                }
                 cell.setType(WALL_TORCH_MATERIAL);
                 if (cell.getBlockData() instanceof Directional directional) {
                     directional.setFacing(face.getOppositeFace());
@@ -1360,9 +1366,6 @@ public final class QuarrymanJobTask implements JobTask {
         }
         Block below = cell.getRelative(BlockFace.DOWN);
         if (below.getType().isSolid()) {
-            if (storage.withdraw(TORCH_MATERIAL, 1) < 1) {
-                return;
-            }
             cell.setType(TORCH_MATERIAL);
         }
     }
@@ -1419,17 +1422,73 @@ public final class QuarrymanJobTask implements JobTask {
         }
         if (noProgressTicks > STUCK_RECOVERY_NO_PROGRESS_TICKS) {
             logger.warning(BuilderNpcService.baseNameOf(npc) + ": no progress toward the storage chest for "
-                    + STUCK_RECOVERY_NO_PROGRESS_TICKS + " ticks — unloading from here rather than waiting it out. "
+                    + STUCK_RECOVERY_NO_PROGRESS_TICKS + " ticks — going straight there instead. "
                     + "navigating=" + npc.getNavigator().isNavigating());
-            unload();
+            teleportToChestAndUnload();
             return;
         }
 
         if (walkTicks > WALK_TIMEOUT_TICKS) {
-            // Same escalation as ClearJobTask: unload from wherever it got stuck rather
-            // than wedging the job forever over an unreachable chest.
-            unload();
+            logger.warning(BuilderNpcService.baseNameOf(npc) + ": haul timeout reaching the storage chest — "
+                    + "going straight there instead.");
+            teleportToChestAndUnload();
         }
+    }
+
+    /**
+     * Phase D3 — Kyle's explicit call 2026-08-24: a stuck haul trip puts the Helper AT the
+     * chest rather than dumping the load wherever it happened to get stuck (the previous
+     * behavior, which never stranded or killed anyone but could leave a load somewhere
+     * unhelpful). Teleport is deliberate and visible; the alternative Kyle weighed and
+     * rejected was retrying the walk first.
+     *
+     * <p>Never teleports onto an unverified spot — the hard-won lesson from three separate
+     * Horace suffocation deaths across 2026-08-21/22 (see {@link #safeLandingAbove}, which
+     * exists for the same reason). {@link #safeSpotBeside} confirms two blocks of clearance
+     * and solid footing before this commits; if nothing near the chest checks out, this
+     * falls back to exactly the old behavior — unload in place — rather than gambling.
+     * {@link #unload} never required standing at the chest anyway, so that fallback is
+     * still correct, just less tidy.
+     */
+    private void teleportToChestAndUnload() {
+        Location standing = safeSpotBeside(depositPoint.getBlock());
+        if (standing != null) {
+            npc.getNavigator().cancelNavigation();
+            npc.teleport(standing, PlayerTeleportEvent.TeleportCause.PLUGIN);
+            lastSafeLocation = standing;
+        } else {
+            logger.warning(BuilderNpcService.baseNameOf(npc)
+                    + ": no confirmed-safe spot beside the storage chest — unloading from here instead.");
+        }
+        unload();
+    }
+
+    /**
+     * A confirmed-safe standing spot immediately beside (or on top of) {@code chest} —
+     * two blocks of clearance for feet and head, solid ground underfoot. Returns null
+     * rather than a best guess when nothing qualifies, same contract as
+     * {@link #safeLandingAbove}. Checks the four horizontal neighbours first (standing
+     * beside a chest reads more naturally than standing on it), then the block directly
+     * above the chest as a last resort — {@code JobStorage} confirmed that one was open at
+     * placement time, though not necessarily the block above THAT, which is why it's still
+     * checked here rather than assumed.
+     */
+    private Location safeSpotBeside(Block chest) {
+        for (BlockFace face : HORIZONTAL_FACES) {
+            Block candidate = chest.getRelative(face);
+            if (isStandable(candidate)) {
+                return candidate.getLocation().add(0.5, 0, 0.5);
+            }
+        }
+        Block above = chest.getRelative(BlockFace.UP);
+        return isStandable(above) ? above.getLocation().add(0.5, 0, 0.5) : null;
+    }
+
+    /** Two blocks of clearance (feet + head) with something solid to stand on. */
+    private boolean isStandable(Block feet) {
+        return feet.getType() == Material.AIR
+                && feet.getRelative(BlockFace.UP).getType() == Material.AIR
+                && feet.getRelative(BlockFace.DOWN).getType().isSolid();
     }
 
     private void unload() {
