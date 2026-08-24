@@ -19,6 +19,8 @@ import org.bukkit.Sound;
 import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
+import org.bukkit.block.data.Directional;
+import org.bukkit.block.data.Levelled;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
 import org.bukkit.entity.LivingEntity;
@@ -33,6 +35,7 @@ import org.bukkit.scheduler.BukkitTask;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -147,7 +150,79 @@ public final class QuarrymanJobTask implements JobTask {
      * since landed, but a block dislodged by the very last cell dug could still be mid-air.
      */
     private static final int RECONCILE_SETTLE_TICKS = 20 * 3;
+    /**
+     * How often {@link #reconcileRecentCells} re-checks already-passed cells for anything
+     * resettled — confirmed live 2026-08-21 that the end-of-job-only reconciliation pass
+     * (see {@link #seekNextCell}'s own doc) reads as broken to a player watching: a block
+     * that falls back in gets walked straight past and left there for the rest of a
+     * potentially long dig, only ever cleared once the whole job otherwise finishes. This
+     * periodic check closes that gap by re-scanning only the small window of cells passed
+     * since the last check (cheap — a handful of blocks, not the whole dig order) rather
+     * than waiting for the end. The end-of-job full sweep stays as a final safety net for
+     * whatever's passed since the last periodic check.
+     */
+    private static final int RECONCILE_CHECK_PERIOD_TICKS = 20 * 5;
     private static final int CARRY_CAPACITY = 4 * 64;
+
+    /**
+     * Phase D — "it handles fluid... at scale" ([[V1 Perk Ladders]]'s own words for the
+     * full Quarryman spec). Reuses {@code ClearJobTask}'s Bulkhead mechanism (Groundworker
+     * level 6) essentially verbatim — same tuning constants, same lava-flood-fill/
+     * water-sponge-wave split, same settle-then-clear teardown — rather than a redesign:
+     * Quarryman is always past level 6 already (it's a level-8 choice), so there's no
+     * level gate to port, just the mechanism itself, triggered per dig-cell instead of
+     * once per job. See {@code ClearJobTask}'s own doc on each constant for the full
+     * reasoning/tuning history; values are copied unchanged, not re-derived, since nothing
+     * about Quarryman's shape changes what makes a sponge placement good or bad.
+     */
+    private static final Material BULKHEAD_PLUG_MATERIAL = Material.COBBLESTONE;
+    private static final int BULKHEAD_SETTLE_TICKS = 60;
+    private static final int BULKHEAD_MAX_PLUGS = 64;
+    private static final int BULKHEAD_MAX_SPONGES = 18;
+    private static final int BULKHEAD_MAX_VERTICAL_SPONGES = 6;
+    private static final int BULKHEAD_VERTICAL_DY_THRESHOLD = 2;
+    private static final int BULKHEAD_SPONGE_SPACING_BLOCKS = 2;
+    private static final int BULKHEAD_WATER_EXPLORE_CELLS = 4096;
+    private static final int BULKHEAD_WAVE_TICKS_PER_STEP = 4;
+    private static final BlockFace[] ADJACENT_FACES = {
+        BlockFace.UP, BlockFace.DOWN, BlockFace.NORTH, BlockFace.SOUTH, BlockFace.EAST, BlockFace.WEST,
+    };
+    /**
+     * Horizontal-only faces, for wall-torch placement — a torch on the CEILING or FLOOR
+     * isn't a wall torch (those are the standing/floor variant, handled separately as the
+     * fallback below), so {@link #ADJACENT_FACES} itself (which includes UP/DOWN, needed
+     * for the fluid flood-fills above) isn't the right set to search here.
+     */
+    private static final BlockFace[] HORIZONTAL_FACES = {
+        BlockFace.NORTH, BlockFace.SOUTH, BlockFace.EAST, BlockFace.WEST,
+    };
+    /**
+     * Phase D — "lights the face as it descends" ([[V1 Perk Ladders]]). Every
+     * {@code TORCH_SPACING_CELLS}'th cell dug gets checked for a real mob-spawn-dark spot
+     * and lit if so — a period, not "one torch per bench," so a shallow bench with few
+     * cells still gets lit at roughly the same real-world density as a deep one, rather
+     * than one torch per bench regardless of how long that bench actually is. Live-tuned
+     * starting point, not measured — matches roughly one torch every 2-3 real-world
+     * seconds of digging at typical dig speed, close to (not identical to) vanilla's own
+     * "torch every ~7 blocks" convention automated builds commonly use.
+     */
+    private static final int TORCH_SPACING_CELLS = 6;
+    /**
+     * Vanilla's own hostile-mob spawn threshold is block light &lt;= 7 — matching that
+     * exactly (not a stricter number) means a torch only ever gets placed where mobs could
+     * actually spawn, not "somewhat dim but already safe."
+     */
+    private static final int TORCH_LIGHT_THRESHOLD = 7;
+    /**
+     * Rule 11: a permanent placement (unlike a self-clearing Bulkhead plug) needs a real
+     * chest-sourced cost, not a free conjure — see [[House of EL — Development Timeline]]'s
+     * own risk note flagging this exact question as needing an explicit decision before
+     * Phase D. Decided here: real cost, with a graceful skip (not a blocked dig) if the
+     * chest is simply out of torches — same "storage optional, dig proceeds regardless"
+     * philosophy {@link #storage} already has everywhere else in this class.
+     */
+    private static final Material TORCH_MATERIAL = Material.TORCH;
+    private static final Material WALL_TORCH_MATERIAL = Material.WALL_TORCH;
 
     private static final double LABEL_HEIGHT_OFFSET = 2.3;
     private static final int GLOW_TICK_PERIOD = 20;
@@ -156,7 +231,7 @@ public final class QuarrymanJobTask implements JobTask {
     private static final double MOB_ALERT_RADIUS = 10.0;
     private static final int MOB_ALERT_CHECK_PERIOD = GLOW_TICK_PERIOD;
 
-    private enum Phase { SEEKING, WALKING, DIGGING, HAULING }
+    private enum Phase { SEEKING, WALKING, DIGGING, HAULING, BULKHEAD }
 
     private final Plugin plugin;
     private final Logger logger;
@@ -193,6 +268,16 @@ public final class QuarrymanJobTask implements JobTask {
     private long deposited;
     private boolean awaitingReconciliation;
     private boolean reconciled;
+    /** How far into {@link #allCells} {@link #reconcileRecentCells} has already re-checked. */
+    private long reconciliationCursor;
+    /**
+     * Resettled cells found by {@link #reconcileRecentCells}, drained by {@link #seekNextCell}
+     * ahead of {@link #remainingCells} — see that method's own doc for why this stays a
+     * separate queue rather than feeding into {@code remainingCells}/{@code processedCells}
+     * directly. In-memory only, doesn't survive a pause/resume — see the same doc for why
+     * that's an accepted gap, not a correctness bug.
+     */
+    private final Deque<Block> reconciliationQueue = new ArrayDeque<>();
 
     private final Map<Material, Integer> carried;
     private int carriedTotal;
@@ -204,8 +289,30 @@ public final class QuarrymanJobTask implements JobTask {
     private int walkTicks;
     private boolean retriedWalk;
     private int noProgressTicks;
+    /** One attempt per walk at the stuck-recovery teleport — see its own use in {@link #walkToPendingCell}. */
+    private boolean recoveryAttempted;
     private double closestApproachSquared;
     private int digTicks;
+    /**
+     * Wherever the Helper was last confirmed standing right after actually finishing a
+     * cell — see {@link #digPendingCell}. Guaranteed both safe (stood there without
+     * incident) and connected to the dig (it's the dig's own path, not a guess), unlike
+     * {@link #safeLandingAbove}'s search, which only confirms clearance, not
+     * connectivity. Used as the stuck-recovery fallback in {@link #walkToPendingCell} when
+     * that search can't confirm anywhere safe near the target itself — see that method's
+     * own doc for why an unconfirmed teleport isn't an option any more. Initialized to the
+     * Helper's starting position (fresh dispatch or restart-resume alike) so it's never
+     * null.
+     */
+    private Location lastSafeLocation;
+
+    /** Fluid source blocks currently plugged, awaiting {@link #tickBulkhead}'s settle timer — see {@code ClearJobTask}'s own field. */
+    private final List<Block> bulkheadPlugs = new ArrayList<>();
+    private int bulkheadTicks;
+    /** Water anchors still waiting to land during the wave rollout — see {@code ClearJobTask}'s own field. */
+    private final List<Block> bulkheadWaveAnchors = new ArrayList<>();
+    private int bulkheadWaveIndex;
+    private int bulkheadWaveStepTicks;
 
     private boolean paused;
     /** Set once at construction (fresh dispatch or restart-resume), never touched by a same-session pause/resume — same reasoning as ClearJobTask's own field. */
@@ -263,6 +370,8 @@ public final class QuarrymanJobTask implements JobTask {
         this.outline = outline;
         this.carried = carried;
         this.carriedTotal = carried.values().stream().mapToInt(Integer::intValue).sum();
+        this.lastSafeLocation = npcEntity.getLocation();
+        this.reconciliationCursor = processedCells;
     }
 
     /**
@@ -281,6 +390,20 @@ public final class QuarrymanJobTask implements JobTask {
         Entity npcEntity = npc.getEntity();
         if (world == null || npcEntity == null) {
             return null;
+        }
+
+        // Bulkhead itself doesn't need to survive a restart — resuming at Phase.SEEKING
+        // and re-detecting fresh is fine, same as every other mid-action phase. But a
+        // plug left over from a restart mid-wait would otherwise be a permanent stray
+        // cobblestone/sponge block. Ported from ClearJobTask.resume() — see its own doc.
+        for (String encoded : state.bulkheadPlugs) {
+            Block plug = JobStorage.decodeBlock(world, encoded);
+            Material plugType = plug.getType();
+            if (plugType == BULKHEAD_PLUG_MATERIAL || plugType == Material.SPONGE || plugType == Material.WET_SPONGE) {
+                plug.setType(Material.AIR);
+                plugin.getLogger().info("[quarryman] Bulkhead: cleared stray plug at resume for NPC #"
+                        + state.npcId + " at " + plug.getX() + "," + plug.getY() + "," + plug.getZ());
+            }
         }
 
         Deque<Block> digOrder = buildDigOrder(world, state.minX, state.maxX, state.minZ, state.maxZ, state.topY,
@@ -559,6 +682,7 @@ public final class QuarrymanJobTask implements JobTask {
                 case WALKING -> walkToPendingCell();
                 case DIGGING -> digPendingCell();
                 case HAULING -> haulToChest();
+                case BULKHEAD -> tickBulkhead();
             }
         }
 
@@ -575,6 +699,9 @@ public final class QuarrymanJobTask implements JobTask {
         }
         if (outlineTicks % MOB_ALERT_CHECK_PERIOD == 0) {
             checkForHostileMobs();
+        }
+        if (outlineTicks % RECONCILE_CHECK_PERIOD_TICKS == 0) {
+            reconcileRecentCells();
         }
         outlineTicks++;
         updateLabel();
@@ -603,20 +730,46 @@ public final class QuarrymanJobTask implements JobTask {
      * but a fumble here would just leave a permanent stray block — not worth it for a
      * small, deterministic shape where nothing should ever actually miss.
      *
-     * <p>Once the main queue empties, one thing still can leave a block undug: a gravity
-     * block (sand, gravel) from outside the excavation — beside it, or resting above it —
-     * sliding into an already-cleared cell after the Helper has already moved past it.
-     * The marked footprint doesn't fence off what's beside or above the dig, and unlike
-     * the fumble case above, this isn't rare enough to shrug off (confirmed live
-     * 2026-08-21, Kyle flagging it before it had actually happened rather than after —
-     * same {@code ClearJobTask} precedent this borrows from: its own final whole-region
-     * "reconciling" pass exists for the identical reason). Kept far simpler than that
-     * one, matching Quarryman's own small, bounded shape: no bands, no repeated passes —
-     * one settle period ({@link #RECONCILE_SETTLE_TICKS}, so a block dislodged by the
-     * very last cell dug has time to land), then one scan of {@link #allCells} for
-     * anything solid again, queued and dug the same as any other cell.
+     * <p>One thing can still leave a block undug: a gravity block (sand, gravel) from
+     * outside the excavation — beside it, or resting above it — sliding into an
+     * already-cleared cell after the Helper has already moved past it. The marked
+     * footprint doesn't fence off what's beside or above the dig, and this isn't rare
+     * enough to shrug off (confirmed live 2026-08-21, Kyle flagging it before it had
+     * actually happened rather than after — same {@code ClearJobTask} precedent this
+     * borrows from: its own final whole-region "reconciling" pass exists for the identical
+     * reason). {@link #reconcileRecentCells} periodically requeues anything resettled into
+     * {@link #reconciliationQueue}, drained here FIRST, ahead of {@link #remainingCells} —
+     * handled next, not "eventually." Deliberately kept out of {@code processedCells}/
+     * {@code remainingCells} entirely: those two drive {@link #resume}'s deterministic
+     * fast-forward through {@link #allCells}'s own canonical order, and a resettled cell
+     * isn't a new position in that order — bumping {@code processedCells} for it would
+     * inflate the count past its true meaning, and on a pause/resume before the resettled
+     * cell was actually redug, the fast-forward would silently skip past real, never-dug
+     * cells later in the order. {@link #queueReconciliationCells}'s own end-of-job pass is
+     * a still-needed safety net on top of this, not made redundant by it: this one only
+     * ever re-checks cells once, in the small window since the last periodic check, so
+     * anything resettled while genuinely mid-pause (this in-memory queue doesn't survive a
+     * restart) has to wait for that final full sweep to be caught at all.
      */
     private void seekNextCell() {
+        Block reconciled0 = reconciliationQueue.poll();
+        if (reconciled0 != null) {
+            if (!Target.ANY_EARTH.matches(reconciled0.getType())) {
+                // Handled some other way already (e.g. digested by the time we got back to
+                // it) — nothing to do, next tick's seekNextCell tries again.
+                return;
+            }
+            pendingCell = reconciled0;
+            walkTicks = 0;
+            retriedWalk = false;
+            noProgressTicks = 0;
+            recoveryAttempted = false;
+            closestApproachSquared = Double.MAX_VALUE;
+            npc.getNavigator().setTarget(reconciled0.getLocation().add(0.5, 1.0, 0.5));
+            phase = Phase.WALKING;
+            return;
+        }
+
         Block candidate;
         do {
             candidate = remainingCells.poll();
@@ -647,9 +800,69 @@ public final class QuarrymanJobTask implements JobTask {
         walkTicks = 0;
         retriedWalk = false;
         noProgressTicks = 0;
+        recoveryAttempted = false;
         closestApproachSquared = Double.MAX_VALUE;
-        npc.getNavigator().setTarget(candidate.getLocation().add(0.5, 1.0, 0.5));
+        npc.getNavigator().setTarget(navigationTargetFor(candidate));
         phase = Phase.WALKING;
+    }
+
+    /**
+     * The point Citizens should be told to walk to for {@code cell} — normally straight
+     * above it (open air a player would stand in to dig it), but not when that point is
+     * itself inside solid, un-dug rock: on a "leading edge" column (see
+     * {@link #buildDigOrder}'s own doc), the block above the target hasn't been opened
+     * either, since no shallower layer's window ever reached it, making that point a
+     * physically impossible destination. Confirmed live 2026-08-22 — Kyle's screenshot
+     * showed a plainly walkable approach to exactly this kind of row that Citizens still
+     * reported {@code navigating=false} for, repeatedly, even immediately after a fresh
+     * teleport onto solid ground: it wasn't struggling to get close, the destination
+     * itself didn't exist. Falls back to {@link #lastSafeLocation} instead — always open
+     * (Horace stood there without incident) and always close (dig cells are never more
+     * than 1 block apart by construction) — and lets the ordinary {@code REACH_DISTANCE}
+     * check in {@link #walkToPendingCell} (measured against the cell's own center, not
+     * this nav target) trigger digging once Horace is genuinely near, rather than
+     * requiring him to literally stand inside rock.
+     */
+    private Location navigationTargetFor(Block cell) {
+        Block above = cell.getRelative(BlockFace.UP);
+        if (above.getType() == Material.AIR || above.isPassable()) {
+            return cell.getLocation().add(0.5, 1.0, 0.5);
+        }
+        return lastSafeLocation;
+    }
+
+    /**
+     * Re-checks the small window of cells passed since the last call for anything solid
+     * again (a gravity block that resettled after the Helper moved on), and, unlike the
+     * end-of-job pass in {@link #queueReconciliationCells}, requeues any it finds into
+     * {@link #reconciliationQueue} — handled next, not "eventually," matching what a
+     * player watching actually expects (confirmed live 2026-08-21: the end-of-job-only
+     * version reads as broken — a fallen block gets walked straight past and left for the
+     * rest of a potentially long dig). {@code processedCells} only ever grows, so this
+     * window never re-examines the same cell twice; see {@link #seekNextCell}'s own doc
+     * for why the found cells go into a separate queue rather than back into
+     * {@link #remainingCells} directly.
+     *
+     * <p>Stops one short of {@code processedCells} — {@code pendingCell} itself (whatever
+     * is currently being walked to or dug) always sits at index {@code processedCells - 1},
+     * since {@code processedCells} increments the instant a cell is POPPED in
+     * {@link #seekNextCell}, not once it's actually cleared. Confirmed live 2026-08-22:
+     * without this, a cell Horace simply hadn't reached yet (still solid, correctly)
+     * got misread as "resettled" and duplicated into the reconciliation queue while the
+     * real walk to it was still in progress.
+     */
+    private void reconcileRecentCells() {
+        int upTo = (int) Math.min(processedCells - 1, allCells.size());
+        int from = (int) Math.min(reconciliationCursor, upTo);
+        for (int i = from; i < upTo; i++) {
+            Block cell = allCells.get(i);
+            if (Target.ANY_EARTH.matches(cell.getType())) {
+                reconciliationQueue.add(cell);
+                logger.info(BuilderNpcService.baseNameOf(npc) + ": a block resettled at "
+                        + cell.getX() + "," + cell.getY() + "," + cell.getZ() + " — clearing it again.");
+            }
+        }
+        reconciliationCursor = Math.max(0, upTo);
     }
 
     /** Re-checks every cell the dig order ever queued for anything solid again, queuing it for a normal dig. Returns whether it found anything. */
@@ -691,10 +904,22 @@ public final class QuarrymanJobTask implements JobTask {
                 + square(current.getZ() - cellCenter.getZ());
         double verticalDrop = current.getY() - cellCenter.getY();
         if (horizontalOffsetSquared <= 1.0 && verticalDrop > MAX_TOLERATED_FALL) {
+            Location landing = safeLandingAbove(pendingCell);
+            if (landing != null) {
+                npc.getNavigator().cancelNavigation();
+                npc.teleport(landing, PlayerTeleportEvent.TeleportCause.PLUGIN);
+                beginDigging();
+                return;
+            }
+            // No confirmed-safe spot within range — reposition to lastSafeLocation
+            // (guaranteed safe and connected, see that field's own doc) rather than leave
+            // the Helper stuck in a bad column, then fall through to ordinary walking
+            // rather than returning: this check has no patience of its own (re-fires every
+            // tick the condition holds), so if the fallback spot somehow triggers it again
+            // too, walkTicks below still has to keep counting toward a loud
+            // WALK_TIMEOUT_TICKS abort instead of resetting forever.
             npc.getNavigator().cancelNavigation();
-            npc.teleport(safeLandingAbove(pendingCell), PlayerTeleportEvent.TeleportCause.PLUGIN);
-            beginDigging();
-            return;
+            npc.teleport(lastSafeLocation, PlayerTeleportEvent.TeleportCause.PLUGIN);
         }
 
         double distanceSquared = current.distanceSquared(cellCenter);
@@ -726,7 +951,7 @@ public final class QuarrymanJobTask implements JobTask {
             retriedWalk = true;
             logger.info(BuilderNpcService.baseNameOf(npc) + ": navigation hadn't engaged after "
                     + RETRY_GRACE_TICKS + " ticks — retrying the same target once.");
-            npc.getNavigator().setTarget(pendingCell.getLocation().add(0.5, 1.0, 0.5));
+            npc.getNavigator().setTarget(navigationTargetFor(pendingCell));
             return;
         }
 
@@ -749,7 +974,8 @@ public final class QuarrymanJobTask implements JobTask {
         // Recovering here instead of waiting on that or the full 30-second timeout —
         // teleport into a confirmed-clear spot near pendingCell regardless of which
         // direction the Helper actually got stuck in.
-        if (noProgressTicks > STUCK_RECOVERY_NO_PROGRESS_TICKS) {
+        if (noProgressTicks > STUCK_RECOVERY_NO_PROGRESS_TICKS && !recoveryAttempted) {
+            recoveryAttempted = true;
             // Extra detail goes to the log — current position and whether Citizens ever
             // actually engaged, same reasoning as the walk-timeout log below. Added
             // 2026-08-21 after a resumed job needed this recovery on nearly every single
@@ -760,9 +986,33 @@ public final class QuarrymanJobTask implements JobTask {
                     + " for " + STUCK_RECOVERY_NO_PROGRESS_TICKS + " ticks — recovering from a stuck path. From "
                     + current.getBlockX() + "," + current.getBlockY() + "," + current.getBlockZ()
                     + ", navigating=" + npc.getNavigator().isNavigating());
+            Location landing = safeLandingAbove(pendingCell);
+            if (landing != null) {
+                npc.getNavigator().cancelNavigation();
+                npc.teleport(landing, PlayerTeleportEvent.TeleportCause.PLUGIN);
+                beginDigging();
+                return;
+            }
+            // Nothing confirmed-clear within MAX_LANDING_SEARCH_HEIGHT — same "don't
+            // gamble on an unverified spot" call SafeStuckAction already makes for its own
+            // search. Falls back to lastSafeLocation instead of leaving the Helper
+            // wherever the failed walk stranded it (confirmed live 2026-08-21: Citizens
+            // climbing itself up and out of the pit while failing to path down, then
+            // stopping there) — guaranteed safe and connected, even if it's a few cells
+            // behind, so this resets walk-tracking and lets a fresh walk try from solid
+            // ground rather than beginning digging immediately. recoveryAttempted already
+            // makes this one-shot per walk, so resetting walkTicks here doesn't risk an
+            // infinite loop — WALK_TIMEOUT_TICKS still aborts loudly if even the fresh
+            // attempt can't reach pendingCell.
+            logger.warning(BuilderNpcService.baseNameOf(npc)
+                    + ": no confirmed-safe spot near " + pendingCell.getX() + "," + pendingCell.getY() + ","
+                    + pendingCell.getZ() + " — falling back to the last spot known safe instead of guessing.");
             npc.getNavigator().cancelNavigation();
-            npc.teleport(safeLandingAbove(pendingCell), PlayerTeleportEvent.TeleportCause.PLUGIN);
-            beginDigging();
+            npc.teleport(lastSafeLocation, PlayerTeleportEvent.TeleportCause.PLUGIN);
+            walkTicks = 0;
+            noProgressTicks = 0;
+            closestApproachSquared = Double.MAX_VALUE;
+            npc.getNavigator().setTarget(navigationTargetFor(pendingCell));
             return;
         }
 
@@ -783,6 +1033,26 @@ public final class QuarrymanJobTask implements JobTask {
     }
 
     /**
+     * How far {@link #safeLandingAbove} will search upward before giving up and landing on
+     * the cell itself. Deliberately NOT "however far it takes to find two clear blocks" —
+     * confirmed live 2026-08-21 (the same session the two-block fix below shipped in) that
+     * an unbounded search is itself a second, separate bug: on a "leading edge" column
+     * (see this method's own doc) with no cave nearby, the first genuine two-block gap can
+     * be the real, distant surface, or an unrelated cave dozens of blocks away — nothing
+     * in {@code buildDigOrder}'s shape guarantees THAT spot is walkably connected back to
+     * the dig, only that it's clear. Landing there strands the Helper somewhere Citizens
+     * cannot path back down from through unbroken rock, so the very next cell (and
+     * typically every cell after it) fails the exact same walk for the exact same reason,
+     * each failure teleporting further away — a cascade, not a one-off. Live logs from
+     * that session show it happening on fresh dispatches too, not just after a
+     * restart-resume, so it isn't resume-specific. Bounding the search keeps a bad landing
+     * within a couple of {@link #REACH_DISTANCE}s of the dig, so the cell-itself fallback
+     * below — always walkably connected, since it's the dig's own known path — kicks in
+     * for genuinely deep leading-edge columns instead of a teleport to nowhere.
+     */
+    private static final int MAX_LANDING_SEARCH_HEIGHT = 16;
+
+    /**
      * Finds a genuinely clear spot to teleport onto directly above {@code cell}, for both
      * teleport-recovery cases in {@link #walkToPendingCell}. "One block above the cell" is
      * NOT always safe under {@link #buildDigOrder}'s sliding-window shape: only the Z rows
@@ -794,29 +1064,35 @@ public final class QuarrymanJobTask implements JobTask {
      * real, unmodified world terrain above the excavation, not just the dig's own shape,
      * and natural stone is riddled with small one-block cave/ore pockets a single-block
      * check would happily land inside. Confirmed live 2026-08-21 — Horace suffocated
-     * after a restart-resume drove an unusually deep quarry through exactly that gap; a
-     * single-block check had already been landing Helpers in ordinary terrain safely for
-     * weeks, since a real cave big enough to walk through also has two-block clearance,
-     * but a naturally-generated one-block pocket doesn't, and this dig simply hadn't
-     * gone deep enough into varied stone to hit one before. Bounded by the world ceiling,
-     * so it always terminates — same "confirm before you land on it" precedent
-     * {@link SafeStuckAction} already sets for its own upward search.
+     * after an unusually deep quarry drove through exactly that gap; a single-block check
+     * had already been landing Helpers in ordinary terrain safely for weeks, since a real
+     * cave big enough to walk through also has two-block clearance, but a
+     * naturally-generated one-block pocket doesn't, and this dig simply hadn't gone deep
+     * enough into varied stone to hit one before. Bounded to {@link #MAX_LANDING_SEARCH_HEIGHT}
+     * rather than the world ceiling — see that constant's own doc for why unbounded was a
+     * second, separate bug — so it always terminates well short of anywhere truly
+     * disconnected, same "confirm before you land on it" precedent {@link SafeStuckAction}
+     * already sets for its own upward search.
+     *
+     * <p>Returns {@code null}, never an unverified spot, when nothing confirmed-clear turns
+     * up within {@link #MAX_LANDING_SEARCH_HEIGHT}. An earlier version of this bound (same
+     * night) fell back to landing one block above {@code cell} with NO clearance check at
+     * all once the search ran out — reasoned as "shouldn't happen in practice" back when the
+     * search was unbounded, but bounding it made that fallback the COMMON case for any
+     * genuinely deep leading-edge column, and it killed Horace again within minutes (deep
+     * rock directly above the cell too). Both callers in {@link #walkToPendingCell} already
+     * know how to handle {@code null}: don't teleport, let the walk keep trying.
      */
     private Location safeLandingAbove(Block cell) {
         Block probe = cell;
-        int maxSearch = world.getMaxHeight() - cell.getY();
+        int maxSearch = Math.min(MAX_LANDING_SEARCH_HEIGHT, world.getMaxHeight() - cell.getY());
         for (int i = 0; i < maxSearch; i++) {
             probe = probe.getRelative(BlockFace.UP);
             if (probe.getType() == Material.AIR && probe.getRelative(BlockFace.UP).getType() == Material.AIR) {
                 return probe.getLocation().add(0.5, 0, 0.5);
             }
         }
-        // Every block above is solid, or only ever one-block gaps, all the way to the
-        // world ceiling — shouldn't happen in practice, but land on top of the cell
-        // itself rather than searching forever. Cell itself is guaranteed solid ground
-        // to stand ON (it's what's about to be dug), even though the space above it
-        // carries the same unverified-clearance risk this method exists to avoid.
-        return cell.getLocation().add(0.5, 1.0, 0.5);
+        return null;
     }
 
     private void beginDigging() {
@@ -862,12 +1138,232 @@ public final class QuarrymanJobTask implements JobTask {
         collectDrop(pendingCell);
         pendingCell.setType(Material.AIR);
         clearedCells++;
+        lastSafeLocation = npcEntity.getLocation();
+
+        // Phase D — fluid at scale. No level gate to check here, unlike ClearJobTask's own
+        // canBreachLava(): Quarryman is already an L8+ ability, so a level-6+ Groundworker
+        // is guaranteed. Checked every cell, not just leading-edge ones — a Quarry can
+        // breach a lake from the side just as easily as from below.
+        List<Block> waterBreach = detectWaterBreach(pendingCell);
+        List<Block> lavaBreach = detectLavaBreach(pendingCell);
+        if (!waterBreach.isEmpty() || !lavaBreach.isEmpty()) {
+            beginBulkhead(waterBreach, lavaBreach);
+            return;
+        }
+
+        if (clearedCells % TORCH_SPACING_CELLS == 0) {
+            placeFaceTorch(pendingCell);
+        }
+
         hesitationTicks = HelperTempo.hesitationTicksForDuty(levelService.dutyCycleOf(npc));
 
         if (carriedTotal >= CARRY_CAPACITY) {
             startHauling();
         } else {
             phase = Phase.SEEKING;
+        }
+    }
+
+    /**
+     * Ported from {@code ClearJobTask#detectWaterBreach} — see that method's own doc for
+     * the full reasoning (spread-out anchors, flat-ring/vertical-accent split, why a
+     * naive "just the 6 adjacent faces" version undersells real coverage). Unchanged
+     * behavior, just retargeted at {@code cell} instead of {@code diggedBlock}.
+     */
+    private List<Block> detectWaterBreach(Block cell) {
+        List<Block> flatRing = new ArrayList<>();
+        List<Block> verticalAccents = new ArrayList<>();
+        Set<String> visited = new HashSet<>();
+        Deque<Block> frontier = new ArrayDeque<>();
+        for (BlockFace face : ADJACENT_FACES) {
+            Block neighbor = cell.getRelative(face);
+            if (neighbor.getType() == Material.WATER) {
+                frontier.add(neighbor);
+            }
+        }
+        int explored = 0;
+        while (!frontier.isEmpty() && explored < BULKHEAD_WATER_EXPLORE_CELLS
+                && flatRing.size() + verticalAccents.size() < BULKHEAD_MAX_SPONGES) {
+            Block current = frontier.poll();
+            if (!visited.add(JobStorage.encodeBlock(current))) {
+                continue;
+            }
+            explored++;
+            if (isFarEnoughFromAnchors(current, flatRing) && isFarEnoughFromAnchors(current, verticalAccents)) {
+                int dy = Math.abs(current.getY() - cell.getY());
+                if (dy >= BULKHEAD_VERTICAL_DY_THRESHOLD) {
+                    if (verticalAccents.size() < BULKHEAD_MAX_VERTICAL_SPONGES) {
+                        verticalAccents.add(current);
+                    }
+                } else {
+                    flatRing.add(current);
+                }
+            }
+            for (BlockFace face : ADJACENT_FACES) {
+                Block neighbor = current.getRelative(face);
+                if (neighbor.getType() == Material.WATER && !visited.contains(JobStorage.encodeBlock(neighbor))) {
+                    frontier.add(neighbor);
+                }
+            }
+        }
+        Comparator<Block> byDistanceFromBreachDescending =
+                Comparator.<Block>comparingInt(anchor -> squaredDistance(anchor, cell)).reversed();
+        flatRing.sort(byDistanceFromBreachDescending);
+        verticalAccents.sort(byDistanceFromBreachDescending);
+        List<Block> ordered = new ArrayList<>(flatRing);
+        ordered.addAll(verticalAccents);
+        return ordered;
+    }
+
+    private static boolean isFarEnoughFromAnchors(Block candidate, List<Block> anchors) {
+        int minDistanceSquared = BULKHEAD_SPONGE_SPACING_BLOCKS * BULKHEAD_SPONGE_SPACING_BLOCKS;
+        for (Block anchor : anchors) {
+            if (squaredDistance(candidate, anchor) < minDistanceSquared) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static int squaredDistance(Block a, Block b) {
+        int dx = a.getX() - b.getX();
+        int dy = a.getY() - b.getY();
+        int dz = a.getZ() - b.getZ();
+        return dx * dx + dy * dy + dz * dz;
+    }
+
+    /** Ported from {@code ClearJobTask#detectLavaBreach} — see that method's own doc. Unchanged behavior. */
+    private List<Block> detectLavaBreach(Block cell) {
+        List<Block> found = new ArrayList<>();
+        Set<String> visited = new HashSet<>();
+        Deque<Block> frontier = new ArrayDeque<>();
+        for (BlockFace face : ADJACENT_FACES) {
+            Block neighbor = cell.getRelative(face);
+            if (isLavaSource(neighbor)) {
+                frontier.add(neighbor);
+            }
+        }
+        while (!frontier.isEmpty() && found.size() < BULKHEAD_MAX_PLUGS) {
+            Block current = frontier.poll();
+            if (!visited.add(JobStorage.encodeBlock(current))) {
+                continue;
+            }
+            found.add(current);
+            for (BlockFace face : ADJACENT_FACES) {
+                Block neighbor = current.getRelative(face);
+                if (isLavaSource(neighbor) && !visited.contains(JobStorage.encodeBlock(neighbor))) {
+                    frontier.add(neighbor);
+                }
+            }
+        }
+        return found;
+    }
+
+    private static boolean isLavaSource(Block block) {
+        return block.getType() == Material.LAVA
+                && block.getBlockData() instanceof Levelled levelled && levelled.getLevel() == 0;
+    }
+
+    /** Ported from {@code ClearJobTask#beginBulkhead} — see that method's own doc. Unchanged behavior. */
+    private void beginBulkhead(List<Block> waterBreach, List<Block> lavaBreach) {
+        npc.getNavigator().cancelNavigation();
+        for (Block source : lavaBreach) {
+            source.setType(BULKHEAD_PLUG_MATERIAL);
+            bulkheadPlugs.add(source);
+        }
+        bulkheadWaveAnchors.clear();
+        bulkheadWaveAnchors.addAll(waterBreach);
+        bulkheadWaveIndex = 0;
+        bulkheadWaveStepTicks = BULKHEAD_WAVE_TICKS_PER_STEP;
+        bulkheadTicks = bulkheadWaveAnchors.isEmpty() ? BULKHEAD_SETTLE_TICKS : 0;
+        phase = Phase.BULKHEAD;
+        logger.info("[quarryman] Bulkhead: breach detected, " + waterBreach.size() + " sponge(s) queued and "
+                + lavaBreach.size() + " lava source(s) plugged for " + BuilderNpcService.baseNameOf(npc)
+                + (lavaBreach.size() >= BULKHEAD_MAX_PLUGS ? " (lava fill hit the cap — partial seal of a larger body)" : ""));
+    }
+
+    /** Ported from {@code ClearJobTask#tickBulkhead} — see that method's own doc. Unchanged behavior. */
+    private void tickBulkhead() {
+        if (bulkheadWaveIndex < bulkheadWaveAnchors.size()) {
+            bulkheadWaveStepTicks--;
+            if (bulkheadWaveStepTicks > 0) {
+                return;
+            }
+            Block anchor = bulkheadWaveAnchors.get(bulkheadWaveIndex);
+            anchor.setType(Material.SPONGE);
+            bulkheadPlugs.add(anchor);
+            world.spawnParticle(Particle.SPLASH, anchor.getLocation().add(0.5, 0.5, 0.5),
+                    12, 0.3, 0.3, 0.3, 0.05);
+            world.playSound(anchor.getLocation(), Sound.BLOCK_SPONGE_PLACE, 1.0f, 1.0f);
+            bulkheadWaveIndex++;
+            logger.info("[quarryman] Bulkhead: sponge " + bulkheadWaveIndex + "/" + bulkheadWaveAnchors.size()
+                    + " placed at " + anchor.getX() + "," + anchor.getY() + "," + anchor.getZ()
+                    + " for " + BuilderNpcService.baseNameOf(npc));
+            bulkheadWaveStepTicks = BULKHEAD_WAVE_TICKS_PER_STEP;
+            if (bulkheadWaveIndex == bulkheadWaveAnchors.size()) {
+                bulkheadTicks = BULKHEAD_SETTLE_TICKS;
+            }
+            return;
+        }
+        bulkheadTicks--;
+        if (bulkheadTicks > 0) {
+            return;
+        }
+        clearBulkheadPlugs();
+        logger.info("[quarryman] Bulkhead: unplugged, resuming for " + BuilderNpcService.baseNameOf(npc));
+        bulkheadWaveAnchors.clear();
+        bulkheadWaveIndex = 0;
+        phase = Phase.SEEKING;
+        hesitationTicks = HelperTempo.hesitationTicksForDuty(levelService.dutyCycleOf(npc));
+        if (carriedTotal >= CARRY_CAPACITY) {
+            startHauling();
+        }
+    }
+
+    /** Clears any Bulkhead plug blocks back to air — shared by every teardown path so none of them can strand one. */
+    private void clearBulkheadPlugs() {
+        for (Block plug : bulkheadPlugs) {
+            plug.setType(Material.AIR);
+        }
+        bulkheadPlugs.clear();
+    }
+
+    /**
+     * Phase D face-lighting. {@code cell} is freshly dug (just set to air) and already
+     * confirmed no fluid breach — checked for real darkness (see
+     * {@link #TORCH_LIGHT_THRESHOLD}) and, if dark, lit with a real, chest-withdrawn torch
+     * (see {@link #TORCH_MATERIAL}'s own doc for why this one isn't free like a Bulkhead
+     * plug). Prefers a wall torch on whichever adjacent solid face it finds first — a
+     * quarry staircase always has at least one solid wall immediately beside the walking
+     * path, by {@link #buildDigOrder}'s own shape — falling back to a standing torch on
+     * the floor below if none turns up (a genuinely open, multi-cell-wide gap). Does
+     * nothing, silently, if storage is missing or simply out of torches — lighting is a
+     * quality improvement, never a reason to block the dig.
+     */
+    private void placeFaceTorch(Block cell) {
+        if (storage == null || cell.getLightLevel() > TORCH_LIGHT_THRESHOLD) {
+            return;
+        }
+        for (BlockFace face : HORIZONTAL_FACES) {
+            Block wall = cell.getRelative(face);
+            if (wall.getType().isSolid()) {
+                if (storage.withdraw(TORCH_MATERIAL, 1) < 1) {
+                    return;
+                }
+                cell.setType(WALL_TORCH_MATERIAL);
+                if (cell.getBlockData() instanceof Directional directional) {
+                    directional.setFacing(face.getOppositeFace());
+                    cell.setBlockData(directional);
+                }
+                return;
+            }
+        }
+        Block below = cell.getRelative(BlockFace.DOWN);
+        if (below.getType().isSolid()) {
+            if (storage.withdraw(TORCH_MATERIAL, 1) < 1) {
+                return;
+            }
+            cell.setType(TORCH_MATERIAL);
         }
     }
 
@@ -1018,6 +1514,9 @@ public final class QuarrymanJobTask implements JobTask {
         }
         npc.getNavigator().cancelNavigation();
         releaseChunkTickets();
+        clearBulkheadPlugs();
+        bulkheadWaveAnchors.clear();
+        bulkheadWaveIndex = 0;
         label.remove();
         if (equipment != null) {
             equipment.setItemInMainHand(null);
@@ -1047,6 +1546,9 @@ public final class QuarrymanJobTask implements JobTask {
         state.deposited = deposited;
         for (var entry : carried.entrySet()) {
             state.carried.put(entry.getKey().name(), entry.getValue());
+        }
+        for (Block plug : bulkheadPlugs) {
+            state.bulkheadPlugs.add(JobStorage.encodeBlock(plug));
         }
         if (storage != null) {
             for (Block block : storage.chests()) {

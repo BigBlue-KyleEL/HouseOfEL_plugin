@@ -33,14 +33,19 @@ Two local server folders exist outside this repo:
 - `D:\Projects\House of EL\Local Dev Server 26.1.2` — **active**, matches this repo's current target
 - `D:\Projects\House of EL\Local Dev Server` — 26.2, superseded, not in sync with current builds
 
-To test a build: copy the jar(s) from `build/libs/` into `Local Dev Server 26.1.2\plugins\`, then boot with:
+To test a build: copy the jar(s) from `build/libs/` into `Local Dev Server 26.1.2\plugins\`, then boot with (PowerShell):
 ```
 cd "D:\Projects\House of EL\Local Dev Server 26.1.2"
 & 'C:\Program Files\Eclipse Adoptium\jdk-25.0.4.7-hotspot\bin\java.exe' -jar paper-26.1.2-74.jar --nogui
 ```
+or, if the terminal is cmd.exe (not PowerShell — the `&`/single-quote syntax above is PowerShell-only and fails with "The filename, directory name, or volume label syntax is incorrect" under cmd.exe, confirmed 2026-08-24):
+```
+cd /d "D:\Projects\House of EL\Local Dev Server 26.1.2"
+"C:\Program Files\Eclipse Adoptium\jdk-25.0.4.7-hotspot\bin\java.exe" -jar paper-26.1.2-74.jar --nogui
+```
 Requires JDK 25 specifically (installed alongside the system's existing Java 21 — don't assume `java` on PATH resolves to 25).
 
-To restart a server started in an earlier session (no stdin/console handle, `enable-rcon=false` in `server.properties`): `taskkill /PID <pid>` (no `/F`) rather than a console `stop` command. It reliably ends the process but does NOT reliably log a clean "Saving worlds"/"Server stopped" shutdown sequence first — confirmed 2026-08-20 (log just stopped mid-stream). Verify no data was at risk by checking the region file mtimes under `world/dimensions/minecraft/overworld/region/` — Bukkit already autosaves on last-player-leave, so as long as nothing was actively mutating world state after that (no players, no NPC jobs running), the on-disk state matches the last regular autosave regardless of how the shutdown itself went.
+**Since 2026-08-24, Kyle often runs the dev server himself** in his own terminal window (real console access, so a plain `stop` command or Ctrl+C works and shuts down cleanly — no more of the taskkill gotcha below in that case). When Claude Code needs to restart a server it started itself: `taskkill /PID <pid>` (no `/F`) is what CLAUDE.md previously recommended, but confirmed live 2026-08-24 that it doesn't reliably work at all any more — it errored "can only be terminated forcefully" on two separate occasions the same session, requiring `/F` immediately after. Try the plain form first (still theoretically the cleaner path when it works), but don't be surprised if it fails and `/F` is required — don't loop retrying the plain form. Either way, it does NOT reliably log a clean "Saving worlds"/"Server stopped" shutdown sequence first — confirmed 2026-08-20 (log just stopped mid-stream). Verify no data was at risk by checking the region file mtimes under `world/dimensions/minecraft/overworld/region/` — Bukkit already autosaves on last-player-leave, so as long as nothing was actively mutating world state after that (no players, no NPC jobs running), the on-disk state matches the last regular autosave regardless of how the shutdown itself went. Before restarting at all: check `logs/latest.log` for recent join/leave activity — don't interrupt a session Kyle is actively testing in without at least a heads-up.
 
 ## Code conventions
 

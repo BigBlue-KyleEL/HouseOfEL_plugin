@@ -204,6 +204,45 @@ public final class JobStorage {
         return remaining;
     }
 
+    /**
+     * Pulls up to {@code amount} of {@code material} out of whatever chests exist — never
+     * builds new storage the way {@link #deposit} does, since a withdrawal with nothing to
+     * withdraw isn't a capacity problem. Returns how many were actually available and
+     * removed, which may be less than requested (or zero) — callers decide what "not
+     * enough material" means for them (Rule 11: a real, chest-sourced cost for anything
+     * placed permanently, unlike a self-clearing Bulkhead plug). First symmetric
+     * counterpart to {@link #deposit} this class has ever needed.
+     */
+    public int withdraw(Material material, int amount) {
+        int remaining = amount;
+        for (Block chestBlock : chests) {
+            if (remaining <= 0) {
+                break;
+            }
+            if (chestBlock.getState() instanceof Chest chest) {
+                remaining -= removeUpTo(chest.getInventory(), material, remaining);
+            }
+        }
+        return amount - remaining;
+    }
+
+    private int removeUpTo(Inventory inventory, Material material, int amount) {
+        int removed = 0;
+        ItemStack[] contents = inventory.getStorageContents();
+        for (int i = 0; i < contents.length && removed < amount; i++) {
+            ItemStack stack = contents[i];
+            if (stack == null || stack.getType() != material) {
+                continue;
+            }
+            int take = Math.min(stack.getAmount(), amount - removed);
+            stack.setAmount(stack.getAmount() - take);
+            contents[i] = stack.getAmount() <= 0 ? null : stack;
+            removed += take;
+        }
+        inventory.setStorageContents(contents);
+        return removed;
+    }
+
     private Map<Material, Integer> addAll(Inventory inventory, Map<Material, Integer> items) {
         Map<Material, Integer> leftover = new HashMap<>();
         for (Map.Entry<Material, Integer> entry : items.entrySet()) {

@@ -39,6 +39,9 @@ final class JobStateStore {
         for (var entry : state.carried.entrySet()) {
             yaml.set("carried." + entry.getKey(), entry.getValue());
         }
+        // Shared between both job types since Quarryman's own Phase D fluid-handling
+        // reuses Bulkhead's plug/sponge mechanism, not Clear-only any more.
+        yaml.set("bulkheadPlugs", state.bulkheadPlugs);
         if (state.jobType == JobType.CLEAR) {
             yaml.set("minY", state.minY);
             yaml.set("maxY", state.maxY);
@@ -49,7 +52,6 @@ final class JobStateStore {
             yaml.set("skippedThisPass", state.skippedThisPass);
             yaml.set("skippedNoPath", state.skippedNoPath);
             yaml.set("skippedTimeout", state.skippedTimeout);
-            yaml.set("bulkheadPlugs", state.bulkheadPlugs);
         } else if (state.jobType == JobType.QUARRY) {
             yaml.set("topY", state.topY);
             yaml.set("requestedDepth", state.requestedDepth);
@@ -118,6 +120,7 @@ final class JobStateStore {
                     state.carried.put(key, yaml.getInt("carried." + key));
                 }
             }
+            state.bulkheadPlugs = yaml.getStringList("bulkheadPlugs");
             if (state.jobType == JobType.CLEAR) {
                 state.minY = yaml.getInt("minY");
                 state.maxY = yaml.getInt("maxY");
@@ -128,7 +131,6 @@ final class JobStateStore {
                 state.skippedThisPass = yaml.getLong("skippedThisPass");
                 state.skippedNoPath = yaml.getLong("skippedNoPath");
                 state.skippedTimeout = yaml.getLong("skippedTimeout");
-                state.bulkheadPlugs = yaml.getStringList("bulkheadPlugs");
             } else if (state.jobType == JobType.QUARRY) {
                 state.topY = yaml.getInt("topY");
                 state.requestedDepth = yaml.getInt("requestedDepth");
