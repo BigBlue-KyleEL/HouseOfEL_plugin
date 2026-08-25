@@ -163,6 +163,22 @@ public final class QuarrymanJobTask implements JobTask {
      */
     private static final int RECONCILE_CHECK_PERIOD_TICKS = 20 * 5;
     private static final int CARRY_CAPACITY = 4 * 64;
+    /**
+     * TEMPORARY, FOR TESTING ONLY — divides every dig duration and post-dig hesitation so a
+     * multi-hundred-cell quarry finishes fast enough to actually watch end to end. **Must
+     * be set back to 1 before Phase D is called done**, same standing rule the three
+     * earlier testing knobs followed (GROUNDWORKER_TICKET_BLOCKS 512-to-8,
+     * VarietyTracker's window, ToilPipeline's daily cap — all explicitly confirmed
+     * reverted in the Development Timeline before their own item was closed).
+     *
+     * <p>Deliberately does NOT touch {@link #WALK_SPEED_MODIFIER}: walking speed is itself
+     * implicated in the behavior under test (see this class doc — running fast across
+     * consecutive 1-block steps is what carried the Helper past a step edge and below
+     * grade in the first place), so inflating it would distort the exact pathing this
+     * testing pass exists to verify. Only the standing-still parts are sped up; every
+     * walk still happens at real speed.
+     */
+    private static final int TEST_SPEED_MULTIPLIER = 5;
 
     /**
      * Phase D — "it handles fluid... at scale" ([[V1 Perk Ladders]]'s own words for the
@@ -1118,7 +1134,10 @@ public final class QuarrymanJobTask implements JobTask {
     private int digTicksForPendingCell() {
         int vanillaTicks = VanillaTiming.durationFor(
                 TaskType.QUARRY, new ItemStack(currentTool), pendingCell.getBlockData());
-        return HelperTempo.digTicksFor(levelService.levelOf(npc), vanillaTicks);
+        int realTicks = HelperTempo.digTicksFor(levelService.levelOf(npc), vanillaTicks);
+        // Floor at 1 — a 0-tick dig would complete in the same tick it started, skipping
+        // the swing/particle cadence entirely and making the test look nothing like a real dig.
+        return Math.max(1, realTicks / TEST_SPEED_MULTIPLIER);
     }
 
     private void digPendingCell() {
@@ -1164,7 +1183,7 @@ public final class QuarrymanJobTask implements JobTask {
             placeFaceTorch(pendingCell);
         }
 
-        hesitationTicks = HelperTempo.hesitationTicksForDuty(levelService.dutyCycleOf(npc));
+        hesitationTicks = HelperTempo.hesitationTicksForDuty(levelService.dutyCycleOf(npc)) / TEST_SPEED_MULTIPLIER;
 
         if (carriedTotal >= CARRY_CAPACITY) {
             startHauling();
@@ -1323,7 +1342,7 @@ public final class QuarrymanJobTask implements JobTask {
         bulkheadWaveAnchors.clear();
         bulkheadWaveIndex = 0;
         phase = Phase.SEEKING;
-        hesitationTicks = HelperTempo.hesitationTicksForDuty(levelService.dutyCycleOf(npc));
+        hesitationTicks = HelperTempo.hesitationTicksForDuty(levelService.dutyCycleOf(npc)) / TEST_SPEED_MULTIPLIER;
         if (carriedTotal >= CARRY_CAPACITY) {
             startHauling();
         }
