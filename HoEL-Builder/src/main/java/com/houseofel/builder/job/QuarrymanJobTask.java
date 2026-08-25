@@ -53,9 +53,12 @@ import java.util.logging.Logger;
  * see {@link #buildDigOrder} — Kyle's own redesign, 2026-08-20, replacing an earlier
  * two-fixed-bench-plus-ramp shape that turned out both more complex and less correct)
  * rather than a general player-marked volume, so both the dig order and the fact that
- * every reachable cell really is reachable are known up front — none of
- * {@link ClearJobTask}'s general-purpose stuck-recovery machinery (GhostDig,
- * scaffold-climb, the straight-line fallback) is needed here.
+ * every reachable cell really is reachable are known up front — so
+ * {@link ClearJobTask}'s scaffold-climb and straight-line fallback are not needed here.
+ * <b>Its GhostDig is, though</b> (added 2026-08-25): "reachable by construction" turned
+ * out to describe the geometry, not Citizens' willingness to path through it, and the gap
+ * between those two cost several aborted jobs before this was accepted — see
+ * {@link #GHOST_DIG_NO_PROGRESS_TICKS}.
  *
  * <p>Registered with {@link JobManager} like {@link ClearJobTask}, via the shared
  * {@link JobTask} interface — real pause/resume, the shared concurrency ceiling, and
@@ -144,6 +147,24 @@ public final class QuarrymanJobTask implements JobTask {
     /** Same tuning as {@code ClearJobTask}'s own proven {@code PROGRESS_EPSILON}. */
     private static final double PROGRESS_EPSILON = 0.05;
     /**
+     * How long after the stuck-recovery teleport has ALREADY fired, and still nothing is
+     * closing the distance, before the Helper gives up on walking and just digs the cell
+     * from wherever it stands ({@code GhostDig}).
+     *
+     * <p>This class's doc used to claim GhostDig was unnecessary here because the fixed
+     * geometry made every cell reachable by construction. That claim is simply false in
+     * practice and has now cost several aborted jobs: Citizens routinely reports
+     * {@code navigating=false} for cells a player would call trivially reachable — real
+     * example, 2026-08-25, target 30,51,8 from 29,52,2, one block over and six along, with
+     * the job aborting rather than digging it. Reaching a block and pathing to a block are
+     * different problems, and only the first one actually matters for getting the work
+     * done. Same reasoning (and the same name) as {@code ClearJobTask}'s own long-standing
+     * GhostDig fallback, whose original spec in Kyle's words was "unbounded [reach]... once
+     * it has genuinely tried twice" — the two tries here being the ordinary walk and the
+     * recovery teleport.
+     */
+    private static final int GHOST_DIG_NO_PROGRESS_TICKS = STUCK_RECOVERY_NO_PROGRESS_TICKS * 2;
+    /**
      * Grace period before the post-dig reconciliation scan (see {@link #seekNextCell})
      * actually looks for gravity blocks — a settling window, not a real wait for
      * anything specific: by the time the main dig order empties, most falls have long
@@ -213,7 +234,7 @@ public final class QuarrymanJobTask implements JobTask {
         BlockFace.UP, BlockFace.DOWN, BlockFace.NORTH, BlockFace.SOUTH, BlockFace.EAST, BlockFace.WEST,
     };
     /**
-     * Horizontal-only faces — for finding a standing spot at a block'''s own level (see
+     * Horizontal-only faces — for finding a standing spot at a block's own level (see
      * {@link #safeStandingBeside}, {@link #safeSpotBeside}). Distinct from
      * {@link #ADJACENT_FACES}, which includes UP/DOWN for the fluid flood-fills.
      */
@@ -538,7 +559,7 @@ public final class QuarrymanJobTask implements JobTask {
      * <p><b>Sweep direction along the stepping axis follows {@code stepDirection}</b>
      * (fixed 2026-08-25): the loop used to always run ascending regardless of which way the
      * staircase actually slid, so which end of each layer got dug first silently flipped
-     * with the sign of the player'''s own click. Confirmed live — a dig clicked
+     * with the sign of the player's own click. Confirmed live — a dig clicked
      * A(20,61,0)-to-B(13,61,-6) gives {@code stepDirection = -1}, which meant every layer
      * STARTED at its leading edge: the one row with untouched rock above it and no
      * already-cleared neighbour at that level to stand beside, forcing the Helper to
@@ -867,7 +888,7 @@ public final class QuarrymanJobTask implements JobTask {
     }
 
     /**
-     * A confirmed-safe standing spot at the cell'''s OWN level, immediately beside it —
+     * A confirmed-safe standing spot at the cell's OWN level, immediately beside it —
      * feet in an already-cleared neighbour, head in the space the layer above already
      * opened, standing on the not-yet-dug layer below. This is how a player would actually
      * mine a block: step next to it and swing sideways, not climb on top of it.
@@ -1077,6 +1098,21 @@ public final class QuarrymanJobTask implements JobTask {
             noProgressTicks = 0;
             closestApproachSquared = Double.MAX_VALUE;
             npc.getNavigator().setTarget(navigationTargetFor(pendingCell));
+            return;
+        }
+
+        // GhostDig — the recovery teleport already fired and the distance is STILL not
+        // closing, so stop treating "can't path there" as "can't do the work" and just dig
+        // it from here. Deliberately unbounded in distance, matching ClearJobTask's own
+        // GhostDig precedent: a cell that cannot be walked to is exactly the cell that most
+        // needs this, and bounding it would reintroduce the abort this exists to prevent.
+        if (recoveryAttempted && noProgressTicks > GHOST_DIG_NO_PROGRESS_TICKS) {
+            logger.info(BuilderNpcService.baseNameOf(npc) + ": can't find a path to "
+                    + pendingCell.getX() + "," + pendingCell.getY() + "," + pendingCell.getZ()
+                    + " from " + current.getBlockX() + "," + current.getBlockY() + "," + current.getBlockZ()
+                    + " — digging it from here instead.");
+            npc.getNavigator().cancelNavigation();
+            beginDigging();
             return;
         }
 
@@ -1544,7 +1580,7 @@ public final class QuarrymanJobTask implements JobTask {
      * Starts a delivery: walk over, face the chest, swing the lid open, and HOLD for
      * {@link #UNLOAD_HOLD_TICKS} before anything actually moves. Splitting this into
      * open-hold-transfer-close (rather than the original single instantaneous call) is
-     * Kyle'''s 2026-08-25 request — the point is that a player watching can see which chest
+     * Kyle's 2026-08-25 request — the point is that a player watching can see which chest
      * of the storage cube is being used, and see that a delivery is happening at all.
      * {@link #finishUnload} does the real work once the hold elapses.
      */
@@ -1583,7 +1619,7 @@ public final class QuarrymanJobTask implements JobTask {
 
         if (!leftover.isEmpty()) {
             messagePlayer(Component.text(
-                    "Storage is full and there'''s no room to expand — " + BuilderNpcService.baseNameOf(npc)
+                    "Storage is full and there's no room to expand — " + BuilderNpcService.baseNameOf(npc)
                             + " is dropping the rest.", NamedTextColor.RED));
             carried.clear();
             carriedTotal = 0;
@@ -1621,7 +1657,7 @@ public final class QuarrymanJobTask implements JobTask {
         }
     }
 
-    /** Mentions tidy-up blocks that couldn'''t be reached, so a clean finish stays honest without sounding like a failure. */
+    /** Mentions tidy-up blocks that couldn't be reached, so a clean finish stays honest without sounding like a failure. */
     private String leftoverSuffix() {
         return unreachableCleanupCells == 0 ? ""
                 : " (" + unreachableCleanupCells + " block(s) settled back in somewhere I couldn't climb to.)";
