@@ -98,7 +98,7 @@ import java.util.logging.Logger;
  *
  * <p>That per-step guarantee covers the intended path, not real movement physics or
  * Citizens' own pathing choices. Two distinct failures confirmed live 2026-08-20: walking
- * fast ({@link #WALK_SPEED_MODIFIER}) across several consecutive 1-block steps in one
+ * fast ({@link HelperTempo#walkSpeedFor}) across several consecutive 1-block steps in one
  * continuous walk can carry the Helper past more than one step's edge before gravity
  * catches up, landing it below grade instead of cleanly stepping down (Kyle: falls while
  * running, then "jumps up and down beside the stairs" instead of climbing back); separately,
@@ -128,7 +128,6 @@ import java.util.logging.Logger;
 public final class QuarrymanJobTask implements JobTask {
 
     private static final double REACH_DISTANCE = 5.5;
-    private static final float WALK_SPEED_MODIFIER = 1.3f;
     private static final float PATHFINDING_RANGE = 100.0f;
     private static final int MAX_TOLERATED_FALL = 3;
     /**
@@ -234,7 +233,7 @@ public final class QuarrymanJobTask implements JobTask {
      * VarietyTracker's window, ToilPipeline's daily cap — all explicitly confirmed
      * reverted in the Development Timeline before their own item was closed).
      *
-     * <p>Deliberately does NOT touch {@link #WALK_SPEED_MODIFIER}: walking speed is itself
+     * <p>Deliberately does NOT touch {@link HelperTempo#walkSpeedFor}: walking speed is itself
      * implicated in the behavior under test (see this class doc — running fast across
      * consecutive 1-block steps is what carried the Helper past a step edge and below
      * grade in the first place), so inflating it would distort the exact pathing this
@@ -676,7 +675,7 @@ public final class QuarrymanJobTask implements JobTask {
     @Override
     public void start() {
         npc.getNavigator().getDefaultParameters()
-                .speedModifier(WALK_SPEED_MODIFIER)
+                .speedModifier(HelperTempo.walkSpeedFor(levelService.levelOf(npc)))
                 .range(PATHFINDING_RANGE)
                 .fallDistance(MAX_TOLERATED_FALL)
                 .stuckAction(SafeStuckAction.INSTANCE);

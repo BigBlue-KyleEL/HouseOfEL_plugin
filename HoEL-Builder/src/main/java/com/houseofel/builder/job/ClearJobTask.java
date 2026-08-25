@@ -80,7 +80,6 @@ public final class ClearJobTask implements JobTask {
      * Movement speed while working. Vanilla sprinting is ~5.6 blocks/sec against
      * ~4.3 walking, so ~1.3x reads as a player jogging between blocks.
      */
-    private static final float WALK_SPEED_MODIFIER = 1.3f;
     /** Pathfinding range in blocks. Citizens defaults to 25 and caps at 100. */
     private static final float PATHFINDING_RANGE = 100.0f;
     /**
@@ -640,7 +639,7 @@ public final class ClearJobTask implements JobTask {
         // unconfirmed-solid ground when it can't find any nearby — see SafeStuckAction's
         // own doc comment for why that's a real, confirmed hazard on irregular terrain.
         npc.getNavigator().getDefaultParameters()
-                .speedModifier(WALK_SPEED_MODIFIER)
+                .speedModifier(HelperTempo.walkSpeedFor(levelService.levelOf(npc)))
                 .range(PATHFINDING_RANGE)
                 .fallDistance(MAX_TOLERATED_FALL)
                 .stuckAction(SafeStuckAction.INSTANCE);
