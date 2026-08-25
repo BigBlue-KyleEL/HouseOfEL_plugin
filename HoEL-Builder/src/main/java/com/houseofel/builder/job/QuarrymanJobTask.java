@@ -226,21 +226,37 @@ public final class QuarrymanJobTask implements JobTask {
      */
     private static final int RETURN_WALK_TIMEOUT_TICKS = 20 * 15;
     /**
-     * TEMPORARY, FOR TESTING ONLY — divides every dig duration and post-dig hesitation so a
-     * multi-hundred-cell quarry finishes fast enough to actually watch end to end. **Must
-     * be set back to 1 before Phase D is called done**, same standing rule the three
-     * earlier testing knobs followed (GROUNDWORKER_TICKET_BLOCKS 512-to-8,
-     * VarietyTracker's window, ToilPipeline's daily cap — all explicitly confirmed
-     * reverted in the Development Timeline before their own item was closed).
+     * THIRD DELIBERATE DEVIATION FROM THE FRAMEWORK, Kyle's explicit call 2026-08-25 —
+     * and the most pointed of the three, so read the whole note before touching it.
      *
-     * <p>Deliberately does NOT touch {@link HelperTempo#walkSpeedFor}: walking speed is itself
-     * implicated in the behavior under test (see this class doc — running fast across
-     * consecutive 1-block steps is what carried the Helper past a step edge and below
-     * grade in the first place), so inflating it would distort the exact pathing this
-     * testing pass exists to verify. Only the standing-still parts are sped up; every
-     * walk still happens at real speed.
+     * <p>A Quarryman digs and dithers {@code 5x} faster than {@link HelperTempo}'s own
+     * level curve already allows. This directly contradicts Quarryman's OWN published
+     * balance clause in {@code V1 Perk Ladders}: "Equal-value fork. Depth in exchange for
+     * surface skill: a Quarryman leaves a box, and boxes are ugly. <b>It breaks blocks at
+     * exactly the tool's vanilla rate.</b>" Not a general framework rule being bent — the
+     * specific balancing sentence written for this specific perk.
+     *
+     * <p>It began life as a temporary testing knob so a multi-hundred-cell quarry could be
+     * watched end to end, then Kyle live-tested the resulting pace (L9 Horace and L20
+     * Bartholomew), judged it correct on its own terms — "actually normal, not even that
+     * fast" — and chose to keep it rather than let the codebase carry a "temporary" flag
+     * that quietly never leaves. Made permanent and named honestly instead.
+     *
+     * <p>Divides two things: the per-block dig duration, and the post-dig hesitation.
+     * The second is worth calling out separately — hesitation is the framework's own
+     * SANCTIONED throughput lever (duty cycle, "a specific nameable stupidity being
+     * removed"), so compressing it distorts a compliant mechanism rather than an
+     * already-deviant one.
+     *
+     * <p>Scope is Quarryman only. {@code ClearJobTask} still digs at the plain
+     * {@link HelperTempo} rate, so the same Groundworker digs faster when quarrying than
+     * when clearing. Defensible on the perk's own terms (Quarryman is the volume-and-depth
+     * specialisation — "a machine that eats a hill"), but it IS an inconsistency, and
+     * aligning the two is a one-line change in either direction if it ever grates.
+     *
+     * <p>Reverting to compliance is one edit: set this to 1.
      */
-    private static final int TEST_SPEED_MULTIPLIER = 5;
+    private static final int QUARRY_PACE_MULTIPLIER = 5;
 
     /**
      * Phase D — "it handles fluid... at scale" ([[V1 Perk Ladders]]'s own words for the
@@ -1289,7 +1305,7 @@ public final class QuarrymanJobTask implements JobTask {
         int realTicks = HelperTempo.digTicksFor(levelService.levelOf(npc), vanillaTicks);
         // Floor at 1 — a 0-tick dig would complete in the same tick it started, skipping
         // the swing/particle cadence entirely and making the test look nothing like a real dig.
-        return Math.max(1, realTicks / TEST_SPEED_MULTIPLIER);
+        return Math.max(1, realTicks / QUARRY_PACE_MULTIPLIER);
     }
 
     private void digPendingCell() {
@@ -1332,7 +1348,7 @@ public final class QuarrymanJobTask implements JobTask {
             return;
         }
 
-        hesitationTicks = HelperTempo.hesitationTicksForDuty(levelService.dutyCycleOf(npc)) / TEST_SPEED_MULTIPLIER;
+        hesitationTicks = HelperTempo.hesitationTicksForDuty(levelService.dutyCycleOf(npc)) / QUARRY_PACE_MULTIPLIER;
 
         if (carriedTotal >= CARRY_CAPACITY) {
             startHauling();
@@ -1491,7 +1507,7 @@ public final class QuarrymanJobTask implements JobTask {
         bulkheadWaveAnchors.clear();
         bulkheadWaveIndex = 0;
         phase = Phase.SEEKING;
-        hesitationTicks = HelperTempo.hesitationTicksForDuty(levelService.dutyCycleOf(npc)) / TEST_SPEED_MULTIPLIER;
+        hesitationTicks = HelperTempo.hesitationTicksForDuty(levelService.dutyCycleOf(npc)) / QUARRY_PACE_MULTIPLIER;
         if (carriedTotal >= CARRY_CAPACITY) {
             startHauling();
         }
