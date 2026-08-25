@@ -75,6 +75,34 @@ public final class HelperTempo {
      *
      * <p>Reverting is one edit, same as the dig deviation: return 1.3 at every level.
      */
+    /**
+     * THIRD DELIBERATE DEVIATION FROM THE FRAMEWORK, Kyle's call 2026-08-25 — and the most
+     * pointed of the three, so read this before touching it.
+     *
+     * <p>Every Helper works {@code 5x} faster than the level curve below would otherwise
+     * allow: it divides BOTH the per-block dig duration and the between-block hesitation.
+     * It began as a Quarryman-only testing knob so a multi-hundred-cell quarry could be
+     * watched end to end; Kyle live-tested the resulting pace (L9 Horace, L20 Bartholomew),
+     * judged it correct on its own terms, and made it permanent rather than let the
+     * codebase carry a "temporary" flag that never leaves. Promoted from Quarryman-only to
+     * every job type on 2026-08-25, when Clearing at the un-multiplied rate read as
+     * "really slow even for Bartholomew at Lvl 20" — the same Groundworker digging at two
+     * different speeds depending on the job was the actual bug.
+     *
+     * <p>What it contradicts, specifically: Quarryman's own balance clause in
+     * {@code V1 Perk Ladders} ("It breaks blocks at exactly the tool's vanilla rate"), and
+     * — via the hesitation half — the framework's SANCTIONED duty-cycle lever, which is a
+     * compliant mechanism being distorted rather than an already-deviant one.
+     *
+     * <p>Side effect worth knowing: at 5x, dig time is pinned near the 1-tick floor from
+     * L1 upward (stone is ~2 ticks at L1 and 1 tick by L7), so dig speed no longer
+     * expresses levelling at all. {@link #walkSpeedFor} is what carries visible
+     * progression now — see its own note.
+     *
+     * <p>Reverting to compliance is one edit: set this to 1.
+     */
+    private static final double WORK_PACE_MULTIPLIER = 5.0;
+
     private static final double WALK_SPEED_AT_L1 = 1.0;
     private static final double WALK_SPEED_AT_L20 = 1.8;
 
@@ -121,12 +149,13 @@ public final class HelperTempo {
      * {@code HelperLevelService.dutyCycleOf}).
      */
     public static int hesitationTicksForDuty(double duty) {
-        return (int) Math.round(NOMINAL_WORK_TICKS * (1.0 - duty) / duty);
+        double raw = NOMINAL_WORK_TICKS * (1.0 - duty) / duty;
+        return Math.max(0, (int) Math.round(raw / WORK_PACE_MULTIPLIER));
     }
 
     /** Ticks to break a block at this level — see {@link #VETERAN_DIG_DIVISOR} for the deviation note. */
     public static int digTicksFor(int level, int vanillaTicks) {
-        return Math.max(1, (int) Math.round(vanillaTicks / digDivisorFor(level)));
+        return Math.max(1, (int) Math.round(vanillaTicks / (digDivisorFor(level) * WORK_PACE_MULTIPLIER)));
     }
 
     private static double digDivisorFor(int level) {
