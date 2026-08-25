@@ -19,6 +19,7 @@ import org.bukkit.Sound;
 import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
+import org.bukkit.block.Lidded;
 import org.bukkit.block.data.Levelled;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
@@ -163,6 +164,15 @@ public final class QuarrymanJobTask implements JobTask {
     private static final int RECONCILE_CHECK_PERIOD_TICKS = 20 * 5;
     private static final int CARRY_CAPACITY = 4 * 64;
     /**
+     * How long the Helper stands at the chest with its lid open before the items actually
+     * move across (Kyle, 2026-08-25). The transfer itself is instantaneous, so without a
+     * deliberate hold there is nothing for a player to see: no way to tell which chest of a
+     * growing storage cube is actually being used, or even that a delivery happened. Four
+     * seconds is long enough to notice from a distance and follow the lid animation, short
+     * enough not to bottleneck a job that hauls repeatedly.
+     */
+    private static final int UNLOAD_HOLD_TICKS = 20 * 4;
+    /**
      * TEMPORARY, FOR TESTING ONLY — divides every dig duration and post-dig hesitation so a
      * multi-hundred-cell quarry finishes fast enough to actually watch end to end. **Must
      * be set back to 1 before Phase D is called done**, same standing rule the three
@@ -218,7 +228,7 @@ public final class QuarrymanJobTask implements JobTask {
     private static final double MOB_ALERT_RADIUS = 10.0;
     private static final int MOB_ALERT_CHECK_PERIOD = GLOW_TICK_PERIOD;
 
-    private enum Phase { SEEKING, WALKING, DIGGING, HAULING, BULKHEAD }
+    private enum Phase { SEEKING, WALKING, DIGGING, HAULING, BULKHEAD, DEPOSITING }
 
     private final Plugin plugin;
     private final Logger logger;
@@ -278,6 +288,16 @@ public final class QuarrymanJobTask implements JobTask {
     private int noProgressTicks;
     /** One attempt per walk at the stuck-recovery teleport — see its own use in {@link #walkToPendingCell}. */
     private boolean recoveryAttempted;
+    /**
+     * True when {@code pendingCell} came from a reconciliation pass (periodic or
+     * end-of-job) rather than the main dig order. Those are best-effort tidy-ups of blocks
+     * that resettled AFTER the real excavation already passed through, so failing to reach
+     * one must not kill the whole job — see the walk-timeout branch in
+     * {@link #walkToPendingCell}.
+     */
+    private boolean pendingIsCleanup;
+    /** Cleanup cells given up on as unreachable — reported in the finish summary. */
+    private int unreachableCleanupCells;
     private double closestApproachSquared;
     private int digTicks;
     /**
@@ -292,6 +312,10 @@ public final class QuarrymanJobTask implements JobTask {
      * null.
      */
     private Location lastSafeLocation;
+
+    /** Chest whose lid is currently held open for a delivery — closed again by finishUnload()/endJob(). */
+    private Block openChest;
+    private int unloadTicks;
 
     /** Fluid source blocks currently plugged, awaiting {@link #tickBulkhead}'s settle timer — see {@code ClearJobTask}'s own field. */
     private final List<Block> bulkheadPlugs = new ArrayList<>();
@@ -688,6 +712,7 @@ public final class QuarrymanJobTask implements JobTask {
                 case DIGGING -> digPendingCell();
                 case HAULING -> haulToChest();
                 case BULKHEAD -> tickBulkhead();
+                case DEPOSITING -> tickUnload();
             }
         }
 
@@ -765,6 +790,7 @@ public final class QuarrymanJobTask implements JobTask {
                 return;
             }
             pendingCell = reconciled0;
+            pendingIsCleanup = true;
             walkTicks = 0;
             retriedWalk = false;
             noProgressTicks = 0;
@@ -794,7 +820,7 @@ public final class QuarrymanJobTask implements JobTask {
                     startHauling();
                 } else {
                     finish(BuilderNpcService.baseNameOf(npc) + ": Quarry's done — " + clearedCells
-                            + " block(s) dug." + storedSuffix());
+                            + " block(s) dug." + storedSuffix() + leftoverSuffix());
                 }
                 return;
             }
@@ -802,6 +828,9 @@ public final class QuarrymanJobTask implements JobTask {
         } while (!Target.ANY_EARTH.matches(candidate.getType()));
 
         pendingCell = candidate;
+        // `reconciled` flips true the moment the end-of-job pass queues its findings, so
+        // anything dequeued from here on is a tidy-up, not real excavation.
+        pendingIsCleanup = reconciled;
         walkTicks = 0;
         retriedWalk = false;
         noProgressTicks = 0;
@@ -1061,6 +1090,21 @@ public final class QuarrymanJobTask implements JobTask {
                     + current.getBlockX() + "," + current.getBlockY() + "," + current.getBlockZ()
                     + " to " + pendingCell.getX() + "," + pendingCell.getY() + "," + pendingCell.getZ()
                     + ", navigating=" + npc.getNavigator().isNavigating());
+            if (pendingIsCleanup) {
+                // Best-effort tidy-up, not real excavation — the quarry itself is already
+                // finished by the time these run, and they can sit anywhere in the dig
+                // (confirmed live 2026-08-25: a completed 42-deep quarry ended on a scary
+                // "something's blocking my way" because the final pass sent the Helper from
+                // the pit floor at Y=21 back up to a resettled cell at Y=48, which Citizens
+                // cannot climb to). Skip it and carry on rather than failing the whole job
+                // over cosmetic leftovers.
+                unreachableCleanupCells++;
+                logger.info(BuilderNpcService.baseNameOf(npc) + ": couldn't get back to a resettled block at "
+                        + pendingCell.getX() + "," + pendingCell.getY() + "," + pendingCell.getZ()
+                        + " — leaving it and moving on.");
+                phase = Phase.SEEKING;
+                return;
+            }
             abortJob(BuilderNpcService.baseNameOf(npc) + ": Something's blocking my way to "
                     + pendingCell.getX() + "," + pendingCell.getY() + "," + pendingCell.getZ()
                     + " and I can't work around it — stopping here rather than getting stuck.");
@@ -1496,11 +1540,36 @@ public final class QuarrymanJobTask implements JobTask {
                 && feet.getRelative(BlockFace.DOWN).getType().isSolid();
     }
 
+    /**
+     * Starts a delivery: walk over, face the chest, swing the lid open, and HOLD for
+     * {@link #UNLOAD_HOLD_TICKS} before anything actually moves. Splitting this into
+     * open-hold-transfer-close (rather than the original single instantaneous call) is
+     * Kyle'''s 2026-08-25 request — the point is that a player watching can see which chest
+     * of the storage cube is being used, and see that a delivery is happening at all.
+     * {@link #finishUnload} does the real work once the hold elapses.
+     */
     private void unload() {
         npc.getNavigator().cancelNavigation();
         npc.faceLocation(depositPoint);
-        world.playSound(depositPoint, Sound.BLOCK_BARREL_OPEN, 0.7f, 1.0f);
+        openChestLid(depositPoint.getBlock());
+        unloadTicks = UNLOAD_HOLD_TICKS;
+        phase = Phase.DEPOSITING;
+    }
 
+    /** Holds the open lid for the delivery beat, with a slow particle trickle so it reads as work happening, not a freeze. */
+    private void tickUnload() {
+        if (unloadTicks % 10 == 0) {
+            world.spawnParticle(Particle.HAPPY_VILLAGER, depositPoint.clone().add(0, 0.6, 0),
+                    3, 0.25, 0.25, 0.25, 0.01);
+        }
+        unloadTicks--;
+        if (unloadTicks <= 0) {
+            finishUnload();
+        }
+    }
+
+    /** The actual transfer, once the visible hold has elapsed. */
+    private void finishUnload() {
         Map<Material, Integer> leftover = storage.deposit(carried);
         int stored = carriedTotal - leftover.values().stream().mapToInt(Integer::intValue).sum();
         deposited += stored;
@@ -1509,9 +1578,12 @@ public final class QuarrymanJobTask implements JobTask {
         carried.putAll(leftover);
         carriedTotal = leftover.values().stream().mapToInt(Integer::intValue).sum();
 
+        world.playSound(depositPoint, Sound.ENTITY_ITEM_PICKUP, 0.8f, 0.8f);
+        closeChestLid();
+
         if (!leftover.isEmpty()) {
             messagePlayer(Component.text(
-                    "Storage is full and there's no room to expand — " + BuilderNpcService.baseNameOf(npc)
+                    "Storage is full and there'''s no room to expand — " + BuilderNpcService.baseNameOf(npc)
                             + " is dropping the rest.", NamedTextColor.RED));
             carried.clear();
             carriedTotal = 0;
@@ -1520,9 +1592,39 @@ public final class QuarrymanJobTask implements JobTask {
         // Deliberately no early finish() here even if remainingCells is already empty —
         // phase = SEEKING either way, so seekNextCell() is the one and only place that
         // decides what "nothing left to do" means (reconciliation pass, then finish).
-        // Two separate finish paths would mean two separate reconciliation checks to keep
-        // in sync — this keeps it to one.
         phase = Phase.SEEKING;
+    }
+
+    /**
+     * Swings the real chest lid open via {@link Lidded}, so the animation and vanilla
+     * open sound are the genuine ones a player sees when they open a chest themselves —
+     * not a particle imitation. Guarded on the block still being a chest at all: storage
+     * is placed in the world and a player could always have broken it since.
+     */
+    private void openChestLid(Block chest) {
+        closeChestLid();
+        if (chest.getState() instanceof Lidded lidded) {
+            lidded.open();
+            openChest = chest;
+        }
+        world.playSound(depositPoint, Sound.BLOCK_CHEST_OPEN, 0.8f, 1.0f);
+    }
+
+    /** Closes whatever lid this job left open — shared by the normal path and every teardown, so a chest is never stranded open. */
+    private void closeChestLid() {
+        if (openChest != null) {
+            if (openChest.getState() instanceof Lidded lidded) {
+                lidded.close();
+            }
+            world.playSound(openChest.getLocation(), Sound.BLOCK_CHEST_CLOSE, 0.8f, 1.0f);
+            openChest = null;
+        }
+    }
+
+    /** Mentions tidy-up blocks that couldn'''t be reached, so a clean finish stays honest without sounding like a failure. */
+    private String leftoverSuffix() {
+        return unreachableCleanupCells == 0 ? ""
+                : " (" + unreachableCleanupCells + " block(s) settled back in somewhere I couldn't climb to.)";
     }
 
     private String storedSuffix() {
@@ -1578,6 +1680,7 @@ public final class QuarrymanJobTask implements JobTask {
         }
         npc.getNavigator().cancelNavigation();
         releaseChunkTickets();
+        closeChestLid();
         clearBulkheadPlugs();
         bulkheadWaveAnchors.clear();
         bulkheadWaveIndex = 0;
