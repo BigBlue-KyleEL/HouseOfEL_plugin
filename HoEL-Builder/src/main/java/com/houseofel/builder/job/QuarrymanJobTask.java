@@ -1,10 +1,16 @@
 package com.houseofel.builder.job;
 
+import com.houseofel.builder.antigrind.FreshLedger;
+import com.houseofel.builder.antigrind.RedundancyTracker;
+import com.houseofel.builder.antigrind.TaskFingerprint;
 import com.houseofel.builder.gui.BlockTool;
 import com.houseofel.builder.gui.Target;
 import com.houseofel.builder.gui.TaskType;
 import com.houseofel.builder.npc.BuilderNpcService;
 import com.houseofel.builder.npc.HelperLevelService;
+import com.houseofel.builder.npc.Specialization;
+import com.houseofel.builder.npc.TicketAwardResult;
+import com.houseofel.builder.toil.TicketKind;
 import com.houseofel.builder.region.RegionOutline;
 import com.houseofel.builder.timing.HelperTempo;
 import com.houseofel.builder.timing.VanillaTiming;
@@ -186,6 +192,23 @@ public final class QuarrymanJobTask implements JobTask {
     private static final int RECONCILE_CHECK_PERIOD_TICKS = 20 * 5;
     private static final int CARRY_CAPACITY = 4 * 64;
     /**
+     * Phase E. Quarrying pays into the SAME ticket a Clearing job does — the framework's
+     * own published XP table already covers this exact labour ("Groundworker — 512 blocks
+     * excavated, smoothed or drained, spoil hauled to a real chest — 8 Toil"), so no new
+     * ticket kind, and no new Rule 20 measurement, is needed: a quarried block and a
+     * cleared block are the same displaced player minute. The Development Timeline reaches
+     * the identical conclusion for Landscaper, for the same reason.
+     *
+     * <p>This also satisfies Rule 21 ("split long jobs into legs so no single ticket
+     * exceeds 30 Toil — this is what stops a disconnect from wiping an expedition")
+     * without any extra machinery: at 8 Toil per 512 blocks the per-512 ticket IS the leg,
+     * so a crash mid-quarry costs partial progress toward the current 512 rather than a
+     * whole expedition.
+     */
+    private static final int GROUNDWORKER_TICKET_BLOCKS = 512;
+    /** Quarter-unit credit scale, mirroring {@code ClearJobTask} — see its own constant. */
+    private static final int CREDIT_UNITS_PER_BLOCK = 4;
+    /**
      * How long the Helper stands at the chest with its lid open before the items actually
      * move across (Kyle, 2026-08-25). The transfer itself is instantaneous, so without a
      * deliberate hold there is nothing for a player to see: no way to tell which chest of a
@@ -265,6 +288,8 @@ public final class QuarrymanJobTask implements JobTask {
     private final Logger logger;
     private final JobManager jobManager;
     private final HelperLevelService levelService;
+    private final RedundancyTracker redundancyTracker;
+    private final FreshLedger freshLedger;
     private final UUID playerId;
     private final NPC npc;
     private final Entity npcEntity;
@@ -376,17 +401,19 @@ public final class QuarrymanJobTask implements JobTask {
     private final Set<Long> ticketedChunks = new HashSet<>();
 
     /** Fresh job, just dispatched. */
-    QuarrymanJobTask(Plugin plugin, JobManager jobManager, HelperLevelService levelService, UUID playerId, NPC npc,
+    QuarrymanJobTask(Plugin plugin, JobManager jobManager, HelperLevelService levelService,
+                      RedundancyTracker redundancyTracker, FreshLedger freshLedger, UUID playerId, NPC npc,
                       Entity npcEntity, EntityEquipment equipment, TextDisplay label, World world,
                       Material initialTool, int minX, int maxX, int minZ, int maxZ, int topY, int requestedDepth,
                       boolean stepsAlongX, int stepDirection, Deque<Block> remainingCells, JobStorage storage,
                       RegionOutline outline) {
-        this(plugin, jobManager, levelService, playerId, npc, npcEntity, equipment, label, world, initialTool,
+        this(plugin, jobManager, levelService, redundancyTracker, freshLedger, playerId, npc, npcEntity, equipment, label, world, initialTool,
                 minX, maxX, minZ, maxZ, topY, requestedDepth, stepsAlongX, stepDirection,
                 remainingCells, new ArrayList<>(remainingCells), storage, outline, 0, 0, 0, new HashMap<>());
     }
 
-    private QuarrymanJobTask(Plugin plugin, JobManager jobManager, HelperLevelService levelService, UUID playerId,
+    private QuarrymanJobTask(Plugin plugin, JobManager jobManager, HelperLevelService levelService,
+                              RedundancyTracker redundancyTracker, FreshLedger freshLedger, UUID playerId,
                               NPC npc, Entity npcEntity, EntityEquipment equipment, TextDisplay label, World world,
                               Material initialTool, int minX, int maxX, int minZ, int maxZ, int topY,
                               int requestedDepth, boolean stepsAlongX, int stepDirection, Deque<Block> remainingCells,
@@ -396,6 +423,8 @@ public final class QuarrymanJobTask implements JobTask {
         this.logger = plugin.getLogger();
         this.jobManager = jobManager;
         this.levelService = levelService;
+        this.redundancyTracker = redundancyTracker;
+        this.freshLedger = freshLedger;
         this.playerId = playerId;
         this.npc = npc;
         this.npcEntity = npcEntity;
@@ -436,6 +465,7 @@ public final class QuarrymanJobTask implements JobTask {
      * Returns null if the world or NPC entity this job needs no longer resolves.
      */
     static QuarrymanJobTask resume(Plugin plugin, JobManager jobManager, HelperLevelService levelService,
+                                    RedundancyTracker redundancyTracker, FreshLedger freshLedger,
                                     JobState state, NPC npc) {
         World world = Bukkit.getWorld(state.worldName);
         Entity npcEntity = npc.getEntity();
@@ -506,7 +536,8 @@ public final class QuarrymanJobTask implements JobTask {
             }
         }
 
-        return new QuarrymanJobTask(plugin, jobManager, levelService, state.playerId, npc, npcEntity, equipment,
+        return new QuarrymanJobTask(plugin, jobManager, levelService, redundancyTracker, freshLedger,
+                state.playerId, npc, npcEntity, equipment,
                 label, world, initialTool, state.minX, state.maxX, state.minZ, state.maxZ, state.topY,
                 state.requestedDepth, state.stepsAlongX, state.stepDirection, digOrder, allCells, storage, outline,
                 state.processedCells, state.clearedCells, state.deposited, carried);
@@ -1286,6 +1317,7 @@ public final class QuarrymanJobTask implements JobTask {
                 16, 0.3, 0.3, 0.3, pendingCell.getBlockData());
 
         collectDrop(pendingCell);
+        awardGroundworkerProgress(creditUnitsFor(pendingCell));
         pendingCell.setType(Material.AIR);
         clearedCells++;
         lastSafeLocation = npcEntity.getLocation();
@@ -1474,6 +1506,59 @@ public final class QuarrymanJobTask implements JobTask {
         bulkheadPlugs.clear();
     }
 
+
+    /**
+     * Phase E — pays a quarried cell into the shared Groundworker excavation ticket. Same
+     * anti-grind pre-filters a Clearing job applies, for the same reasons: the Fresh rule
+     * (a block a player placed in the last 30 minutes is worth nothing, closing the
+     * "place 640 cobble for your Groundworker" exploit the framework calls its largest
+     * exploit class) and Redundancy Decay's quarter-unit tiers.
+     *
+     * <p><b>Paid on the BREAK, not on the deposit</b> — so a quarry dispatched with storage
+     * off still earns (Kyle's explicit call 2026-08-25). This is NOT a new deviation: it is
+     * the same one {@code ClearJobTask.awardGroundworkerProgress} already documents, made
+     * at Kyle's call on 2026-08-13 for progression feel, against the framework's own
+     * qualifier ("spoil hauled to a real chest... voided spoil is an unfinished ticket").
+     * Quarryman matching it keeps the two excavation paths consistent — the alternative
+     * would have been one Groundworker job paying on break and another on deposit, which
+     * is harder to explain than either rule on its own. Trade-off accepted and worth
+     * remembering if balance is ever revisited: skipping haul trips is a genuinely faster
+     * way to earn the same Toil.
+     */
+    private void awardGroundworkerProgress(int creditUnits) {
+        if (creditUnits <= 0 || levelService.specializationOf(npc) != Specialization.GROUNDWORKER) {
+            return;
+        }
+        List<TicketAwardResult> results = levelService.awardProgress(
+                npc, TicketKind.GROUNDWORKER_CLEAR_512, GROUNDWORKER_TICKET_BLOCKS * CREDIT_UNITS_PER_BLOCK, creditUnits);
+        for (TicketAwardResult result : results) {
+            for (String line : result.announcementLines()) {
+                messagePlayer(Component.text(line, NamedTextColor.GREEN));
+            }
+        }
+    }
+
+    /** Mirrors {@code ClearJobTask.creditUnitsFor} — see that method for the full reasoning. */
+    private int creditUnitsFor(Block block) {
+        long now = System.currentTimeMillis();
+        TaskFingerprint fingerprint = new TaskFingerprint(TaskType.QUARRY, block.getWorld().getName(),
+                block.getX(), block.getY(), block.getZ(), ClearJobTask.canonicalMaterialClass(block));
+        RedundancyTracker.CreditTier tier = redundancyTracker.check(npc.getUniqueId(), fingerprint, now);
+        if (freshLedger.isFresh(block, now)) {
+            logger.info("[antigrind] Fresh block skipped for " + BuilderNpcService.baseNameOf(npc)
+                    + " at " + block.getX() + "," + block.getY() + "," + block.getZ());
+            return 0;
+        }
+        if (tier != RedundancyTracker.CreditTier.FULL) {
+            logger.info("[antigrind] Redundancy " + tier + " for " + BuilderNpcService.baseNameOf(npc)
+                    + " at " + block.getX() + "," + block.getY() + "," + block.getZ());
+        }
+        return switch (tier) {
+            case ZERO -> 0;
+            case REDUCED -> 1;
+            case FULL -> CREDIT_UNITS_PER_BLOCK;
+        };
+    }
 
     private void collectDrop(Block block) {
         if (storage == null) {

@@ -1695,7 +1695,7 @@ public final class ClearJobTask implements JobTask {
      * (2026-08-18), not the old plain-Stone-only check, so an ore or a stone variant now
      * correctly buckets as Stone-family instead of silently defaulting into Dirt.
      */
-    private Target canonicalMaterialClass(Block block) {
+    static Target canonicalMaterialClass(Block block) {
         return Tag.MINEABLE_PICKAXE.isTagged(block.getType()) ? Target.STONE : Target.DIRT;
     }
 

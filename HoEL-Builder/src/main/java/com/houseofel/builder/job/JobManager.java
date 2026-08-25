@@ -217,7 +217,7 @@ public final class JobManager {
             NPC npc = CitizensAPI.getNPCRegistry().getById(state.npcId);
             JobTask task = npc == null ? null : switch (state.jobType) {
                 case CLEAR -> ClearJobTask.resume(plugin, this, levelService, redundancyTracker, freshLedger, state, npc);
-                case QUARRY -> QuarrymanJobTask.resume(plugin, this, levelService, state, npc);
+                case QUARRY -> QuarrymanJobTask.resume(plugin, this, levelService, redundancyTracker, freshLedger, state, npc);
             };
             if (task == null) {
                 deferred++;

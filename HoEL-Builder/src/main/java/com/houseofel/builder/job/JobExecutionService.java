@@ -279,7 +279,8 @@ public final class JobExecutionService {
 
         RegionOutline outline = new RegionOutline(world, minX, bottomY, minZ, maxX, topY, maxZ);
 
-        QuarrymanJobTask task = new QuarrymanJobTask(plugin, jobManager, levelService, player.getUniqueId(), npc,
+        QuarrymanJobTask task = new QuarrymanJobTask(plugin, jobManager, levelService, redundancyTracker,
+                freshLedger, player.getUniqueId(), npc,
                 npcEntity, equipment, label, world, initialTool, minX, maxX, minZ, maxZ, topY, requestedDepth,
                 stepsAlongX, stepDirection, digOrder, storage, outline);
         jobManager.register(task);

@@ -134,6 +134,16 @@ public final class HelperStatusListener implements Listener {
                 } else {
                     player.sendMessage(Component.text(
                             "Chosen path: " + record.choice() + ".", NamedTextColor.GRAY));
+                    // Rule 19 — naming the path is not the same as saying what it DOES.
+                    // "An invisible improvement is a wasted level", and the framework calls
+                    // this its single largest failure risk, so each picked path describes
+                    // its own behaviour the same way the level-3/6 verbs above do.
+                    if ("QUARRYMAN".equals(record.choice())) {
+                        player.sendMessage(Component.text(
+                                "Digs to any depth as a walkable staircase — handles water and lava on the way "
+                                        + "down, re-clears anything that slides back in, and hauls the spoil to a chest.",
+                                NamedTextColor.GRAY));
+                    }
                 }
             }
         });
