@@ -17,6 +17,10 @@ Thumbs.db
 # Logs
 *.log
 
+# Resource pack experiments
+resource-pack/
+HoEL-ResourcePack.zip
+
 # Local secrets / config (e.g. Gemini API key files) - tighten this once
 # the actual config file names exist in Phase 0-D / the LLM module
 local.properties

@@ -11,7 +11,6 @@ import com.houseofel.builder.job.JobManager;
 import com.houseofel.builder.toil.LevelCurve;
 import net.citizensnpcs.api.event.NPCRightClickEvent;
 import net.citizensnpcs.api.npc.NPC;
-import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
@@ -110,30 +109,12 @@ public final class BuilderNpcListener implements Listener {
             return;
         }
 
-        // THROWAWAY EVALUATION HOOK — Thaddeus only, 2026-08-25.
-        // Opens a CommandPanels inventory panel instead of the normal menu, purely so the
-        // chest-GUI pathway can be judged side by side with the native dialog on a real
-        // Helper. Thaddeus was picked deliberately: level 4, no specialization assigned,
-        // never runs jobs, so nothing depends on his menu working. Delete this block and
-        // plugins/CommandPanels/panels/thaddeus_test.yml together — nothing else refers to
-        // either. Guarded on the panel plugin actually being installed, so removing the
-        // plugin cannot break the menu for a Helper that still routes through here.
-        if (TEST_PANEL_HELPER.equalsIgnoreCase(BuilderNpcService.baseNameOf(npc))
-                && Bukkit.getPluginManager().isPluginEnabled("CommandPanels")) {
-            Bukkit.dispatchCommand(Bukkit.getConsoleSender(),
-                    "pa open thaddeus_test " + player.getName());
-            return;
-        }
-
         if (isBedrock) {
             bedrockForm.open(player, npc, specialization, level);
         } else {
             javaDialog.open(player, npc, specialization, level);
         }
     }
-
-    /** @see the throwaway evaluation hook above — remove both together. */
-    private static final String TEST_PANEL_HELPER = "Thaddeus";
 
     /**
      * The lowest Choice-slot level this Helper has reached but not yet decided, or 0 if

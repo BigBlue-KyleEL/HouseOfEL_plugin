@@ -80,19 +80,11 @@ public final class JavaJobDialog {
         // specialization, level, or whether it had ever made a level-8 choice. The
         // specialised jobs are appended below, gated on the real pick.
         for (TaskType type : List.of(TaskType.MINE, TaskType.LUMBERJACK, TaskType.FARM, TaskType.CLEAR)) {
-            // Spec-distinct styling: the task type matching this Helper's specialization
-            // (its bonus-drop skill, see Specialization.taskType()) is called out; the rest
-            // stay plain. Skipped entirely for an unassigned Helper — no specialization
-            // means no button is "the" specialty yet. A real highlight/border around the
-            // button itself isn't available — confirmed against the real ActionButton
-            // interface (label/tooltip/width/action only, no background/border field);
-            // vanilla renders button chrome client-side with no per-button override. Bracket
-            // framing + bold is the closest real equivalent, reusing the same "[TAG]"
-            // visual language the dispatch title already uses for RUSTED/WARY/Choice picks
-            // — plain color alone read as too weak live (Kyle, 2026-08-19).
+            // The task type matching this Helper's specialization gets a yellow tint;
+            // the rest stay plain white.
             boolean isSpecialty = specialization != null && type == specialization.taskType();
             Component label = isSpecialty
-                    ? Component.text("[" + type.label() + "]", NamedTextColor.YELLOW).decorate(TextDecoration.BOLD)
+                    ? Component.text(type.label(), NamedTextColor.YELLOW)
                     : Component.text(type.label());
             Component tooltip = specialization == null ? null : Component.text(isSpecialty
                     ? name + "'s specialty — bonus drops apply here."
@@ -119,28 +111,10 @@ public final class JavaJobDialog {
                             ClickCallback.Options.builder().build())));
         }
 
-        // Specialised jobs, under a separator naming the path this Helper actually chose.
-        // A dialog BODY message cannot sit between buttons (it always renders above the
-        // whole button grid — which is why the "— Depth —" header works there but not
-        // here), and neither GUI API has a real divider construct. A non-committal button
-        // is the closest equivalent: it reuses the same "— X —" visual language, and
-        // clicking it simply reopens this menu rather than doing anything.
         TaskType specialised = specialisedJobFor(npc, specialization, level);
         if (specialised != null) {
-            String pathName = specialised == TaskType.QUARRY ? "Quarryman" : "Landscaper";
             buttons.add(ActionButton.create(
-                    Component.text("— Level 8: " + pathName + " —", NamedTextColor.GOLD).decorate(TextDecoration.BOLD),
-                    Component.text("The path " + name + " chose at level 8."), 150,
-                    DialogAction.customClick(
-                            (view, audience) -> {
-                                if (audience instanceof Player p) {
-                                    Bukkit.getScheduler().runTask(plugin,
-                                            () -> showTaskTypeStep(p, npc, specialization, level));
-                                }
-                            },
-                            ClickCallback.Options.builder().build())));
-            buttons.add(ActionButton.create(
-                    Component.text("[" + specialised.label() + "]", NamedTextColor.YELLOW).decorate(TextDecoration.BOLD),
+                    Component.text("Lvl.8: " + specialised.label(), NamedTextColor.GOLD),
                     Component.text(specialised == TaskType.QUARRY
                             ? "Digs to any depth as a walkable staircase."
                             : "Clears, then puts the topsoil back so it looks natural."), 150,
