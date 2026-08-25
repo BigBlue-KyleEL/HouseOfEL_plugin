@@ -19,7 +19,6 @@ import org.bukkit.Sound;
 import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
-import org.bukkit.block.data.Directional;
 import org.bukkit.block.data.Levelled;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
@@ -204,50 +203,13 @@ public final class QuarrymanJobTask implements JobTask {
         BlockFace.UP, BlockFace.DOWN, BlockFace.NORTH, BlockFace.SOUTH, BlockFace.EAST, BlockFace.WEST,
     };
     /**
-     * Horizontal-only faces, for wall-torch placement — a torch on the CEILING or FLOOR
-     * isn't a wall torch (those are the standing/floor variant, handled separately as the
-     * fallback below), so {@link #ADJACENT_FACES} itself (which includes UP/DOWN, needed
-     * for the fluid flood-fills above) isn't the right set to search here.
+     * Horizontal-only faces — for finding a standing spot at a block'''s own level (see
+     * {@link #safeStandingBeside}, {@link #safeSpotBeside}). Distinct from
+     * {@link #ADJACENT_FACES}, which includes UP/DOWN for the fluid flood-fills.
      */
     private static final BlockFace[] HORIZONTAL_FACES = {
         BlockFace.NORTH, BlockFace.SOUTH, BlockFace.EAST, BlockFace.WEST,
     };
-    /**
-     * Phase D — "lights the face as it descends" ([[V1 Perk Ladders]]). Every
-     * {@code TORCH_SPACING_CELLS}'th cell dug gets checked for a real mob-spawn-dark spot
-     * and lit if so — a period, not "one torch per bench," so a shallow bench with few
-     * cells still gets lit at roughly the same real-world density as a deep one, rather
-     * than one torch per bench regardless of how long that bench actually is. Live-tuned
-     * starting point, not measured — matches roughly one torch every 2-3 real-world
-     * seconds of digging at typical dig speed, close to (not identical to) vanilla's own
-     * "torch every ~7 blocks" convention automated builds commonly use.
-     */
-    private static final int TORCH_SPACING_CELLS = 6;
-    /**
-     * Vanilla's own hostile-mob spawn threshold is block light &lt;= 7 — matching that
-     * exactly (not a stricter number) means a torch only ever gets placed where mobs could
-     * actually spawn, not "somewhat dim but already safe."
-     */
-    private static final int TORCH_LIGHT_THRESHOLD = 7;
-    /**
-     * Placed FREE, not withdrawn from {@link #storage} — Kyle's explicit call 2026-08-24,
-     * matching the same precedent Bulkhead's own sponges and cobblestone plugs already set.
-     *
-     * <p>This reverses an earlier same-session decision (real chest-sourced cost, reasoned
-     * from Rule 11's "permanent placements need real material"). That reasoning was sound
-     * in principle but wrong in practice, caught before it ever ran live: a Quarryman job's
-     * storage chest is created EMPTY by the job itself and only ever fills with what the
-     * dig produces — stone, dirt, ore. Torches are never among them, so a chest-sourced
-     * torch could only ever come from a player manually stocking the chest mid-job, making
-     * the whole face-lighting feature silently dead by default. Free placement is what
-     * makes the perk actually function as {@code V1 Perk Ladders} describes it ("lights the
-     * face as it descends" — an automatic property of the Helper, not a consumable it can
-     * run out of). {@code JobStorage.withdraw()}, built for the reverted version, is kept:
-     * Landscaper Phase A needs exactly that method for its topsoil/replant material, per
-     * the Development Timeline's own "needs something genuinely new" list.
-     */
-    private static final Material TORCH_MATERIAL = Material.TORCH;
-    private static final Material WALL_TORCH_MATERIAL = Material.WALL_TORCH;
 
     private static final double LABEL_HEIGHT_OFFSET = 2.3;
     private static final int GLOW_TICK_PERIOD = 20;
@@ -549,6 +511,19 @@ public final class QuarrymanJobTask implements JobTask {
      * remaining cap is the physical one already enforced by the caller: not digging below
      * {@code world.getMinHeight()}.
      *
+     * <p><b>Sweep direction along the stepping axis follows {@code stepDirection}</b>
+     * (fixed 2026-08-25): the loop used to always run ascending regardless of which way the
+     * staircase actually slid, so which end of each layer got dug first silently flipped
+     * with the sign of the player'''s own click. Confirmed live — a dig clicked
+     * A(20,61,0)-to-B(13,61,-6) gives {@code stepDirection = -1}, which meant every layer
+     * STARTED at its leading edge: the one row with untouched rock above it and no
+     * already-cleared neighbour at that level to stand beside, forcing the Helper to
+     * teleport on top of the block just to reach it (Kyle: "the orientation of how he
+     * clears blocks is weird"). Now each layer always sweeps trailing-edge-first and
+     * finishes at the leading edge, whichever way the window slides — so by the time the
+     * hard row comes up, the row beside it is already open and
+     * {@link #safeStandingBeside} can put the Helper next to it rather than above it.
+     *
      * <p>Consecutive levels overlap heavily along the stepping axis (a 7-long footprint
      * at adjacent levels shares 6 of those 7 rows) — each shared row is still queued
      * exactly once per level, since the two levels dig it at different Y values, not the
@@ -567,14 +542,19 @@ public final class QuarrymanJobTask implements JobTask {
             if (stepsAlongX) {
                 int layerMinX = minX + shift;
                 int layerMaxX = maxX + shift;
-                for (int x = layerMinX; x <= layerMaxX; x++) {
+                int width = layerMaxX - layerMinX;
+                for (int i = 0; i <= width; i++) {
+                    // Trailing edge first, leading edge LAST — see this method doc.
+                    int x = stepDirection > 0 ? layerMinX + i : layerMaxX - i;
                     sweepRow(cells, world, x, y, minZ, maxZ, forward, true);
                     forward = !forward;
                 }
             } else {
                 int layerMinZ = minZ + shift;
                 int layerMaxZ = maxZ + shift;
-                for (int z = layerMinZ; z <= layerMaxZ; z++) {
+                int width = layerMaxZ - layerMinZ;
+                for (int i = 0; i <= width; i++) {
+                    int z = stepDirection > 0 ? layerMinZ + i : layerMaxZ - i;
                     sweepRow(cells, world, z, y, minX, maxX, forward, false);
                     forward = !forward;
                 }
@@ -853,7 +833,32 @@ public final class QuarrymanJobTask implements JobTask {
         if (above.getType() == Material.AIR || above.isPassable()) {
             return cell.getLocation().add(0.5, 1.0, 0.5);
         }
-        return lastSafeLocation;
+        Location beside = safeStandingBeside(cell);
+        return beside != null ? beside : lastSafeLocation;
+    }
+
+    /**
+     * A confirmed-safe standing spot at the cell'''s OWN level, immediately beside it —
+     * feet in an already-cleared neighbour, head in the space the layer above already
+     * opened, standing on the not-yet-dug layer below. This is how a player would actually
+     * mine a block: step next to it and swing sideways, not climb on top of it.
+     *
+     * <p>Preferred over {@link #safeLandingAbove} everywhere a choice exists (Kyle, live
+     * 2026-08-25: "he still proceeds to teleport above that same block just to clear it").
+     * Standing above only ever made sense as a recovery of last resort; with
+     * {@link #buildDigOrder} now sweeping each layer trailing-edge-first, an adjacent
+     * already-cleared cell almost always exists by the time the hard leading-edge row comes
+     * up, so this should now succeed in the overwhelming majority of cases that used to
+     * teleport upward.
+     */
+    private Location safeStandingBeside(Block cell) {
+        for (BlockFace face : HORIZONTAL_FACES) {
+            Block candidate = cell.getRelative(face);
+            if (isStandable(candidate)) {
+                return candidate.getLocation().add(0.5, 0, 0.5);
+            }
+        }
+        return null;
     }
 
     /**
@@ -1011,7 +1016,12 @@ public final class QuarrymanJobTask implements JobTask {
                     + " for " + STUCK_RECOVERY_NO_PROGRESS_TICKS + " ticks — recovering from a stuck path. From "
                     + current.getBlockX() + "," + current.getBlockY() + "," + current.getBlockZ()
                     + ", navigating=" + npc.getNavigator().isNavigating());
-            Location landing = safeLandingAbove(pendingCell);
+            // Beside-at-the-same-level first — climbing on top of the block is a last
+            // resort, not the default (see safeStandingBeside).
+            Location landing = safeStandingBeside(pendingCell);
+            if (landing == null) {
+                landing = safeLandingAbove(pendingCell);
+            }
             if (landing != null) {
                 npc.getNavigator().cancelNavigation();
                 npc.teleport(landing, PlayerTeleportEvent.TeleportCause.PLUGIN);
@@ -1074,8 +1084,20 @@ public final class QuarrymanJobTask implements JobTask {
      * within a couple of {@link #REACH_DISTANCE}s of the dig, so the cell-itself fallback
      * below — always walkably connected, since it's the dig's own known path — kicks in
      * for genuinely deep leading-edge columns instead of a teleport to nowhere.
+     *
+     * <p><b>Tightened 16 → 4 on 2026-08-25</b>, from real live evidence: on a quarry whose
+     * floor had reached Y≈48 with the natural surface at Y≈64, a 16-block search reached
+     * open sky EXACTLY. The log shows the consequence unambiguously — repeated
+     * "recovering from a stuck path. From 3,64,-3" / "From 2,64,-3" / "From 0,64,-5"
+     * lines, i.e. the Helper standing on the surface trying to reach cells 13-16 blocks
+     * below it, failing every one, until the job aborted. 16 was reasoned about rather
+     * than measured; the real constraint is that a legitimate climb-on-top recovery is
+     * only ever a step or two, so anything beyond a few blocks is by definition escaping
+     * the pit rather than recovering inside it. Falling back to {@code lastSafeLocation}
+     * (guaranteed connected) is strictly better than a technically-clear spot on the far
+     * side of unbroken rock.
      */
-    private static final int MAX_LANDING_SEARCH_HEIGHT = 16;
+    private static final int MAX_LANDING_SEARCH_HEIGHT = 4;
 
     /**
      * Finds a genuinely clear spot to teleport onto directly above {@code cell}, for both
@@ -1177,10 +1199,6 @@ public final class QuarrymanJobTask implements JobTask {
         if (!waterBreach.isEmpty() || !lavaBreach.isEmpty()) {
             beginBulkhead(waterBreach, lavaBreach);
             return;
-        }
-
-        if (clearedCells % TORCH_SPACING_CELLS == 0) {
-            placeFaceTorch(pendingCell);
         }
 
         hesitationTicks = HelperTempo.hesitationTicksForDuty(levelService.dutyCycleOf(npc)) / TEST_SPEED_MULTIPLIER;
@@ -1356,38 +1374,6 @@ public final class QuarrymanJobTask implements JobTask {
         bulkheadPlugs.clear();
     }
 
-    /**
-     * Phase D face-lighting. {@code cell} is freshly dug (just set to air) and already
-     * confirmed no fluid breach — checked for real darkness (see
-     * {@link #TORCH_LIGHT_THRESHOLD}) and, if dark, lit with a free-placed torch (see
-     * {@link #TORCH_MATERIAL}'s own doc for why free rather than chest-sourced). Prefers a
-     * wall torch on whichever adjacent solid face it finds first — a quarry staircase
-     * always has at least one solid wall immediately beside the walking path, by
-     * {@link #buildDigOrder}'s own shape — falling back to a standing torch on the floor
-     * below if none turns up (a genuinely open, multi-cell-wide gap). Deliberately
-     * independent of {@link #storage}: lighting works even on a no-chest job, since it
-     * costs nothing to place.
-     */
-    private void placeFaceTorch(Block cell) {
-        if (cell.getLightLevel() > TORCH_LIGHT_THRESHOLD) {
-            return;
-        }
-        for (BlockFace face : HORIZONTAL_FACES) {
-            Block wall = cell.getRelative(face);
-            if (wall.getType().isSolid()) {
-                cell.setType(WALL_TORCH_MATERIAL);
-                if (cell.getBlockData() instanceof Directional directional) {
-                    directional.setFacing(face.getOppositeFace());
-                    cell.setBlockData(directional);
-                }
-                return;
-            }
-        }
-        Block below = cell.getRelative(BlockFace.DOWN);
-        if (below.getType().isSolid()) {
-            cell.setType(TORCH_MATERIAL);
-        }
-    }
 
     private void collectDrop(Block block) {
         if (storage == null) {
