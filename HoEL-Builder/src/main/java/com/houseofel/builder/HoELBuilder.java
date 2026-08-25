@@ -87,7 +87,7 @@ public final class HoELBuilder extends JavaPlugin {
         SurveyorRod rod = new SurveyorRod(this);
         jobManager = new JobManager(this, levelService, redundancyTracker, freshLedger);
         JobExecutionService jobExecutionService = new JobExecutionService(this, jobManager, levelService,
-                deathRecordStore, redundancyTracker, freshLedger);
+                deathRecordStore, redundancyTracker, freshLedger, choiceStore);
         RegionSelectionService regionService = new RegionSelectionService(this, rod, jobExecutionService);
         JavaJobDialog javaDialog = new JavaJobDialog(this, regionService, deathRecordStore, choiceStore, levelService);
         BedrockJobForm bedrockForm = new BedrockJobForm(this, regionService, deathRecordStore, choiceStore, levelService);

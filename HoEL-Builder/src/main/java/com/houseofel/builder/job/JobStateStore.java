@@ -47,6 +47,7 @@ final class JobStateStore {
             yaml.set("maxY", state.maxY);
             yaml.set("target", state.target);
             yaml.set("surfaceOnly", state.surfaceOnly);
+            yaml.set("restoresTopsoil", state.restoresTopsoil);
             yaml.set("passNumber", state.passNumber);
             yaml.set("clearedThisPass", state.clearedThisPass);
             yaml.set("skippedThisPass", state.skippedThisPass);
@@ -126,6 +127,7 @@ final class JobStateStore {
                 state.maxY = yaml.getInt("maxY");
                 state.target = yaml.getString("target");
                 state.surfaceOnly = yaml.getBoolean("surfaceOnly");
+                state.restoresTopsoil = yaml.getBoolean("restoresTopsoil");
                 state.passNumber = yaml.getInt("passNumber", 1);
                 state.clearedThisPass = yaml.getLong("clearedThisPass");
                 state.skippedThisPass = yaml.getLong("skippedThisPass");

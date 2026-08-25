@@ -28,6 +28,8 @@ final class JobState {
     int maxZ;
     String target;
     boolean surfaceOnly;
+    /** Landscaper (Groundworker L8 option B): this Clear job also restores topsoil when it finishes. */
+    boolean restoresTopsoil;
     boolean storeInChest;
 
     // Quarryman-only dig-order parameters — meaningful only when jobType == QUARRY.

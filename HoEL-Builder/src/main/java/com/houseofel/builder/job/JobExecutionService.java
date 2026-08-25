@@ -1,6 +1,9 @@
 package com.houseofel.builder.job;
 
 import com.houseofel.builder.antigrind.FreshLedger;
+import com.houseofel.builder.choice.GroundworkerL8Choice;
+import com.houseofel.builder.choice.MilestoneChoiceRecord;
+import com.houseofel.builder.choice.MilestoneChoiceStore;
 import com.houseofel.builder.antigrind.RedundancyTracker;
 import com.houseofel.builder.death.DeathRecordStore;
 import com.houseofel.builder.gui.Target;
@@ -39,10 +42,11 @@ public final class JobExecutionService {
     private final DeathRecordStore deathRecordStore;
     private final RedundancyTracker redundancyTracker;
     private final FreshLedger freshLedger;
+    private final MilestoneChoiceStore choiceStore;
 
     public JobExecutionService(Plugin plugin, JobManager jobManager, HelperLevelService levelService,
                                 DeathRecordStore deathRecordStore, RedundancyTracker redundancyTracker,
-                                FreshLedger freshLedger) {
+                                FreshLedger freshLedger, MilestoneChoiceStore choiceStore) {
         this.plugin = plugin;
         this.logger = plugin.getLogger();
         this.jobManager = jobManager;
@@ -50,6 +54,21 @@ public final class JobExecutionService {
         this.deathRecordStore = deathRecordStore;
         this.redundancyTracker = redundancyTracker;
         this.freshLedger = freshLedger;
+        this.choiceStore = choiceStore;
+    }
+
+    /**
+     * Landscaper's depth cap, from its own balance clause in V1 Perk Ladders ("Depth
+     * capped at 16 blocks below surface... It cannot dig deep — hand it a quarry and it
+     * refuses and says so"). The one hard limit that makes the Quarryman/Landscaper fork
+     * an actual trade rather than a cosmetic label.
+     */
+    private static final int LANDSCAPER_MAX_DEPTH = 16;
+
+    /** True when this Helper has actually PICKED Landscaper at its level-8 Choice slot. */
+    private boolean isLandscaper(NPC npc) {
+        MilestoneChoiceRecord record = choiceStore.find(npc.getUniqueId(), 8);
+        return record != null && GroundworkerL8Choice.LANDSCAPER.name().equals(record.choice());
     }
 
     public void dispatchClear(Player player, NPC npc, TaskType taskType, Target target,
@@ -140,11 +159,26 @@ public final class JobExecutionService {
             }
         }
 
+        // Landscaper (Groundworker level-8 Choice option B) turns a Clearing job into a
+        // restore job — see ClearJobTask's FILLING phase. Read once here rather than per
+        // tick, so a respec mid-job cannot change what the running job is doing.
+        boolean restoresTopsoil = isLandscaper(npc);
+        // "It cannot dig deep — hand it a quarry and it refuses and says so" (V1 Perk
+        // Ladders, Landscaper's own balance clause). Enforced before any work starts, at
+        // the dispatch seam, so the refusal costs the player nothing.
+        if (restoresTopsoil && (maxY - minY + 1) > LANDSCAPER_MAX_DEPTH) {
+            player.sendMessage(Component.text(BuilderNpcService.baseNameOf(npc)
+                    + ": That's a quarry, not landscaping — I work the surface, no deeper than "
+                    + LANDSCAPER_MAX_DEPTH + " blocks. Mark something shallower and I'll make it look like it grew there.",
+                    NamedTextColor.RED));
+            return;
+        }
+
         RegionOutline outline = new RegionOutline(world, minX, minY, minZ, maxX, maxY, maxZ);
 
         ClearJobTask task = new ClearJobTask(plugin, jobManager, levelService, redundancyTracker, freshLedger,
                 player, npc, npcEntity, equipment, label, world, target, initialTool, minX, maxX, minY, maxY, minZ, maxZ,
-                spanX, spanZ, totalCells, storage, storeInChest, surfaceOnly, outline);
+                spanX, spanZ, totalCells, storage, storeInChest, surfaceOnly, outline, restoresTopsoil);
         jobManager.register(task);
         task.start();
     }

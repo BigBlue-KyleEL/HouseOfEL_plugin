@@ -186,7 +186,7 @@ public final class ClearJobTask implements JobTask {
     /** How often to scan for hostile mobs — no need to check every tick. */
     private static final int MOB_ALERT_CHECK_PERIOD = GLOW_TICK_PERIOD;
 
-    private enum Phase { SEEKING, WALKING, DIGGING, HAULING, BULKHEAD }
+    private enum Phase { SEEKING, WALKING, DIGGING, HAULING, BULKHEAD, FILLING }
 
     /**
      * Groundworker level-6 verb ("Bulkhead," scoped to flooding only — see the
@@ -199,6 +199,19 @@ public final class ClearJobTask implements JobTask {
      * neither {@link Target#STONE} nor {@link Target#DIRT}'s {@code matches()}, so a plug
      * can never later get misidentified as a real target block by {@link #isClearable}.
      */
+    /**
+     * Landscaper (Groundworker L8, option B) — Phase A, "flat single-material backfill".
+     * DIRT specifically, and only dirt: grass blocks cannot come from a chest (breaking
+     * grass yields dirt, so a chest filled by this job's own spoil will never contain a
+     * GRASS_BLOCK), and the perk's balance clause is explicit that "every block of
+     * topsoil comes from a chest". Laying dirt and letting vanilla grass spread onto it
+     * from neighbouring blocks gets the same end result without inventing a material
+     * source. Biome-specific surfaces (podzol, mycelium, sand, coarse dirt) are Phase B,
+     * which needs its own answer for sourcing them.
+     */
+    private static final Material TOPSOIL_MATERIAL = Material.DIRT;
+    /** How many columns to resurface per tick — placement is cheap, but a whole region in one tick is not. */
+    private static final int TOPSOIL_COLUMNS_PER_TICK = 1;
     private static final Material BULKHEAD_PLUG_MATERIAL = Material.COBBLESTONE;
     /**
      * Flat settle timer, not polling until no fluid neighbor remains — a real lake has
@@ -316,6 +329,12 @@ public final class ClearJobTask implements JobTask {
     /** The tool currently equipped — recomputed per block in {@link #beginDigging()}, not fixed for the whole job. */
     private Material currentTool;
     private final boolean surfaceOnly;
+    /** True when this Helper picked Landscaper at L8 — chains {@link Phase#FILLING} after clearing. */
+    private final boolean restoresTopsoil;
+    /** Column cursor for the topsoil pass, indexed over the region footprint. */
+    private int topsoilColumn;
+    private int topsoilPlaced;
+    private boolean topsoilOutOfMaterial;
     private final boolean storeInChest;
     private final int savedMinX;
     private final int savedMaxX;
@@ -402,10 +421,10 @@ public final class ClearJobTask implements JobTask {
                  NPC npc, Entity npcEntity, EntityEquipment equipment, TextDisplay label, World world,
                  Target target, Material tool, int minX, int maxX, int minY, int maxY, int minZ, int maxZ,
                  int spanX, int spanZ, long totalCells, JobStorage storage, boolean storeInChest,
-                 boolean surfaceOnly, RegionOutline outline) {
+                 boolean surfaceOnly, RegionOutline outline, boolean restoresTopsoil) {
         this(plugin, jobManager, levelService, redundancyTracker, freshLedger, player.getUniqueId(), npc, npcEntity,
                 equipment, label, world, target, tool, minX, maxX, minY, maxY, minZ, maxZ, spanX, spanZ, totalCells,
-                storage, storeInChest, surfaceOnly, outline,
+                storage, storeInChest, surfaceOnly, outline, restoresTopsoil,
                 Phase.SEEKING, 0, 0, 0, 1, 0, 0, 0, 0, new HashMap<>());
     }
 
@@ -416,7 +435,7 @@ public final class ClearJobTask implements JobTask {
                           int minX, int maxX, int minY, int maxY, int minZ, int maxZ,
                           int spanX, int spanZ, long totalCells, JobStorage storage,
                           boolean storeInChest, boolean surfaceOnly,
-                          RegionOutline outline,
+                          RegionOutline outline, boolean restoresTopsoil,
                           Phase phase, long processedCells, long clearedCells, long deposited, int passNumber,
                           long clearedThisPass, long skippedThisPass, long skippedNoPath, long skippedTimeout,
                           Map<Material, Integer> carried) {
@@ -449,6 +468,7 @@ public final class ClearJobTask implements JobTask {
         this.storage = storage;
         this.storeInChest = storeInChest;
         this.surfaceOnly = surfaceOnly;
+        this.restoresTopsoil = restoresTopsoil;
         this.outline = outline;
         this.phase = phase;
         this.processedCells = processedCells;
@@ -554,7 +574,7 @@ public final class ClearJobTask implements JobTask {
         return new ClearJobTask(plugin, jobManager, levelService, redundancyTracker, freshLedger, state.playerId,
                 npc, npcEntity, equipment, label, world, target, initialTool, state.minX, state.maxX, state.minY,
                 state.maxY, state.minZ, state.maxZ, spanX, spanZ, totalCells, storage, state.storeInChest,
-                state.surfaceOnly, outline, Phase.SEEKING, state.processedCells, state.clearedCells,
+                state.surfaceOnly, outline, state.restoresTopsoil, Phase.SEEKING, state.processedCells, state.clearedCells,
                 state.deposited, state.passNumber, state.clearedThisPass, state.skippedThisPass,
                 state.skippedNoPath, state.skippedTimeout, carried);
     }
@@ -767,6 +787,7 @@ public final class ClearJobTask implements JobTask {
         state.maxZ = savedMaxZ;
         state.target = target.name();
         state.surfaceOnly = surfaceOnly;
+        state.restoresTopsoil = restoresTopsoil;
         state.storeInChest = storeInChest;
         state.processedCells = processedCells;
         state.clearedCells = clearedCells;
@@ -821,6 +842,7 @@ public final class ClearJobTask implements JobTask {
                 case DIGGING -> digPendingBlock();
                 case HAULING -> haulToChest();
                 case BULKHEAD -> tickBulkhead();
+                case FILLING -> tickTopsoil();
             }
         }
 
@@ -1037,8 +1059,12 @@ public final class ClearJobTask implements JobTask {
             return;
         }
 
+        if (restoresTopsoil && phase != Phase.FILLING) {
+            beginTopsoil();
+            return;
+        }
         finish(BuilderNpcService.baseNameOf(npc) + ": All done — cleared " + clearedCells + " " + target.label()
-                + " block(s)." + storedSuffix());
+                + " block(s)." + storedSuffix() + topsoilSuffix());
     }
 
     /** Waits until the NPC is within reach, or gives up on an unreachable block. */
@@ -1815,6 +1841,105 @@ public final class ClearJobTask implements JobTask {
         int percent = (int) (processedCells * 100 / totalCells);
         String text = passNumber == 1 ? percent + "%" : percent + "% (pass " + passNumber + ")";
         label.text(Component.text(text, NamedTextColor.YELLOW));
+    }
+
+    /**
+     * Landscaper Phase A — lays a single layer of topsoil over the worked ground, one
+     * column at a time, so a cleared region stops reading as a raw excavation. The first
+     * block-PLACEMENT capability in this codebase: every other mutation in the job system
+     * goes something-to-AIR, with only self-clearing Bulkhead plugs and the chest fixture
+     * as exceptions.
+     *
+     * <p>Additive by design — it places dirt ON TOP of whatever the highest solid block in
+     * each column is, rather than replacing that block. Replacing would destroy material
+     * (and raise "where did my stone go") for no visual gain, and additive placement is
+     * what "restores topsoil" actually describes.
+     */
+    private void beginTopsoil() {
+        npc.getNavigator().cancelNavigation();
+        pendingBlock = null;
+        topsoilColumn = 0;
+        topsoilPlaced = 0;
+        topsoilOutOfMaterial = false;
+        phase = Phase.FILLING;
+        logger.info("[landscaper] Topsoil pass starting for " + BuilderNpcService.baseNameOf(npc)
+                + " over " + (spanX * spanZ) + " column(s)");
+        messagePlayer(Component.text(BuilderNpcService.baseNameOf(npc)
+                + ": Ground's clear — let me put the topsoil back so it doesn't look like a building site.",
+                NamedTextColor.GREEN));
+    }
+
+    private void tickTopsoil() {
+        int totalColumns = spanX * spanZ;
+        for (int i = 0; i < TOPSOIL_COLUMNS_PER_TICK && topsoilColumn < totalColumns; i++) {
+            int x = savedMinX + (topsoilColumn % spanX);
+            int z = savedMinZ + (topsoilColumn / spanX);
+            topsoilColumn++;
+            if (placeTopsoilAt(x, z)) {
+                return;
+            }
+        }
+        if (topsoilColumn >= totalColumns || topsoilOutOfMaterial) {
+            finishTopsoil();
+        }
+    }
+
+    /** Returns true once material ran out, so the caller stops immediately rather than burning through the region. */
+    private boolean placeTopsoilAt(int x, int z) {
+        Block ground = highestSolidIn(x, z);
+        if (ground == null) {
+            return false;
+        }
+        Block above = ground.getRelative(BlockFace.UP);
+        if (!above.getType().isAir() || above.getY() > savedMaxY) {
+            return false;
+        }
+        if (ground.getType() == TOPSOIL_MATERIAL || ground.getType() == Material.GRASS_BLOCK) {
+            // Already looks like ground — nothing to restore, and Rule 3's necessity gate
+            // says work that was not needed is not work.
+            return false;
+        }
+        if (storage == null || storage.withdraw(TOPSOIL_MATERIAL, 1) < 1) {
+            topsoilOutOfMaterial = true;
+            return true;
+        }
+        above.setType(TOPSOIL_MATERIAL);
+        topsoilPlaced++;
+        world.playSound(above.getLocation(), Sound.BLOCK_ROOTED_DIRT_PLACE, 0.7f, 1.0f);
+        world.spawnParticle(Particle.BLOCK, above.getLocation().add(0.5, 0.5, 0.5),
+                6, 0.25, 0.25, 0.25, above.getBlockData());
+        return false;
+    }
+
+    /** Highest solid block in this column within the worked region, or null if the column is empty. */
+    private Block highestSolidIn(int x, int z) {
+        for (int y = savedMaxY; y >= savedMinY; y--) {
+            Block candidate = world.getBlockAt(x, y, z);
+            if (candidate.getType().isSolid()) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    private void finishTopsoil() {
+        if (topsoilOutOfMaterial) {
+            messagePlayer(Component.text(BuilderNpcService.baseNameOf(npc)
+                    + ": I've run out of dirt — stock the chest and set me going again to finish the topsoil.",
+                    NamedTextColor.RED));
+        }
+        logger.info("[landscaper] Topsoil pass done for " + BuilderNpcService.baseNameOf(npc)
+                + " — " + topsoilPlaced + " placed" + (topsoilOutOfMaterial ? ", stopped short (out of dirt)" : ""));
+        finish(BuilderNpcService.baseNameOf(npc) + ": All done — cleared " + clearedCells + " " + target.label()
+                + " block(s)." + storedSuffix() + topsoilSuffix());
+    }
+
+    private String topsoilSuffix() {
+        if (!restoresTopsoil) {
+            return "";
+        }
+        return " Topsoil restored on " + topsoilPlaced + " column(s)"
+                + (topsoilOutOfMaterial ? " before the dirt ran out." : ".");
     }
 
     private void finish(String message) {
