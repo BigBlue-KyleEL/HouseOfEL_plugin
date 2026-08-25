@@ -195,6 +195,15 @@ public final class QuarrymanJobTask implements JobTask {
      */
     private static final int UNLOAD_HOLD_TICKS = 20 * 4;
     /**
+     * How long the Helper is given to walk itself back out of a finished quarry before
+     * giving up and teleporting to the chest (Kyle, 2026-08-25). Deliberately a real
+     * attempt first rather than an immediate teleport: walking out is the honest behaviour
+     * when it works, and the fallback only earns its keep — and its apology line — once
+     * the Helper has genuinely tried and failed. Generous compared with the ordinary
+     * per-cell walk budget, since climbing a deep staircase legitimately takes a while.
+     */
+    private static final int RETURN_WALK_TIMEOUT_TICKS = 20 * 15;
+    /**
      * TEMPORARY, FOR TESTING ONLY — divides every dig duration and post-dig hesitation so a
      * multi-hundred-cell quarry finishes fast enough to actually watch end to end. **Must
      * be set back to 1 before Phase D is called done**, same standing rule the three
@@ -250,7 +259,7 @@ public final class QuarrymanJobTask implements JobTask {
     private static final double MOB_ALERT_RADIUS = 10.0;
     private static final int MOB_ALERT_CHECK_PERIOD = GLOW_TICK_PERIOD;
 
-    private enum Phase { SEEKING, WALKING, DIGGING, HAULING, BULKHEAD, DEPOSITING }
+    private enum Phase { SEEKING, WALKING, DIGGING, HAULING, BULKHEAD, DEPOSITING, RETURNING }
 
     private final Plugin plugin;
     private final Logger logger;
@@ -343,6 +352,9 @@ public final class QuarrymanJobTask implements JobTask {
      * look"). Closed again by finishUnload()/endJob().
      */
     private final List<Block> openChests = new ArrayList<>();
+    /** Finish/abort message held while the Helper walks itself back out — see {@link #endWithReturn}. */
+    private String pendingEndMessage;
+    private boolean pendingEndIsAbort;
     private int unloadTicks;
 
     /** Fluid source blocks currently plugged, awaiting {@link #tickBulkhead}'s settle timer — see {@code ClearJobTask}'s own field. */
@@ -741,6 +753,7 @@ public final class QuarrymanJobTask implements JobTask {
                 case HAULING -> haulToChest();
                 case BULKHEAD -> tickBulkhead();
                 case DEPOSITING -> tickUnload();
+                case RETURNING -> tickReturn();
             }
         }
 
@@ -847,8 +860,8 @@ public final class QuarrymanJobTask implements JobTask {
                 if (carriedTotal > 0) {
                     startHauling();
                 } else {
-                    finish(BuilderNpcService.baseNameOf(npc) + ": Quarry's done — " + clearedCells
-                            + " block(s) dug." + storedSuffix() + leftoverSuffix());
+                    endWithReturn(BuilderNpcService.baseNameOf(npc) + ": Quarry's done — " + clearedCells
+                            + " block(s) dug." + storedSuffix() + leftoverSuffix(), false);
                 }
                 return;
             }
@@ -1148,9 +1161,9 @@ public final class QuarrymanJobTask implements JobTask {
                 phase = Phase.SEEKING;
                 return;
             }
-            abortJob(BuilderNpcService.baseNameOf(npc) + ": Something's blocking my way to "
+            endWithReturn(BuilderNpcService.baseNameOf(npc) + ": Something's blocking my way to "
                     + pendingCell.getX() + "," + pendingCell.getY() + "," + pendingCell.getZ()
-                    + " and I can't work around it — stopping here rather than getting stuck.");
+                    + " and I can't work around it — stopping here rather than getting stuck.", true);
         }
     }
 
@@ -1721,6 +1734,84 @@ public final class QuarrymanJobTask implements JobTask {
         label.teleport(npcEntity.getLocation().add(0, LABEL_HEIGHT_OFFSET, 0));
         int percent = totalCells == 0 ? 100 : (int) Math.min(100, processedCells * 100 / totalCells);
         label.text(Component.text(percent + "%", NamedTextColor.YELLOW));
+    }
+
+    /**
+     * Ends the job, but only after giving the Helper a real chance to walk itself back out
+     * of the hole first. A finished deep quarry leaves the Helper standing on the pit floor
+     * with no way up — Citizens cannot reliably climb the staircase it just dug (the same
+     * limitation that made the end-of-job tidy-up unreachable), so without this the player
+     * has to go down and fetch it, or place a block for it to climb (Kyle did exactly that,
+     * live 2026-08-25).
+     *
+     * <p>Walks to the storage chest rather than teleporting immediately: the honest
+     * behaviour is to climb out under its own power when that genuinely works, and only
+     * apologise and shortcut when it does not. {@link #tickReturn} handles both outcomes.
+     * Skipped entirely when there is no chest to walk to, when the Helper is already there,
+     * or when the entity is gone (nothing left to walk).
+     */
+    private void endWithReturn(String message, boolean isAbort) {
+        pendingEndMessage = message;
+        pendingEndIsAbort = isAbort;
+        if (!npcEntity.isValid() || storage == null || depositPoint == null
+                || npcEntity.getLocation().distanceSquared(depositPoint) <= REACH_DISTANCE * REACH_DISTANCE) {
+            completePendingEnd();
+            return;
+        }
+        walkTicks = 0;
+        noProgressTicks = 0;
+        closestApproachSquared = Double.MAX_VALUE;
+        npc.getNavigator().setTarget(depositPoint);
+        phase = Phase.RETURNING;
+    }
+
+    /** Walks back toward the chest; gives up with an in-character line and a verified-safe teleport if the climb genuinely fails. */
+    private void tickReturn() {
+        double distanceSquared = npcEntity.getLocation().distanceSquared(depositPoint);
+        if (distanceSquared <= REACH_DISTANCE * REACH_DISTANCE) {
+            completePendingEnd();
+            return;
+        }
+
+        walkTicks++;
+        if (distanceSquared < closestApproachSquared - PROGRESS_EPSILON) {
+            closestApproachSquared = distanceSquared;
+            noProgressTicks = 0;
+        } else {
+            noProgressTicks++;
+        }
+
+        boolean stalled = noProgressTicks > GHOST_DIG_NO_PROGRESS_TICKS;
+        if (!stalled && walkTicks <= RETURN_WALK_TIMEOUT_TICKS) {
+            return;
+        }
+
+        messagePlayer(Component.text(BuilderNpcService.baseNameOf(npc)
+                + ": I can't seem to find my way back up — see you back at the storage chest!",
+                NamedTextColor.YELLOW));
+        logger.info(BuilderNpcService.baseNameOf(npc) + ": couldn't climb out of the quarry after "
+                + walkTicks + " ticks — returning to the storage chest directly.");
+        npc.getNavigator().cancelNavigation();
+        Location spot = safeSpotBeside(depositPoint.getBlock());
+        if (spot != null) {
+            npc.teleport(spot, PlayerTeleportEvent.TeleportCause.PLUGIN);
+        } else {
+            // Nothing confirmed-safe beside the chest — leave the Helper where it stands
+            // rather than gambling, same rule as everywhere else in this class.
+            logger.warning(BuilderNpcService.baseNameOf(npc)
+                    + ": no confirmed-safe spot beside the storage chest — leaving it in the quarry.");
+        }
+        completePendingEnd();
+    }
+
+    private void completePendingEnd() {
+        String message = pendingEndMessage;
+        pendingEndMessage = null;
+        if (pendingEndIsAbort) {
+            abortJob(message);
+        } else {
+            finish(message);
+        }
     }
 
     private void finish(String message) {
