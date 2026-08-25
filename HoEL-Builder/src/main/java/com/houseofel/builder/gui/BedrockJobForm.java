@@ -1,5 +1,7 @@
 package com.houseofel.builder.gui;
 
+import com.houseofel.builder.choice.GroundworkerL8Choice;
+import com.houseofel.builder.choice.MilestoneChoiceRecord;
 import com.houseofel.builder.choice.MilestoneChoiceStore;
 import com.houseofel.builder.death.DeathRecordStore;
 import com.houseofel.builder.npc.BuilderNpcService;
@@ -104,8 +106,14 @@ public final class BedrockJobForm {
         // picked, and onSubmit() below only reads/uses them when Task Type resolves to
         // QUARRY — same trade-off as no true divider existing either (see the "— Depth —"
         // label immediately below).
+        // Mirrors the Java menu (Kyle, 2026-08-25): four general jobs, then a separator
+        // naming the level-8 path, then that path's own job. A Bedrock dropdown has no
+        // disabled/heading entry, so the separator is a real selectable row that resolves
+        // to null in taskOptions and is rejected on submit — the closest equivalent, and
+        // the same compromise the "— Depth —" label already makes.
+        TaskType[] taskOptions = taskOptionsFor(npc, specialization, level);
         floodgatePlayer.sendForm(
-                form.dropdown("Task Type", labelsOf(TaskType.values(), specialization))
+                form.dropdown("Task Type", labelsOf(taskOptions, specialization))
                         .dropdown("Target", labelsOf(availableTargets))
                         .toggle("Surface Only", true)
                         .toggle("Store in Chest", true)
@@ -113,7 +121,7 @@ public final class BedrockJobForm {
                         .dropdown("Depth Mode", "Level", "Coordinates")
                         .input("Blocks deep", "e.g. 12")
                         .input("Target Y coordinate", "e.g. 64")
-                        .validResultHandler(response -> onSubmit(player, npc, response, offset, availableTargets))
+                        .validResultHandler(response -> onSubmit(player, npc, response, offset, availableTargets, taskOptions))
                         .closedOrInvalidResultHandler(() -> onClosed(player))
                         .build());
     }
@@ -194,13 +202,20 @@ public final class BedrockJobForm {
     }
 
     private void onSubmit(Player player, NPC npc, org.geysermc.cumulus.response.CustomFormResponse response,
-                           int offset, Target[] availableTargets) {
+                           int offset, Target[] availableTargets, TaskType[] taskOptions) {
         // A dropdown's answer is the selected index (an int), not its label — reading it
         // as a String is what actually threw the ClassCastException on submit.
         // `offset` accounts for the optional flavour label ahead of these — see open().
         // Read back against the SAME target list the form was built from (availableTargets),
         // not the full Target.values() — "Anything" may have been omitted at build time.
-        TaskType taskType = TaskType.values()[response.getDropdown(offset)];
+        TaskType taskType = taskOptions[response.getDropdown(offset)];
+        if (taskType == null) {
+            // The separator row — not a job. Say so plainly rather than silently doing
+            // nothing, which would read as the form being broken.
+            player.sendMessage(Component.text(
+                    "That's just a heading — pick one of the jobs above or below it.", NamedTextColor.RED));
+            return;
+        }
         Target target = availableTargets[response.getDropdown(offset + 1)];
         boolean surfaceOnly = response.getToggle(offset + 2);
         boolean storeInChest = response.getToggle(offset + 3);
@@ -267,10 +282,46 @@ public final class BedrockJobForm {
     private String[] labelsOf(TaskType[] types, Specialization specialization) {
         String[] labels = new String[types.length];
         for (int i = 0; i < types.length; i++) {
+            if (types[i] == null) {
+                labels[i] = separatorLabel;
+                continue;
+            }
             boolean isSpecialty = specialization != null && types[i] == specialization.taskType();
             labels[i] = isSpecialty ? types[i].label() + " ★ (specialty)" : types[i].label();
         }
         return labels;
+    }
+
+    /** Set by {@link #taskOptionsFor} so {@link #labelsOf} can render the null slot's heading text. */
+    private String separatorLabel = "—";
+
+    /**
+     * Four general jobs, then — only for a Groundworker that has actually PICKED at level
+     * 8 — a null separator slot and that path's own job. Null is the separator; callers
+     * must reject it on submit.
+     */
+    private TaskType[] taskOptionsFor(NPC npc, Specialization specialization, int level) {
+        TaskType[] general = {TaskType.MINE, TaskType.LUMBERJACK, TaskType.FARM, TaskType.CLEAR};
+        if (specialization != Specialization.GROUNDWORKER || level < 8) {
+            return general;
+        }
+        MilestoneChoiceRecord record = choiceStore.find(npc.getUniqueId(), 8);
+        if (record == null) {
+            return general;
+        }
+        TaskType specialised;
+        String pathName;
+        if (GroundworkerL8Choice.QUARRYMAN.name().equals(record.choice())) {
+            specialised = TaskType.QUARRY;
+            pathName = "Quarryman";
+        } else if (GroundworkerL8Choice.LANDSCAPER.name().equals(record.choice())) {
+            specialised = TaskType.LANDSCAPE;
+            pathName = "Landscaper";
+        } else {
+            return general;
+        }
+        separatorLabel = "— Level 8: " + pathName + " —";
+        return new TaskType[] {general[0], general[1], general[2], general[3], null, specialised};
     }
 
     private String[] labelsOf(Target[] targets) {

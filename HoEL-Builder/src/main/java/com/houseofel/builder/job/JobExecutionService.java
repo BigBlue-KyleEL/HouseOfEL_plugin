@@ -73,7 +73,7 @@ public final class JobExecutionService {
 
     public void dispatchClear(Player player, NPC npc, TaskType taskType, Target target,
                                Location pointA, Location pointB, boolean storeInChest,
-                               boolean surfaceOnly) {
+                               boolean surfaceOnly, boolean restoreTopsoil) {
         // Purely a cosmetic starting point — ClearJobTask.beginDigging() picks the real
         // per-block tool (see BlockTool) the moment it reaches its first block, so
         // whatever's held here is only ever visible for a step or two at most.
@@ -159,14 +159,15 @@ public final class JobExecutionService {
             }
         }
 
-        // Landscaper (Groundworker level-8 Choice option B) turns a Clearing job into a
-        // restore job — see ClearJobTask's FILLING phase. Read once here rather than per
-        // tick, so a respec mid-job cannot change what the running job is doing.
-        boolean restoresTopsoil = isLandscaper(npc);
-        // "It cannot dig deep — hand it a quarry and it refuses and says so" (V1 Perk
-        // Ladders, Landscaper's own balance clause). Enforced before any work starts, at
-        // the dispatch seam, so the refusal costs the player nothing.
-        if (restoresTopsoil && (maxY - minY + 1) > LANDSCAPER_MAX_DEPTH) {
+        // Whether THIS job restores topsoil comes from which button was pressed
+        // (Landscaping vs plain Clearing), not from the Helper's class — a Landscaper can
+        // still be asked for a plain clear.
+        boolean restoresTopsoil = restoreTopsoil;
+        // The depth cap, by contrast, is a property of the CLASS, not the job: "It cannot
+        // dig deep — hand it a quarry and it refuses and says so" (V1 Perk Ladders,
+        // Landscaper's own balance clause). Applied to any job a Landscaper takes, so the
+        // cap cannot be side-stepped by using the plain Clearing button.
+        if (isLandscaper(npc) && (maxY - minY + 1) > LANDSCAPER_MAX_DEPTH) {
             player.sendMessage(Component.text(BuilderNpcService.baseNameOf(npc)
                     + ": That's a quarry, not landscaping — I work the surface, no deeper than "
                     + LANDSCAPER_MAX_DEPTH + " blocks. Mark something shallower and I'll make it look like it grew there.",

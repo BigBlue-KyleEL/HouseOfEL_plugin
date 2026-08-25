@@ -1,5 +1,7 @@
 package com.houseofel.builder.gui;
 
+import com.houseofel.builder.choice.GroundworkerL8Choice;
+import com.houseofel.builder.choice.MilestoneChoiceRecord;
 import com.houseofel.builder.choice.MilestoneChoiceStore;
 import com.houseofel.builder.death.DeathRecordStore;
 import com.houseofel.builder.npc.BuilderNpcService;
@@ -72,7 +74,12 @@ public final class JavaJobDialog {
     private void showTaskTypeStep(Player player, NPC npc, Specialization specialization, int level) {
         String name = BuilderNpcService.baseNameOf(npc);
         List<ActionButton> buttons = new ArrayList<>();
-        for (TaskType type : TaskType.values()) {
+        // The four GENERAL jobs every Helper can be asked for. Deliberately not
+        // TaskType.values() any more (Kyle, 2026-08-25): that included QUARRY, so every
+        // Helper — Farmers included — was being offered Quarrying regardless of
+        // specialization, level, or whether it had ever made a level-8 choice. The
+        // specialised jobs are appended below, gated on the real pick.
+        for (TaskType type : List.of(TaskType.MINE, TaskType.LUMBERJACK, TaskType.FARM, TaskType.CLEAR)) {
             // Spec-distinct styling: the task type matching this Helper's specialization
             // (its bonus-drop skill, see Specialization.taskType()) is called out; the rest
             // stay plain. Skipped entirely for an unassigned Helper — no specialization
@@ -105,6 +112,46 @@ public final class JavaJobDialog {
                                             showDepthStep(p, npc, Target.ANY_EARTH);
                                         } else {
                                             showTargetStep(p, npc, type, specialization, level);
+                                        }
+                                    });
+                                }
+                            },
+                            ClickCallback.Options.builder().build())));
+        }
+
+        // Specialised jobs, under a separator naming the path this Helper actually chose.
+        // A dialog BODY message cannot sit between buttons (it always renders above the
+        // whole button grid — which is why the "— Depth —" header works there but not
+        // here), and neither GUI API has a real divider construct. A non-committal button
+        // is the closest equivalent: it reuses the same "— X —" visual language, and
+        // clicking it simply reopens this menu rather than doing anything.
+        TaskType specialised = specialisedJobFor(npc, specialization, level);
+        if (specialised != null) {
+            String pathName = specialised == TaskType.QUARRY ? "Quarryman" : "Landscaper";
+            buttons.add(ActionButton.create(
+                    Component.text("— Level 8: " + pathName + " —", NamedTextColor.GOLD).decorate(TextDecoration.BOLD),
+                    Component.text("The path " + name + " chose at level 8."), 150,
+                    DialogAction.customClick(
+                            (view, audience) -> {
+                                if (audience instanceof Player p) {
+                                    Bukkit.getScheduler().runTask(plugin,
+                                            () -> showTaskTypeStep(p, npc, specialization, level));
+                                }
+                            },
+                            ClickCallback.Options.builder().build())));
+            buttons.add(ActionButton.create(
+                    Component.text("[" + specialised.label() + "]", NamedTextColor.YELLOW).decorate(TextDecoration.BOLD),
+                    Component.text(specialised == TaskType.QUARRY
+                            ? "Digs to any depth as a walkable staircase."
+                            : "Clears, then puts the topsoil back so it looks natural."), 150,
+                    DialogAction.customClick(
+                            (view, audience) -> {
+                                if (audience instanceof Player p) {
+                                    Bukkit.getScheduler().runTask(plugin, () -> {
+                                        if (specialised == TaskType.QUARRY) {
+                                            showDepthStep(p, npc, Target.ANY_EARTH);
+                                        } else {
+                                            showTargetStep(p, npc, TaskType.LANDSCAPE, specialization, level);
                                         }
                                     });
                                 }
@@ -217,6 +264,29 @@ public final class JavaJobDialog {
      * only plainMessage/item) — a styled text line is the honest closest substitute, not
      * a true rule.
      */
+    /**
+     * The one specialised job this Helper has actually unlocked AND picked, or null. Reads
+     * the real level-8 Choice record rather than inferring from level alone — an L8+
+     * Groundworker who has not decided yet gets no specialised button, matching the
+     * picker's own "right-click to choose" flow.
+     */
+    private TaskType specialisedJobFor(NPC npc, Specialization specialization, int level) {
+        if (specialization != Specialization.GROUNDWORKER || level < 8) {
+            return null;
+        }
+        MilestoneChoiceRecord record = choiceStore.find(npc.getUniqueId(), 8);
+        if (record == null) {
+            return null;
+        }
+        if (GroundworkerL8Choice.QUARRYMAN.name().equals(record.choice())) {
+            return TaskType.QUARRY;
+        }
+        if (GroundworkerL8Choice.LANDSCAPER.name().equals(record.choice())) {
+            return TaskType.LANDSCAPE;
+        }
+        return null;
+    }
+
     private void showDepthStep(Player player, NPC npc, Target target) {
         Component depthTitle = Component.text("— Depth —", NamedTextColor.GOLD).decorate(TextDecoration.BOLD);
         ActionButton levelButton = ActionButton.create(Component.text("Level"),

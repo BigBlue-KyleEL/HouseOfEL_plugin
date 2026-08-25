@@ -8,7 +8,15 @@ public enum TaskType {
     LUMBERJACK("Lumberjacking", Material.IRON_AXE, "Axe"),
     FARM("Farming", Material.IRON_HOE, "Hoe"),
     CLEAR("Clearing", Material.IRON_SHOVEL, "Shovel"),
-    QUARRY("Quarrying", Material.DIAMOND_PICKAXE, "Pickaxe");
+    QUARRY("Quarrying", Material.DIAMOND_PICKAXE, "Pickaxe"),
+    /**
+     * Groundworker level-8 Choice option B. Runs the same Clearing engine as
+     * {@link #CLEAR} — it is a behavioural fork of that job, not a separate one — but
+     * chains ClearJobTask's topsoil-restore phase afterwards. Given its own entry so the
+     * menu can offer it as a distinct, discoverable job rather than making Clearing
+     * silently mean something different for one Helper (Kyle, 2026-08-25).
+     */
+    LANDSCAPE("Landscaping", Material.IRON_SHOVEL, "Shovel");
 
     private final String label;
     private final Material icon;

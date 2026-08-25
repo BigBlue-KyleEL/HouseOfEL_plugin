@@ -108,12 +108,15 @@ public final class RegionSelectionService {
         logger.info(player.getName() + " confirmed " + job.taskType + "/" + job.target + " region "
                 + describe(job.pointA) + " to " + describe(job.pointB));
 
-        if (job.taskType == TaskType.CLEAR) {
+        // Landscaping runs the same Clearing engine with the topsoil-restore phase
+        // chained on — see TaskType.LANDSCAPE and ClearJobTask's FILLING phase.
+        if (job.taskType == TaskType.CLEAR || job.taskType == TaskType.LANDSCAPE) {
             Location pointA = job.pointA;
             Location pointB = job.pointB;
+            boolean restoreTopsoil = job.taskType == TaskType.LANDSCAPE;
             finish(player);
             jobExecutionService.dispatchClear(player, job.npc, job.taskType, job.target,
-                    pointA, pointB, job.storeInChest, job.surfaceOnly);
+                    pointA, pointB, job.storeInChest, job.surfaceOnly, restoreTopsoil);
             return;
         }
 
