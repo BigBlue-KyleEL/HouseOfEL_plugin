@@ -19,6 +19,7 @@ import org.bukkit.Sound;
 import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
+import org.bukkit.block.DoubleChest;
 import org.bukkit.block.Lidded;
 import org.bukkit.block.data.Levelled;
 import org.bukkit.entity.Entity;
@@ -334,8 +335,14 @@ public final class QuarrymanJobTask implements JobTask {
      */
     private Location lastSafeLocation;
 
-    /** Chest whose lid is currently held open for a delivery — closed again by finishUnload()/endJob(). */
-    private Block openChest;
+    /**
+     * Every block whose lid this job is currently holding open for a delivery — BOTH halves
+     * when the storage is a double chest. {@link Lidded} only animates the exact block it
+     * is called on, so opening one half of a double chest leaves the other visibly shut
+     * (Kyle, live 2026-08-25: "he only opens a single side of the chest... so it is a buggy
+     * look"). Closed again by finishUnload()/endJob().
+     */
+    private final List<Block> openChests = new ArrayList<>();
     private int unloadTicks;
 
     /** Fluid source blocks currently plugged, awaiting {@link #tickBulkhead}'s settle timer — see {@code ClearJobTask}'s own field. */
@@ -1639,22 +1646,51 @@ public final class QuarrymanJobTask implements JobTask {
      */
     private void openChestLid(Block chest) {
         closeChestLid();
-        if (chest.getState() instanceof Lidded lidded) {
-            lidded.open();
-            openChest = chest;
+        for (Block half : chestHalves(chest)) {
+            if (half.getState() instanceof Lidded lidded) {
+                lidded.open();
+                openChests.add(half);
+            }
         }
         world.playSound(depositPoint, Sound.BLOCK_CHEST_OPEN, 0.8f, 1.0f);
     }
 
+    /**
+     * Both halves of a double chest, or just the one block if it is a single. Resolved
+     * through the inventory holder rather than by computing the partner from facing plus
+     * LEFT/RIGHT — {@code JobStorage.pairUp} documents from experience that the
+     * facing-to-side mapping is easy to get backwards, and this way there is nothing to get
+     * backwards: the server already knows which two blocks form the pair.
+     */
+    private List<Block> chestHalves(Block chest) {
+        List<Block> halves = new ArrayList<>();
+        if (chest.getState() instanceof org.bukkit.block.Chest state
+                && state.getInventory().getHolder() instanceof DoubleChest doubleChest) {
+            if (doubleChest.getLeftSide() instanceof org.bukkit.block.Chest left) {
+                halves.add(left.getBlock());
+            }
+            if (doubleChest.getRightSide() instanceof org.bukkit.block.Chest right) {
+                halves.add(right.getBlock());
+            }
+        }
+        if (halves.isEmpty()) {
+            halves.add(chest);
+        }
+        return halves;
+    }
+
     /** Closes whatever lid this job left open — shared by the normal path and every teardown, so a chest is never stranded open. */
     private void closeChestLid() {
-        if (openChest != null) {
-            if (openChest.getState() instanceof Lidded lidded) {
+        if (openChests.isEmpty()) {
+            return;
+        }
+        for (Block half : openChests) {
+            if (half.getState() instanceof Lidded lidded) {
                 lidded.close();
             }
-            world.playSound(openChest.getLocation(), Sound.BLOCK_CHEST_CLOSE, 0.8f, 1.0f);
-            openChest = null;
         }
+        world.playSound(openChests.get(0).getLocation(), Sound.BLOCK_CHEST_CLOSE, 0.8f, 1.0f);
+        openChests.clear();
     }
 
     /** Mentions tidy-up blocks that couldn't be reached, so a clean finish stays honest without sounding like a failure. */
