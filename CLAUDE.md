@@ -45,7 +45,41 @@ cd /d "D:\Projects\House of EL\Local Dev Server 26.1.2"
 ```
 Requires JDK 25 specifically (installed alongside the system's existing Java 21 — don't assume `java` on PATH resolves to 25).
 
-**Since 2026-08-24, Kyle often runs the dev server himself** in his own terminal window (real console access, so a plain `stop` command or Ctrl+C works and shuts down cleanly — no more of the taskkill gotcha below in that case). When Claude Code needs to restart a server it started itself: `taskkill /PID <pid>` (no `/F`) is what CLAUDE.md previously recommended, but confirmed live 2026-08-24 that it doesn't reliably work at all any more — it errored "can only be terminated forcefully" on two separate occasions the same session, requiring `/F` immediately after. Try the plain form first (still theoretically the cleaner path when it works), but don't be surprised if it fails and `/F` is required — don't loop retrying the plain form. Either way, it does NOT reliably log a clean "Saving worlds"/"Server stopped" shutdown sequence first — confirmed 2026-08-20 (log just stopped mid-stream). Verify no data was at risk by checking the region file mtimes under `world/dimensions/minecraft/overworld/region/` — Bukkit already autosaves on last-player-leave, so as long as nothing was actively mutating world state after that (no players, no NPC jobs running), the on-disk state matches the last regular autosave regardless of how the shutdown itself went. Before restarting at all: check `logs/latest.log` for recent join/leave activity — don't interrupt a session Kyle is actively testing in without at least a heads-up.
+### Deploy protocol — Claude owns restarts (2026-08-25)
+
+**Copying a jar into `plugins/` does NOT change the running server.** Java loads a plugin
+jar once, at startup; overwriting the file on disk leaves the already-running process on
+the old code. This exact trap has silently invalidated test results in three separate
+sessions — someone tests, sees the old behavior, and concludes a fix did not work when it
+simply was never loaded. **A deploy is not done until the server has been restarted.**
+
+The working agreement, Kyle's explicit call 2026-08-25 (this replaces the brief
+2026-08-24 arrangement where Kyle ran the server himself — that added more friction than
+it removed):
+
+1. **Claude owns restarts for every fix and build.** Build → copy the jar → restart. Never
+   leave a jar deployed against a running server and never hand Kyle a build that needs him
+   to restart it.
+2. **Watch for Kyle being disconnected, then restart in that window.** Check
+   `logs/latest.log` for the most recent `joined the game` / `left the game` pair. If he
+   is connected, wait for the disconnect rather than interrupting; if he is already
+   disconnected, restart immediately. The point is that fixes are already live by the time
+   he next connects, so no one waits on anyone.
+3. **Verify what is actually loaded before diagnosing anything.** When behavior looks
+   unchanged, check the jar mtime against the server boot time BEFORE theorising about the
+   code:
+   ```
+   ls -la --time-style=full-iso plugins/HoEL-Builder-0.1.0-SNAPSHOT.jar
+   head -2 logs/latest.log
+   ```
+   If the jar is newer than the boot line, the running server does not have it. That is the
+   answer; restart rather than debugging further.
+4. **Stopping it:** `taskkill /PID <pid>` (no `/F`) is the clean path in principle but has
+   failed on every recent attempt with "can only be terminated forcefully" — expect to fall
+   back to `/F` immediately rather than retrying the plain form. Note `/F` skips
+   `saveAllOnDisable()`, so an actively-running (not paused) job loses progress since its
+   last save point. For a throwaway test job that is fine; if the job matters, pause it
+   first (pause saves immediately), then restart.
 
 ## Code conventions
 
