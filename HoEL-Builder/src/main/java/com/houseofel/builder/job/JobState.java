@@ -30,6 +30,8 @@ final class JobState {
     boolean surfaceOnly;
     /** Landscaper (Groundworker L8 option B): this Clear job also restores topsoil when it finishes. */
     boolean restoresTopsoil;
+    /** Standalone landscaping: skips clearing entirely and goes straight to the topsoil pass. */
+    boolean topsoilOnly;
     boolean storeInChest;
 
     // Quarryman-only dig-order parameters — meaningful only when jobType == QUARRY.
@@ -41,6 +43,14 @@ final class JobState {
     int requestedDepth;
     boolean stepsAlongX;
     int stepDirection;
+
+    String landscapeMode;
+    String landscapeBiome;
+    int landscapeColumn;
+    int landscapePlaced;
+    int landscapeTreeCursor = -1;
+    int gradientAX;
+    int gradientAZ;
 
     long processedCells;
     long clearedCells;

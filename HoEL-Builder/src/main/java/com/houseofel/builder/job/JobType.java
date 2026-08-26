@@ -10,5 +10,6 @@ package com.houseofel.builder.job;
  */
 enum JobType {
     CLEAR,
-    QUARRY
+    QUARRY,
+    LANDSCAPE
 }

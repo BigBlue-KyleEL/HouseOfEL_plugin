@@ -4,6 +4,8 @@ import com.houseofel.builder.choice.GroundworkerL8Choice;
 import com.houseofel.builder.choice.MilestoneChoiceRecord;
 import com.houseofel.builder.choice.MilestoneChoiceStore;
 import com.houseofel.builder.death.DeathRecordStore;
+import com.houseofel.builder.job.LandscapeBiome;
+import com.houseofel.builder.job.LandscapeMode;
 import com.houseofel.builder.npc.BuilderNpcService;
 import com.houseofel.builder.npc.HelperLevelService;
 import com.houseofel.builder.npc.Specialization;
@@ -117,7 +119,7 @@ public final class JavaJobDialog {
                     Component.text("Lvl.8: " + specialised.label(), NamedTextColor.GOLD),
                     Component.text(specialised == TaskType.QUARRY
                             ? "Digs to any depth as a walkable staircase."
-                            : "Clears, then puts the topsoil back so it looks natural."), 150,
+                            : "Fills and shapes terrain across the marked area."), 150,
                     DialogAction.customClick(
                             (view, audience) -> {
                                 if (audience instanceof Player p) {
@@ -125,7 +127,7 @@ public final class JavaJobDialog {
                                         if (specialised == TaskType.QUARRY) {
                                             showDepthStep(p, npc, Target.ANY_EARTH);
                                         } else {
-                                            showTargetStep(p, npc, TaskType.LANDSCAPE, specialization, level);
+                                            showLandscapeConfirmStep(p, npc);
                                         }
                                     });
                                 }
@@ -259,6 +261,52 @@ public final class JavaJobDialog {
             return TaskType.LANDSCAPE;
         }
         return null;
+    }
+
+    private void showLandscapeConfirmStep(Player player, NPC npc) {
+        List<ActionButton> buttons = new ArrayList<>();
+        for (LandscapeMode mode : LandscapeMode.values()) {
+            buttons.add(ActionButton.create(Component.text(mode.label()), null, 150,
+                    DialogAction.customClick(
+                            (view, audience) -> {
+                                if (audience instanceof Player p) {
+                                    Bukkit.getScheduler().runTask(plugin, () -> {
+                                        if (mode == LandscapeMode.REDESIGN) {
+                                            showRedesignBiomeStep(p, npc);
+                                        } else {
+                                            regionService.beginLandscapeJob(p, npc, mode, null);
+                                        }
+                                    });
+                                }
+                            },
+                            ClickCallback.Options.builder().build())));
+        }
+
+        player.showDialog(Dialog.create(factory -> factory.empty()
+                .base(DialogBase.builder(Component.text(
+                        BuilderNpcService.baseNameOf(npc) + " — Landscaping")).build())
+                .type(DialogType.multiAction(buttons).build())));
+    }
+
+    private void showRedesignBiomeStep(Player player, NPC npc) {
+        List<ActionButton> buttons = new ArrayList<>();
+        for (LandscapeBiome biome : LandscapeBiome.values()) {
+            buttons.add(ActionButton.create(Component.text(biome.label()), null, 150,
+                    DialogAction.customClick(
+                            (view, audience) -> {
+                                if (audience instanceof Player p) {
+                                    Bukkit.getScheduler().runTask(plugin, () ->
+                                            regionService.beginLandscapeJob(p, npc,
+                                                    LandscapeMode.REDESIGN, biome));
+                                }
+                            },
+                            ClickCallback.Options.builder().build())));
+        }
+
+        player.showDialog(Dialog.create(factory -> factory.empty()
+                .base(DialogBase.builder(Component.text(
+                        BuilderNpcService.baseNameOf(npc) + " — Choose Biome")).build())
+                .type(DialogType.multiAction(buttons).build())));
     }
 
     private void showDepthStep(Player player, NPC npc, Target target) {

@@ -4,6 +4,8 @@ import com.houseofel.builder.npc.BuilderNpcService;
 import com.houseofel.builder.gui.Target;
 import com.houseofel.builder.gui.TaskType;
 import com.houseofel.builder.job.JobExecutionService;
+import com.houseofel.builder.job.LandscapeBiome;
+import com.houseofel.builder.job.LandscapeMode;
 import net.citizensnpcs.api.npc.NPC;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
@@ -75,6 +77,20 @@ public final class RegionSelectionService {
                 new PendingJob(npc, taskType, target, storeInChest, surfaceOnly, requestedLevels, requestedTargetY));
     }
 
+    public void beginLandscapeJob(Player player, NPC npc, LandscapeMode landscapeMode,
+                                   LandscapeBiome landscapeBiome) {
+        clearJob(player.getUniqueId());
+        if (!rod.giveTo(player, BuilderNpcService.baseNameOf(npc))) {
+            player.sendMessage(Component.text(
+                    BuilderNpcService.baseNameOf(npc) + ": You can't even hold the Surveyor's Rod. Make space.",
+                    NamedTextColor.RED));
+            return;
+        }
+        jobs.put(player.getUniqueId(),
+                new PendingJob(npc, TaskType.LANDSCAPE, Target.DIRT, false, false, null, null,
+                        landscapeMode, landscapeBiome));
+    }
+
     /**
      * Any click/tap while unlocked marks whichever point isn't set yet — point A first,
      * then point B. Once locked, clicks do nothing; confirming or cancelling happens via
@@ -108,15 +124,21 @@ public final class RegionSelectionService {
         logger.info(player.getName() + " confirmed " + job.taskType + "/" + job.target + " region "
                 + describe(job.pointA) + " to " + describe(job.pointB));
 
-        // Landscaping runs the same Clearing engine with the topsoil-restore phase
-        // chained on — see TaskType.LANDSCAPE and ClearJobTask's FILLING phase.
-        if (job.taskType == TaskType.CLEAR || job.taskType == TaskType.LANDSCAPE) {
+        if (job.taskType == TaskType.CLEAR) {
             Location pointA = job.pointA;
             Location pointB = job.pointB;
-            boolean restoreTopsoil = job.taskType == TaskType.LANDSCAPE;
             finish(player);
             jobExecutionService.dispatchClear(player, job.npc, job.taskType, job.target,
-                    pointA, pointB, job.storeInChest, job.surfaceOnly, restoreTopsoil);
+                    pointA, pointB, job.storeInChest, job.surfaceOnly, false);
+            return;
+        }
+
+        if (job.taskType == TaskType.LANDSCAPE) {
+            Location pointA = job.pointA;
+            Location pointB = job.pointB;
+            LandscapeMode mode = job.landscapeMode != null ? job.landscapeMode : LandscapeMode.FILL;
+            finish(player);
+            jobExecutionService.dispatchLandscape(player, job.npc, pointA, pointB, mode, job.landscapeBiome);
             return;
         }
 
@@ -178,9 +200,12 @@ public final class RegionSelectionService {
             }, TIMEOUT_TICKS);
         }
 
+        String jobLabel = job.taskType == TaskType.LANDSCAPE
+                ? job.taskType.label()
+                : job.taskType.label() + " " + job.target.label();
         player.sendMessage(Component.text(
                 BuilderNpcService.baseNameOf(job.npc) + " looks over the marked area — " + dx + " x " + dy + " x " + dz + " ("
-                        + volume + " blocks) for " + job.taskType.label() + " " + job.target.label()
+                        + volume + " blocks) for " + jobLabel
                         + ". Say \"Yep\" to begin, or \"Wait\" to call it off.",
                 NamedTextColor.AQUA));
     }
@@ -246,6 +271,8 @@ public final class RegionSelectionService {
         /** Quarry-only depth choice, made before this area was even marked — see JobExecutionService.dispatchQuarryman for how these resolve. Both null for every other TaskType. */
         private final Integer requestedLevels;
         private final Integer requestedTargetY;
+        private final LandscapeMode landscapeMode;
+        private final LandscapeBiome landscapeBiome;
         private Location pointA;
         private Location pointB;
         private long lastClickMillis;
@@ -254,6 +281,12 @@ public final class RegionSelectionService {
 
         private PendingJob(NPC npc, TaskType taskType, Target target, boolean storeInChest, boolean surfaceOnly,
                             Integer requestedLevels, Integer requestedTargetY) {
+            this(npc, taskType, target, storeInChest, surfaceOnly, requestedLevels, requestedTargetY, null, null);
+        }
+
+        private PendingJob(NPC npc, TaskType taskType, Target target, boolean storeInChest, boolean surfaceOnly,
+                            Integer requestedLevels, Integer requestedTargetY,
+                            LandscapeMode landscapeMode, LandscapeBiome landscapeBiome) {
             this.npc = npc;
             this.taskType = taskType;
             this.target = target;
@@ -261,6 +294,8 @@ public final class RegionSelectionService {
             this.surfaceOnly = surfaceOnly;
             this.requestedLevels = requestedLevels;
             this.requestedTargetY = requestedTargetY;
+            this.landscapeMode = landscapeMode;
+            this.landscapeBiome = landscapeBiome;
         }
 
         private boolean locked() {

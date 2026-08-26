@@ -48,6 +48,7 @@ final class JobStateStore {
             yaml.set("target", state.target);
             yaml.set("surfaceOnly", state.surfaceOnly);
             yaml.set("restoresTopsoil", state.restoresTopsoil);
+            yaml.set("topsoilOnly", state.topsoilOnly);
             yaml.set("passNumber", state.passNumber);
             yaml.set("clearedThisPass", state.clearedThisPass);
             yaml.set("skippedThisPass", state.skippedThisPass);
@@ -58,6 +59,16 @@ final class JobStateStore {
             yaml.set("requestedDepth", state.requestedDepth);
             yaml.set("stepsAlongX", state.stepsAlongX);
             yaml.set("stepDirection", state.stepDirection);
+        } else if (state.jobType == JobType.LANDSCAPE) {
+            yaml.set("minY", state.minY);
+            yaml.set("maxY", state.maxY);
+            yaml.set("landscapeMode", state.landscapeMode);
+            yaml.set("landscapeBiome", state.landscapeBiome);
+            yaml.set("landscapeColumn", state.landscapeColumn);
+            yaml.set("landscapePlaced", state.landscapePlaced);
+            yaml.set("landscapeTreeCursor", state.landscapeTreeCursor);
+            yaml.set("gradientAX", state.gradientAX);
+            yaml.set("gradientAZ", state.gradientAZ);
         }
         yaml.set("chests", state.chests);
         yaml.set("occupiedColumns", state.occupiedColumns);
@@ -128,6 +139,7 @@ final class JobStateStore {
                 state.target = yaml.getString("target");
                 state.surfaceOnly = yaml.getBoolean("surfaceOnly");
                 state.restoresTopsoil = yaml.getBoolean("restoresTopsoil");
+                state.topsoilOnly = yaml.getBoolean("topsoilOnly");
                 state.passNumber = yaml.getInt("passNumber", 1);
                 state.clearedThisPass = yaml.getLong("clearedThisPass");
                 state.skippedThisPass = yaml.getLong("skippedThisPass");
@@ -138,6 +150,16 @@ final class JobStateStore {
                 state.requestedDepth = yaml.getInt("requestedDepth");
                 state.stepsAlongX = yaml.getBoolean("stepsAlongX");
                 state.stepDirection = yaml.getInt("stepDirection");
+            } else if (state.jobType == JobType.LANDSCAPE) {
+                state.minY = yaml.getInt("minY");
+                state.maxY = yaml.getInt("maxY");
+                state.landscapeMode = yaml.getString("landscapeMode");
+                state.landscapeBiome = yaml.getString("landscapeBiome");
+                state.landscapeColumn = yaml.getInt("landscapeColumn");
+                state.landscapePlaced = yaml.getInt("landscapePlaced");
+                state.landscapeTreeCursor = yaml.getInt("landscapeTreeCursor", -1);
+                state.gradientAX = yaml.getInt("gradientAX");
+                state.gradientAZ = yaml.getInt("gradientAZ");
             }
             state.chests = yaml.getStringList("chests");
             state.occupiedColumns = yaml.getStringList("occupiedColumns");

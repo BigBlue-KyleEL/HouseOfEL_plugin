@@ -4,6 +4,8 @@ import com.houseofel.builder.choice.GroundworkerL8Choice;
 import com.houseofel.builder.choice.MilestoneChoiceRecord;
 import com.houseofel.builder.choice.MilestoneChoiceStore;
 import com.houseofel.builder.death.DeathRecordStore;
+import com.houseofel.builder.job.LandscapeBiome;
+import com.houseofel.builder.job.LandscapeMode;
 import com.houseofel.builder.npc.BuilderNpcService;
 import com.houseofel.builder.npc.HelperLevelService;
 import com.houseofel.builder.npc.Specialization;
@@ -121,6 +123,10 @@ public final class BedrockJobForm {
                         .dropdown("Depth Mode", "Level", "Coordinates")
                         .input("Blocks deep", "e.g. 12")
                         .input("Target Y coordinate", "e.g. 64")
+                        .label("— Landscaping Mode — (Landscaping only)")
+                        .dropdown("Landscape Style", "Fill to the Brim", "Sloping Terrain", "Redesign")
+                        .dropdown("Biome (Redesign only)", "Plains", "Desert", "Badlands",
+                                "Snowy Tundra", "Taiga", "Jungle", "Mushroom Island")
                         .validResultHandler(response -> onSubmit(player, npc, response, offset, availableTargets, taskOptions))
                         .closedOrInvalidResultHandler(() -> onClosed(player))
                         .build());
@@ -210,12 +216,26 @@ public final class BedrockJobForm {
         // not the full Target.values() — "Anything" may have been omitted at build time.
         TaskType taskType = taskOptions[response.getDropdown(offset)];
         if (taskType == null) {
-            // The separator row — not a job. Say so plainly rather than silently doing
-            // nothing, which would read as the form being broken.
             player.sendMessage(Component.text(
                     "That's just a heading — pick one of the jobs above or below it.", NamedTextColor.RED));
             return;
         }
+
+        if (taskType == TaskType.LANDSCAPE) {
+            int modeIndex = response.getDropdown(offset + 9);
+            LandscapeMode mode = LandscapeMode.values()[Math.min(modeIndex, LandscapeMode.values().length - 1)];
+            LandscapeBiome biome = null;
+            if (mode == LandscapeMode.REDESIGN) {
+                int biomeIndex = response.getDropdown(offset + 10);
+                LandscapeBiome[] biomes = LandscapeBiome.values();
+                biome = biomes[Math.min(biomeIndex, biomes.length - 1)];
+            }
+            LandscapeBiome finalBiome = biome;
+            Bukkit.getScheduler().runTask(plugin, () ->
+                    regionService.beginLandscapeJob(player, npc, mode, finalBiome));
+            return;
+        }
+
         Target target = availableTargets[response.getDropdown(offset + 1)];
         boolean surfaceOnly = response.getToggle(offset + 2);
         boolean storeInChest = response.getToggle(offset + 3);

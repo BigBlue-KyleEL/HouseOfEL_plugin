@@ -331,6 +331,8 @@ public final class ClearJobTask implements JobTask {
     private final boolean surfaceOnly;
     /** True when this Helper picked Landscaper at L8 — chains {@link Phase#FILLING} after clearing. */
     private final boolean restoresTopsoil;
+    /** Standalone landscaping — skips clearing entirely, starts in FILLING phase. */
+    private final boolean topsoilOnly;
     /** Column cursor for the topsoil pass, indexed over the region footprint. */
     private int topsoilColumn;
     private int topsoilPlaced;
@@ -421,10 +423,10 @@ public final class ClearJobTask implements JobTask {
                  NPC npc, Entity npcEntity, EntityEquipment equipment, TextDisplay label, World world,
                  Target target, Material tool, int minX, int maxX, int minY, int maxY, int minZ, int maxZ,
                  int spanX, int spanZ, long totalCells, JobStorage storage, boolean storeInChest,
-                 boolean surfaceOnly, RegionOutline outline, boolean restoresTopsoil) {
+                 boolean surfaceOnly, RegionOutline outline, boolean restoresTopsoil, boolean topsoilOnly) {
         this(plugin, jobManager, levelService, redundancyTracker, freshLedger, player.getUniqueId(), npc, npcEntity,
                 equipment, label, world, target, tool, minX, maxX, minY, maxY, minZ, maxZ, spanX, spanZ, totalCells,
-                storage, storeInChest, surfaceOnly, outline, restoresTopsoil,
+                storage, storeInChest, surfaceOnly, outline, restoresTopsoil, topsoilOnly,
                 Phase.SEEKING, 0, 0, 0, 1, 0, 0, 0, 0, new HashMap<>());
     }
 
@@ -435,7 +437,7 @@ public final class ClearJobTask implements JobTask {
                           int minX, int maxX, int minY, int maxY, int minZ, int maxZ,
                           int spanX, int spanZ, long totalCells, JobStorage storage,
                           boolean storeInChest, boolean surfaceOnly,
-                          RegionOutline outline, boolean restoresTopsoil,
+                          RegionOutline outline, boolean restoresTopsoil, boolean topsoilOnly,
                           Phase phase, long processedCells, long clearedCells, long deposited, int passNumber,
                           long clearedThisPass, long skippedThisPass, long skippedNoPath, long skippedTimeout,
                           Map<Material, Integer> carried) {
@@ -469,6 +471,7 @@ public final class ClearJobTask implements JobTask {
         this.storeInChest = storeInChest;
         this.surfaceOnly = surfaceOnly;
         this.restoresTopsoil = restoresTopsoil;
+        this.topsoilOnly = topsoilOnly;
         this.outline = outline;
         this.phase = phase;
         this.processedCells = processedCells;
@@ -574,9 +577,9 @@ public final class ClearJobTask implements JobTask {
         return new ClearJobTask(plugin, jobManager, levelService, redundancyTracker, freshLedger, state.playerId,
                 npc, npcEntity, equipment, label, world, target, initialTool, state.minX, state.maxX, state.minY,
                 state.maxY, state.minZ, state.maxZ, spanX, spanZ, totalCells, storage, state.storeInChest,
-                state.surfaceOnly, outline, state.restoresTopsoil, Phase.SEEKING, state.processedCells, state.clearedCells,
-                state.deposited, state.passNumber, state.clearedThisPass, state.skippedThisPass,
-                state.skippedNoPath, state.skippedTimeout, carried);
+                state.surfaceOnly, outline, state.restoresTopsoil, state.topsoilOnly, Phase.SEEKING,
+                state.processedCells, state.clearedCells, state.deposited, state.passNumber,
+                state.clearedThisPass, state.skippedThisPass, state.skippedNoPath, state.skippedTimeout, carried);
     }
 
     static TextDisplay spawnLabel(Location npcLocation) {
@@ -629,6 +632,10 @@ public final class ClearJobTask implements JobTask {
 
     /** Rough 0-100 estimate of how far through the sweep this job is. */
     int percentComplete() {
+        if (topsoilOnly) {
+            int totalColumns = spanX * spanZ;
+            return totalColumns <= 0 ? 0 : (int) (topsoilColumn * 100L / totalColumns);
+        }
         return (int) (processedCells * 100 / totalCells);
     }
 
@@ -666,6 +673,9 @@ public final class ClearJobTask implements JobTask {
         paused = false;
         refreshChunkTickets();
         task = Bukkit.getScheduler().runTaskTimer(plugin, this::tick, 0L, 1L);
+        if (topsoilOnly && phase != Phase.FILLING) {
+            beginTopsoil();
+        }
     }
 
     /** Stops ticking but keeps every in-memory field intact, so {@link #resumeTicking()} picks up mid-stride. */
@@ -788,6 +798,7 @@ public final class ClearJobTask implements JobTask {
         state.target = target.name();
         state.surfaceOnly = surfaceOnly;
         state.restoresTopsoil = restoresTopsoil;
+        state.topsoilOnly = topsoilOnly;
         state.storeInChest = storeInChest;
         state.processedCells = processedCells;
         state.clearedCells = clearedCells;
@@ -878,17 +889,18 @@ public final class ClearJobTask implements JobTask {
     /** Fires the 50%/85% progress pings exactly once each, whenever that point is crossed. */
     private void announceMilestones() {
         int percent = percentComplete();
+        String subject = topsoilOnly ? "topsoil" : target.label();
         if (!announced50 && percent >= 50) {
             announced50 = true;
             messagePlayer(Component.text(
                     BuilderNpcService.baseNameOf(npc) + ": Making good progress — about halfway through the "
-                            + target.label() + " now.",
+                            + subject + " now.",
                     NamedTextColor.YELLOW));
         }
         if (!announced85 && percent >= 85) {
             announced85 = true;
             messagePlayer(Component.text(
-                    BuilderNpcService.baseNameOf(npc) + ": Nearly there — just a bit more " + target.label() + " to go.",
+                    BuilderNpcService.baseNameOf(npc) + ": Nearly there — just a bit more " + subject + " to go.",
                     NamedTextColor.YELLOW));
         }
     }
@@ -1863,10 +1875,11 @@ public final class ClearJobTask implements JobTask {
         topsoilOutOfMaterial = false;
         phase = Phase.FILLING;
         logger.info("[landscaper] Topsoil pass starting for " + BuilderNpcService.baseNameOf(npc)
-                + " over " + (spanX * spanZ) + " column(s)");
-        messagePlayer(Component.text(BuilderNpcService.baseNameOf(npc)
-                + ": Ground's clear — let me put the topsoil back so it doesn't look like a building site.",
-                NamedTextColor.GREEN));
+                + " over " + (spanX * spanZ) + " column(s)" + (topsoilOnly ? " (standalone)" : ""));
+        String msg = topsoilOnly
+                ? ": Let me check the ground and fill in anywhere that needs topsoil."
+                : ": Ground's clear — let me put the topsoil back so it doesn't look like a building site.";
+        messagePlayer(Component.text(BuilderNpcService.baseNameOf(npc) + msg, NamedTextColor.GREEN));
     }
 
     private void tickTopsoil() {
@@ -1930,8 +1943,14 @@ public final class ClearJobTask implements JobTask {
         }
         logger.info("[landscaper] Topsoil pass done for " + BuilderNpcService.baseNameOf(npc)
                 + " — " + topsoilPlaced + " placed" + (topsoilOutOfMaterial ? ", stopped short (out of dirt)" : ""));
-        finish(BuilderNpcService.baseNameOf(npc) + ": All done — cleared " + clearedCells + " " + target.label()
-                + " block(s)." + storedSuffix() + topsoilSuffix());
+        if (topsoilOnly) {
+            finish(BuilderNpcService.baseNameOf(npc) + ": All done — topsoil restored on "
+                    + topsoilPlaced + " column(s)"
+                    + (topsoilOutOfMaterial ? " before the dirt ran out." : ".") + storedSuffix());
+        } else {
+            finish(BuilderNpcService.baseNameOf(npc) + ": All done — cleared " + clearedCells + " " + target.label()
+                    + " block(s)." + storedSuffix() + topsoilSuffix());
+        }
     }
 
     private String topsoilSuffix() {

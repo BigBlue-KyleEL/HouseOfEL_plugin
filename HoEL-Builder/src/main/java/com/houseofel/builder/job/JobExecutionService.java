@@ -179,7 +179,66 @@ public final class JobExecutionService {
 
         ClearJobTask task = new ClearJobTask(plugin, jobManager, levelService, redundancyTracker, freshLedger,
                 player, npc, npcEntity, equipment, label, world, target, initialTool, minX, maxX, minY, maxY, minZ, maxZ,
-                spanX, spanZ, totalCells, storage, storeInChest, surfaceOnly, outline, restoresTopsoil);
+                spanX, spanZ, totalCells, storage, storeInChest, surfaceOnly, outline, restoresTopsoil, false);
+        jobManager.register(task);
+        task.start();
+    }
+
+    public void dispatchLandscape(Player player, NPC npc, Location pointA, Location pointB,
+                                   LandscapeMode mode, LandscapeBiome landscapeBiome) {
+        Entity npcEntity = npc.getEntity();
+        if (npcEntity == null) {
+            player.sendMessage(Component.text(
+                    BuilderNpcService.baseNameOf(npc) + " isn't spawned right now — can't start the job.", NamedTextColor.RED));
+            return;
+        }
+        if (jobManager.isAtCeiling()) {
+            String eta = jobManager.etaOfSoonestJob().orElse("a little while");
+            player.sendMessage(Component.text(
+                    "Every Helper is tied up right now — check back in " + eta + ".", NamedTextColor.RED));
+            return;
+        }
+        if (jobManager.find(npc.getId()) != null) {
+            player.sendMessage(Component.text(
+                    BuilderNpcService.baseNameOf(npc) + " is already busy — wait for that to finish first.", NamedTextColor.RED));
+            return;
+        }
+
+        deathRecordStore.setOwner(npc.getUniqueId(), player.getUniqueId());
+
+        World world = pointA.getWorld();
+        if (world.getEnvironment() == World.Environment.NETHER
+                || world.getEnvironment() == World.Environment.THE_END) {
+            player.sendMessage(Component.text(
+                    BuilderNpcService.baseNameOf(npc) + ": Rough territory out here — I'll be careful, but you might want to keep an eye on me.",
+                    NamedTextColor.YELLOW));
+        }
+
+        int minX = Math.min(pointA.getBlockX(), pointB.getBlockX());
+        int minY = Math.min(pointA.getBlockY(), pointB.getBlockY());
+        int minZ = Math.min(pointA.getBlockZ(), pointB.getBlockZ());
+        int maxX = Math.max(pointA.getBlockX(), pointB.getBlockX());
+        int maxY = Math.max(pointA.getBlockY(), pointB.getBlockY());
+        int maxZ = Math.max(pointA.getBlockZ(), pointB.getBlockZ());
+
+        int spanX = maxX - minX + 1;
+        int spanZ = maxZ - minZ + 1;
+
+        TextDisplay label = ClearJobTask.spawnLabel(npcEntity.getLocation());
+        EntityEquipment equipment = ClearJobTask.equipTool(npcEntity, Material.IRON_SHOVEL,
+                BuilderNpcService.baseNameOf(npc), TaskType.LANDSCAPE.toolNoun());
+
+        player.sendMessage(Component.text(BuilderNpcService.baseNameOf(npc)
+                + ": Right, I'll get the area shaped up — " + (spanX * spanZ) + " columns to cover.",
+                NamedTextColor.GREEN));
+        logger.info(player.getName() + " dispatched LANDSCAPE/" + mode + " job over " + (spanX * spanZ) + " columns");
+
+        RegionOutline outline = new RegionOutline(world, minX, minY, minZ, maxX, maxY, maxZ);
+
+        LandscaperJobTask task = new LandscaperJobTask(plugin, jobManager, levelService,
+                player, npc, npcEntity, equipment, label, world, mode, landscapeBiome,
+                minX, maxX, minY, maxY, minZ, maxZ, spanX, spanZ, outline,
+                pointA.getBlockX(), pointA.getBlockZ());
         jobManager.register(task);
         task.start();
     }
