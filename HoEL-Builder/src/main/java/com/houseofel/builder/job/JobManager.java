@@ -219,6 +219,7 @@ public final class JobManager {
                 case CLEAR -> ClearJobTask.resume(plugin, this, levelService, redundancyTracker, freshLedger, state, npc);
                 case QUARRY -> QuarrymanJobTask.resume(plugin, this, levelService, redundancyTracker, freshLedger, state, npc);
                 case LANDSCAPE -> LandscaperJobTask.resume(plugin, this, levelService, state, npc);
+                case COFFERDAM -> CofferdamJobTask.resume(plugin, this, levelService, state, npc);
             };
             if (task == null) {
                 deferred++;

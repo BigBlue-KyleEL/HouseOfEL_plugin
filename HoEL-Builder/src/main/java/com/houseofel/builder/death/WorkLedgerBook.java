@@ -14,6 +14,7 @@ import org.bukkit.inventory.meta.BookMeta;
 import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.plugin.Plugin;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
@@ -39,6 +40,8 @@ public final class WorkLedgerBook {
         this.npcUuidKey = new NamespacedKey(plugin, "helper-work-ledger");
     }
 
+    private static final int SCARS_PER_PAGE = 5;
+
     public ItemStack create(NPC npc, Specialization specialization, int level, int bankedToil,
                              List<ScarRecord> scars, ScarChoice scarChoice) {
         String name = BuilderNpcService.baseNameOf(npc);
@@ -58,31 +61,57 @@ public final class WorkLedgerBook {
                 .append(Component.newline())
                 .append(Component.text("Level " + level, NamedTextColor.BLACK))
                 .append(Component.newline())
-                .append(Component.text(bankedToil + " Toil banked", NamedTextColor.BLACK)));
-        meta.addPages(scarsPage(scars, scarChoice));
+                .append(Component.text(bankedToil + " Toil banked", NamedTextColor.BLACK))
+                .append(Component.newline())
+                .append(Component.newline())
+                .append(Component.text("Deaths: " + scars.size(), NamedTextColor.DARK_RED)));
+        for (Component page : scarsPages(scars, scarChoice)) {
+            meta.addPages(page);
+        }
         meta.getPersistentDataContainer().set(npcUuidKey, PersistentDataType.STRING, npc.getUniqueId().toString());
         item.setItemMeta(meta);
         return item;
     }
 
-    private Component scarsPage(List<ScarRecord> scars, ScarChoice scarChoice) {
-        Component page = Component.text("Scars", NamedTextColor.DARK_RED).append(Component.newline());
+    private List<Component> scarsPages(List<ScarRecord> scars, ScarChoice scarChoice) {
+        List<Component> pages = new ArrayList<>();
         if (scars.isEmpty()) {
-            page = page.append(Component.text("None yet.", NamedTextColor.BLACK));
-        } else {
-            for (ScarRecord scar : scars) {
+            Component page = Component.text("Scars", NamedTextColor.DARK_RED)
+                    .append(Component.newline())
+                    .append(Component.text("None yet.", NamedTextColor.BLACK));
+            if (scarChoice != null) {
+                page = page.append(Component.newline()).append(Component.newline())
+                        .append(Component.text(scarChoice.name(), NamedTextColor.DARK_PURPLE));
+            }
+            pages.add(page);
+            return pages;
+        }
+        for (int i = 0; i < scars.size(); i += SCARS_PER_PAGE) {
+            int pageNum = (i / SCARS_PER_PAGE) + 1;
+            int totalPages = (scars.size() + SCARS_PER_PAGE - 1) / SCARS_PER_PAGE;
+            Component page = Component.text("Scars", NamedTextColor.DARK_RED);
+            if (totalPages > 1) {
+                page = page.append(Component.text(" (" + pageNum + "/" + totalPages + ")", NamedTextColor.DARK_GRAY));
+            }
+            page = page.append(Component.newline());
+            int end = Math.min(i + SCARS_PER_PAGE, scars.size());
+            for (int j = i; j < end; j++) {
+                ScarRecord scar = scars.get(j);
                 page = page.append(Component.text(
-                                prettyCause(scar.cause().name()) + " at " + scar.world() + " "
-                                        + scar.x() + "," + scar.y() + "," + scar.z(),
+                                (j + 1) + ". " + prettyCause(scar.cause().name()),
                                 NamedTextColor.BLACK))
+                        .append(Component.newline())
+                        .append(Component.text("   " + scar.x() + ", " + scar.y() + ", " + scar.z(),
+                                NamedTextColor.DARK_GRAY))
                         .append(Component.newline());
             }
+            if (i + SCARS_PER_PAGE >= scars.size() && scarChoice != null) {
+                page = page.append(Component.newline())
+                        .append(Component.text(scarChoice.name(), NamedTextColor.DARK_PURPLE));
+            }
+            pages.add(page);
         }
-        if (scarChoice != null) {
-            page = page.append(Component.newline())
-                    .append(Component.text(scarChoice.name(), NamedTextColor.DARK_PURPLE));
-        }
-        return page;
+        return pages;
     }
 
     private static String prettyCause(String enumName) {

@@ -1,5 +1,6 @@
 package com.houseofel.builder.gui;
 
+import com.houseofel.builder.choice.GroundworkerL16Choice;
 import com.houseofel.builder.choice.GroundworkerL8Choice;
 import com.houseofel.builder.choice.MilestoneChoiceRecord;
 import com.houseofel.builder.choice.MilestoneChoiceStore;
@@ -135,6 +136,20 @@ public final class JavaJobDialog {
                             ClickCallback.Options.builder().build())));
         }
 
+        if (hasCofferdam(npc, specialization, level)) {
+            buttons.add(ActionButton.create(
+                    Component.text("Lvl.16: Cofferdam", NamedTextColor.GOLD),
+                    Component.text("Seals off an underwater area with dam walls and drains it."), 150,
+                    DialogAction.customClick(
+                            (view, audience) -> {
+                                if (audience instanceof Player p) {
+                                    Bukkit.getScheduler().runTask(plugin, () ->
+                                            regionService.beginCofferdamJob(p, npc));
+                                }
+                            },
+                            ClickCallback.Options.builder().build())));
+        }
+
         // Name in the header, status block beneath it. The wide pad between the two is
         // vanilla dialog spacing and isn't adjustable from here — both alternatives were
         // tried in-game and were worse: a newline in the TITLE renders as an unprintable
@@ -261,6 +276,14 @@ public final class JavaJobDialog {
             return TaskType.LANDSCAPE;
         }
         return null;
+    }
+
+    private boolean hasCofferdam(NPC npc, Specialization specialization, int level) {
+        if (specialization != Specialization.GROUNDWORKER || level < 16) {
+            return false;
+        }
+        MilestoneChoiceRecord record = choiceStore.find(npc.getUniqueId(), 16);
+        return record != null && GroundworkerL16Choice.COFFERDAM.name().equals(record.choice());
     }
 
     private void showLandscapeConfirmStep(Player player, NPC npc) {

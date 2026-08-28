@@ -1,5 +1,6 @@
 package com.houseofel.builder.gui;
 
+import com.houseofel.builder.choice.GroundworkerL16Choice;
 import com.houseofel.builder.choice.GroundworkerL8Choice;
 import com.houseofel.builder.choice.MilestoneChoiceRecord;
 import com.houseofel.builder.choice.MilestoneChoiceStore;
@@ -236,6 +237,12 @@ public final class BedrockJobForm {
             return;
         }
 
+        if (taskType == TaskType.COFFERDAM) {
+            Bukkit.getScheduler().runTask(plugin, () ->
+                    regionService.beginCofferdamJob(player, npc));
+            return;
+        }
+
         Target target = availableTargets[response.getDropdown(offset + 1)];
         boolean surfaceOnly = response.getToggle(offset + 2);
         boolean storeInChest = response.getToggle(offset + 3);
@@ -301,9 +308,11 @@ public final class BedrockJobForm {
      */
     private String[] labelsOf(TaskType[] types, Specialization specialization) {
         String[] labels = new String[types.length];
+        int sepIndex = 0;
         for (int i = 0; i < types.length; i++) {
             if (types[i] == null) {
-                labels[i] = separatorLabel;
+                labels[i] = sepIndex < separatorLabels.size() ? separatorLabels.get(sepIndex) : "—";
+                sepIndex++;
                 continue;
             }
             boolean isSpecialty = specialization != null && types[i] == specialization.taskType();
@@ -312,35 +321,48 @@ public final class BedrockJobForm {
         return labels;
     }
 
-    /** Set by {@link #taskOptionsFor} so {@link #labelsOf} can render the null slot's heading text. */
-    private String separatorLabel = "—";
+    private final java.util.List<String> separatorLabels = new java.util.ArrayList<>();
 
     /**
      * Four general jobs, then — only for a Groundworker that has actually PICKED at level
-     * 8 — a null separator slot and that path's own job. Null is the separator; callers
-     * must reject it on submit.
+     * 8 — a null separator slot and that path's own job. L16 choices (Cofferdam, etc.) get
+     * a second separator and entry. Null is the separator; callers must reject it on submit.
      */
     private TaskType[] taskOptionsFor(NPC npc, Specialization specialization, int level) {
+        separatorLabels.clear();
         TaskType[] general = {TaskType.MINE, TaskType.LUMBERJACK, TaskType.FARM, TaskType.CLEAR};
         if (specialization != Specialization.GROUNDWORKER || level < 8) {
             return general;
         }
-        MilestoneChoiceRecord record = choiceStore.find(npc.getUniqueId(), 8);
-        if (record == null) {
+        MilestoneChoiceRecord l8Record = choiceStore.find(npc.getUniqueId(), 8);
+        if (l8Record == null) {
             return general;
         }
         TaskType specialised;
         String pathName;
-        if (GroundworkerL8Choice.QUARRYMAN.name().equals(record.choice())) {
+        if (GroundworkerL8Choice.QUARRYMAN.name().equals(l8Record.choice())) {
             specialised = TaskType.QUARRY;
             pathName = "Quarryman";
-        } else if (GroundworkerL8Choice.LANDSCAPER.name().equals(record.choice())) {
+        } else if (GroundworkerL8Choice.LANDSCAPER.name().equals(l8Record.choice())) {
             specialised = TaskType.LANDSCAPE;
             pathName = "Landscaper";
         } else {
             return general;
         }
-        separatorLabel = "— Level 8: " + pathName + " —";
+        separatorLabels.add("— Level 8: " + pathName + " —");
+
+        TaskType l16Job = null;
+        if (level >= 16) {
+            MilestoneChoiceRecord l16Record = choiceStore.find(npc.getUniqueId(), 16);
+            if (l16Record != null && GroundworkerL16Choice.COFFERDAM.name().equals(l16Record.choice())) {
+                l16Job = TaskType.COFFERDAM;
+            }
+        }
+        if (l16Job != null) {
+            separatorLabels.add("— Level 16: Cofferdam —");
+            return new TaskType[] {general[0], general[1], general[2], general[3],
+                    null, specialised, null, l16Job};
+        }
         return new TaskType[] {general[0], general[1], general[2], general[3], null, specialised};
     }
 

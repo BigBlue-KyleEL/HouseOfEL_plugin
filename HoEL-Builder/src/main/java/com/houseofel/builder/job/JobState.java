@@ -51,6 +51,13 @@ final class JobState {
     int landscapeTreeCursor = -1;
     int gradientAX;
     int gradientAZ;
+    boolean floatingIsland;
+
+    // Cofferdam-only (Groundworker L16 option A).
+    String cofferdamPhase;
+    int buildCursor;
+    int strikeCursor;
+    List<String> damBlockPositions = new ArrayList<>();
 
     long processedCells;
     long clearedCells;

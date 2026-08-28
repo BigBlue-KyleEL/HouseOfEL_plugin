@@ -4,6 +4,7 @@ import com.houseofel.builder.antigrind.DailyTaperStore;
 import com.houseofel.builder.antigrind.PresenceTracker;
 import com.houseofel.builder.antigrind.VarietyTracker;
 import com.houseofel.builder.choice.MilestoneChoiceOption;
+import com.houseofel.builder.choice.MilestoneChoiceRecord;
 import com.houseofel.builder.choice.MilestoneChoiceRegistry;
 import com.houseofel.builder.choice.MilestoneChoiceStore;
 import com.houseofel.builder.death.DeathRecordStore;
@@ -81,6 +82,7 @@ public final class HelperLevelService {
     private final NamespacedKey pdcToilKey;
     private final HelperTitleService titleService;
     private final DeathRecordStore deathRecordStore;
+    private final MilestoneChoiceStore choiceStore;
     private final DailyTaperStore dailyTaperStore;
     private final Map<UUID, HelperLedgerRecord> cache = new HashMap<>();
     /** In-memory ticket progress — see {@link #awardProgress} for why it isn't written through. */
@@ -88,8 +90,9 @@ public final class HelperLevelService {
     private final Map<ProgressKey, Integer> progressCache = new HashMap<>();
 
     public HelperLevelService(Plugin plugin, ToilDatabase database, HelperTitleService titleService,
-                               DeathRecordStore deathRecordStore, VarietyTracker varietyTracker,
-                               PresenceTracker presenceTracker, DailyTaperStore dailyTaperStore) {
+                               DeathRecordStore deathRecordStore, MilestoneChoiceStore choiceStore,
+                               VarietyTracker varietyTracker, PresenceTracker presenceTracker,
+                               DailyTaperStore dailyTaperStore) {
         this.logger = plugin.getLogger();
         this.store = new ToilLedgerStore(database, logger);
         this.estimator = new BalanceEstimator();
@@ -98,6 +101,7 @@ public final class HelperLevelService {
         this.pdcToilKey = new NamespacedKey(plugin, "toil-banked");
         this.titleService = titleService;
         this.deathRecordStore = deathRecordStore;
+        this.choiceStore = choiceStore;
         this.dailyTaperStore = dailyTaperStore;
     }
 
@@ -305,15 +309,26 @@ public final class HelperLevelService {
         } else if (newLevel == 6 && specializationOf(npc) == Specialization.GROUNDWORKER) {
             lines.add(BuilderNpcService.baseNameOf(npc)
                     + ": Flooding won't stop me anymore — sponges for water, a plug for lava, then I keep clearing.");
-            // Rule 9 ("previewed since two levels early") — reads straight off the
-            // registry rather than hardcoding the option names a third time (the picker
-            // GUI and the level-8 offer are the other two), so this line can't drift out
-            // of sync with what's actually offered.
             List<MilestoneChoiceOption> preview = MilestoneChoiceRegistry.optionsFor(Specialization.GROUNDWORKER, 8);
             if (!preview.isEmpty()) {
                 String names = preview.stream().map(MilestoneChoiceOption::label).collect(Collectors.joining(" or "));
                 lines.add(BuilderNpcService.baseNameOf(npc)
                         + ": Two levels from now I'll have a choice to make — " + names + ".");
+            }
+        } else if (newLevel == 10 && specializationOf(npc) == Specialization.GROUNDWORKER) {
+            lines.add(BuilderNpcService.baseNameOf(npc)
+                    + ": Two more levels and I'll stake out every job before I start — survey the region, flag the hazards, refuse the bad ones.");
+        } else if (newLevel == 12 && specializationOf(npc) == Specialization.GROUNDWORKER) {
+            lines.add(BuilderNpcService.baseNameOf(npc)
+                    + ": I can read a site now. Before any job, I'll survey the region — block counts, fluid hazards, spoil estimates. If something's wrong, I'll tell you instead of finding out the hard way.");
+        } else if (newLevel == 14 && specializationOf(npc) == Specialization.GROUNDWORKER) {
+            MilestoneChoiceRecord l8 = choiceStore.find(npc.getUniqueId(), 8);
+            String parentChoice = l8 != null ? l8.choice() : null;
+            List<MilestoneChoiceOption> preview = MilestoneChoiceRegistry.optionsFor(Specialization.GROUNDWORKER, 16, parentChoice);
+            if (!preview.isEmpty()) {
+                String names = preview.stream().map(MilestoneChoiceOption::label).collect(Collectors.joining(" or "));
+                lines.add(BuilderNpcService.baseNameOf(npc)
+                        + ": Two levels from now I'll have another choice to make — " + names + ".");
             }
         } else if (milestones.contains(MilestoneType.VERB) || milestones.contains(MilestoneType.CHOICE)
                 || milestones.contains(MilestoneType.CAPSTONE)) {
@@ -336,7 +351,12 @@ public final class HelperLevelService {
      * picker or {@code "<Name> report"} whenever they next interact with the Helper.
      */
     private void announceChoiceIfApplicable(NPC npc, int newLevel, Specialization specialization) {
-        List<MilestoneChoiceOption> options = MilestoneChoiceRegistry.optionsFor(specialization, newLevel);
+        String parentChoice = null;
+        if (newLevel > 8) {
+            MilestoneChoiceRecord l8 = choiceStore.find(npc.getUniqueId(), 8);
+            parentChoice = l8 != null ? l8.choice() : null;
+        }
+        List<MilestoneChoiceOption> options = MilestoneChoiceRegistry.optionsFor(specialization, newLevel, parentChoice);
         if (options.isEmpty()) {
             return;
         }

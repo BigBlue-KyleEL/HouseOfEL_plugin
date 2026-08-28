@@ -1,6 +1,7 @@
 package com.houseofel.builder.npc;
 
 import com.houseofel.builder.choice.MilestoneChoiceOption;
+import com.houseofel.builder.choice.MilestoneChoiceRecord;
 import com.houseofel.builder.choice.MilestoneChoiceRegistry;
 import com.houseofel.builder.choice.MilestoneChoiceStore;
 import com.houseofel.builder.gui.BedrockJobForm;
@@ -76,7 +77,8 @@ public final class BuilderNpcListener implements Listener {
         // right-click should interrupt.
         int pendingChoiceLevel = pendingChoiceLevel(npc, specialization, level);
         if (pendingChoiceLevel > 0) {
-            List<MilestoneChoiceOption> options = MilestoneChoiceRegistry.optionsFor(specialization, pendingChoiceLevel);
+            String parentChoice = parentChoiceFor(npc, pendingChoiceLevel);
+            List<MilestoneChoiceOption> options = MilestoneChoiceRegistry.optionsFor(specialization, pendingChoiceLevel, parentChoice);
             if (isBedrock) {
                 choiceForm.open(player, npc, pendingChoiceLevel, options);
             } else {
@@ -120,17 +122,32 @@ public final class BuilderNpcListener implements Listener {
      * The lowest Choice-slot level this Helper has reached but not yet decided, or 0 if
      * none — checked in level order so an unlikely double-pending case (e.g. a big single
      * Toil award that jumped past both 8 and 16 at once) always offers the earlier one first.
+     * Uses parent-choice filtering for path-specific forks (L16 depends on L8).
      */
     private int pendingChoiceLevel(NPC npc, Specialization specialization, int level) {
         for (int candidate = 1; candidate <= level; candidate++) {
             if (!LevelCurve.isChoiceLevel(candidate)) {
                 continue;
             }
-            List<MilestoneChoiceOption> options = MilestoneChoiceRegistry.optionsFor(specialization, candidate);
+            String parentChoice = parentChoiceFor(npc, candidate);
+            List<MilestoneChoiceOption> options = MilestoneChoiceRegistry.optionsFor(specialization, candidate, parentChoice);
             if (!options.isEmpty() && choiceStore.find(npc.getUniqueId(), candidate) == null) {
                 return candidate;
             }
         }
         return 0;
+    }
+
+    /**
+     * The NPC's prior choice that gates a path-specific fork at {@code choiceLevel}.
+     * For L16, that's the L8 choice; for L8, null (no parent). Returns null if the
+     * NPC hasn't made the prerequisite choice yet.
+     */
+    private String parentChoiceFor(NPC npc, int choiceLevel) {
+        if (choiceLevel <= 8) {
+            return null;
+        }
+        MilestoneChoiceRecord l8 = choiceStore.find(npc.getUniqueId(), 8);
+        return l8 != null ? l8.choice() : null;
     }
 }

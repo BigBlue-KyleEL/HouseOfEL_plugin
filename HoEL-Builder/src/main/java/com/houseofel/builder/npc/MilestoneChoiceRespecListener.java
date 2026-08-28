@@ -1,6 +1,7 @@
 package com.houseofel.builder.npc;
 
 import com.houseofel.builder.choice.MilestoneChoiceOption;
+import com.houseofel.builder.choice.MilestoneChoiceRecord;
 import com.houseofel.builder.choice.MilestoneChoiceRegistry;
 import com.houseofel.builder.choice.MilestoneChoiceStore;
 import com.houseofel.builder.gui.BedrockJobForm;
@@ -91,7 +92,12 @@ public final class MilestoneChoiceRespecListener implements Listener {
             return;
         }
 
-        List<MilestoneChoiceOption> options = MilestoneChoiceRegistry.optionsFor(specialization, target);
+        String parentChoice = null;
+        if (target > 8) {
+            MilestoneChoiceRecord l8 = choiceStore.find(npc.getUniqueId(), 8);
+            parentChoice = l8 != null ? l8.choice() : null;
+        }
+        List<MilestoneChoiceOption> options = MilestoneChoiceRegistry.optionsFor(specialization, target, parentChoice);
         if (BedrockJobForm.isBedrockPlayer(player)) {
             choiceForm.open(player, npc, target, options);
         } else {

@@ -91,6 +91,19 @@ public final class RegionSelectionService {
                         landscapeMode, landscapeBiome));
     }
 
+    public void beginCofferdamJob(Player player, NPC npc) {
+        clearJob(player.getUniqueId());
+        if (!rod.giveTo(player, BuilderNpcService.baseNameOf(npc))) {
+            player.sendMessage(Component.text(
+                    BuilderNpcService.baseNameOf(npc) + ": You can't even hold the Surveyor's Rod. Make space.",
+                    NamedTextColor.RED));
+            return;
+        }
+        jobs.put(player.getUniqueId(),
+                new PendingJob(npc, TaskType.COFFERDAM, Target.DIRT, false, false, null, null,
+                        null, null));
+    }
+
     /**
      * Any click/tap while unlocked marks whichever point isn't set yet — point A first,
      * then point B. Once locked, clicks do nothing; confirming or cancelling happens via
@@ -148,6 +161,14 @@ public final class RegionSelectionService {
             finish(player);
             jobExecutionService.dispatchQuarryman(player, job.npc, job.taskType, job.target,
                     pointA, pointB, job.storeInChest, job.surfaceOnly, job.requestedLevels, job.requestedTargetY);
+            return;
+        }
+
+        if (job.taskType == TaskType.COFFERDAM) {
+            Location pointA = job.pointA;
+            Location pointB = job.pointB;
+            finish(player);
+            jobExecutionService.dispatchCofferdam(player, job.npc, pointA, pointB);
             return;
         }
 

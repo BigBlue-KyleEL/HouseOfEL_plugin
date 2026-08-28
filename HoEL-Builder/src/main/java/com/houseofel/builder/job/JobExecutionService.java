@@ -10,6 +10,7 @@ import com.houseofel.builder.gui.Target;
 import com.houseofel.builder.gui.TaskType;
 import com.houseofel.builder.npc.BuilderNpcService;
 import com.houseofel.builder.npc.HelperLevelService;
+import com.houseofel.builder.npc.Specialization;
 import com.houseofel.builder.region.RegionOutline;
 import net.citizensnpcs.api.npc.NPC;
 import net.kyori.adventure.text.Component;
@@ -175,6 +176,10 @@ public final class JobExecutionService {
             return;
         }
 
+        if (shouldSurvey(npc) && !runSurvey(player, npc, world, minX, minY, minZ, maxX, maxY, maxZ, JobType.CLEAR)) {
+            return;
+        }
+
         RegionOutline outline = new RegionOutline(world, minX, minY, minZ, maxX, maxY, maxZ);
 
         ClearJobTask task = new ClearJobTask(plugin, jobManager, levelService, redundancyTracker, freshLedger,
@@ -232,6 +237,10 @@ public final class JobExecutionService {
                 + ": Right, I'll get the area shaped up — " + (spanX * spanZ) + " columns to cover.",
                 NamedTextColor.GREEN));
         logger.info(player.getName() + " dispatched LANDSCAPE/" + mode + " job over " + (spanX * spanZ) + " columns");
+
+        if (shouldSurvey(npc) && !runSurvey(player, npc, world, minX, minY, minZ, maxX, maxY, maxZ, JobType.LANDSCAPE)) {
+            return;
+        }
 
         RegionOutline outline = new RegionOutline(world, minX, minY, minZ, maxX, maxY, maxZ);
 
@@ -341,6 +350,10 @@ public final class JobExecutionService {
             return;
         }
 
+        if (shouldSurvey(npc) && !runSurvey(player, npc, world, minX, bottomY, minZ, maxX, topY, maxZ, JobType.QUARRY)) {
+            return;
+        }
+
         Deque<Block> digOrder = QuarrymanJobTask.buildDigOrder(world, minX, maxX, minZ, maxZ, topY, requestedDepth,
                 stepsAlongX, stepDirection);
 
@@ -379,5 +392,132 @@ public final class JobExecutionService {
                 stepsAlongX, stepDirection, digOrder, storage, outline);
         jobManager.register(task);
         task.start();
+    }
+
+    public void dispatchCofferdam(Player player, NPC npc, Location pointA, Location pointB) {
+        Entity npcEntity = npc.getEntity();
+        if (npcEntity == null) {
+            player.sendMessage(Component.text(
+                    BuilderNpcService.baseNameOf(npc) + " isn't spawned right now — can't start the job.", NamedTextColor.RED));
+            return;
+        }
+        if (jobManager.isAtCeiling()) {
+            String eta = jobManager.etaOfSoonestJob().orElse("a little while");
+            player.sendMessage(Component.text(
+                    "Every Helper is tied up right now — check back in " + eta + ".", NamedTextColor.RED));
+            return;
+        }
+        if (jobManager.find(npc.getId()) != null) {
+            player.sendMessage(Component.text(
+                    BuilderNpcService.baseNameOf(npc) + " is already busy — wait for that to finish first.", NamedTextColor.RED));
+            return;
+        }
+
+        deathRecordStore.setOwner(npc.getUniqueId(), player.getUniqueId());
+
+        World world = pointA.getWorld();
+
+        int minX = Math.min(pointA.getBlockX(), pointB.getBlockX());
+        int minY = Math.min(pointA.getBlockY(), pointB.getBlockY());
+        int minZ = Math.min(pointA.getBlockZ(), pointB.getBlockZ());
+        int maxX = Math.max(pointA.getBlockX(), pointB.getBlockX());
+        int maxY = Math.max(pointA.getBlockY(), pointB.getBlockY());
+        int maxZ = Math.max(pointA.getBlockZ(), pointB.getBlockZ());
+
+        // Water presence check — needed at all levels, not just L12+.
+        boolean hasWater = false;
+        outer:
+        for (int x = minX; x <= maxX; x++) {
+            for (int z = minZ; z <= maxZ; z++) {
+                for (int y = minY; y <= maxY; y++) {
+                    if (world.getBlockAt(x, y, z).getType() == Material.WATER) {
+                        hasWater = true;
+                        break outer;
+                    }
+                }
+            }
+        }
+        if (!hasWater) {
+            player.sendMessage(Component.text(BuilderNpcService.baseNameOf(npc)
+                    + ": There's no water in that area — a cofferdam wouldn't do anything.",
+                    NamedTextColor.RED));
+            return;
+        }
+
+        if (shouldSurvey(npc) && !runSurvey(player, npc, world, minX, minY, minZ, maxX, maxY, maxZ, JobType.COFFERDAM)) {
+            return;
+        }
+
+        int wallBlocks = CofferdamJobTask.computeBuildOrder(minX, maxX, minY, maxY, minZ, maxZ).size();
+
+        TextDisplay label = ClearJobTask.spawnLabel(npcEntity.getLocation());
+        EntityEquipment equipment = ClearJobTask.equipTool(npcEntity, Material.IRON_SHOVEL,
+                BuilderNpcService.baseNameOf(npc), TaskType.COFFERDAM.toolNoun());
+
+        player.sendMessage(Component.text(BuilderNpcService.baseNameOf(npc)
+                + ": Right, I'll wall it off and drain the inside — up to " + wallBlocks
+                + " blocks to seal. Make sure there's cobblestone in the chest.",
+                NamedTextColor.GREEN));
+        logger.info(player.getName() + " dispatched COFFERDAM job, up to " + wallBlocks + " wall blocks");
+
+        JobStorage storage = new JobStorage(plugin, world, minX, maxX, minY, maxY, minZ, maxZ);
+        Location chestAt = storage.depositPoint();
+        if (chestAt == null) {
+            player.sendMessage(Component.text(
+                    "Couldn't find anywhere to place a storage chest — "
+                            + BuilderNpcService.baseNameOf(npc) + " can't work without one.",
+                    NamedTextColor.RED));
+            return;
+        }
+        String coords = "(" + chestAt.getBlockX() + ", " + chestAt.getBlockY() + ", "
+                + chestAt.getBlockZ() + ")";
+        player.sendMessage(Component.text("Storage chest placed at " + coords
+                + " — fill it with cobblestone for the dam walls.", NamedTextColor.AQUA));
+        logger.info("Storage chest placed at " + coords + " for " + player.getName() + "'s cofferdam");
+
+        RegionOutline outline = new RegionOutline(world, minX, minY, minZ, maxX, maxY, maxZ);
+
+        CofferdamJobTask task = new CofferdamJobTask(plugin, jobManager, levelService,
+                player.getUniqueId(), npc, npcEntity, equipment, label, world,
+                minX, maxX, minY, maxY, minZ, maxZ, outline, storage);
+        jobManager.register(task);
+        task.start();
+    }
+
+    private boolean shouldSurvey(NPC npc) {
+        return levelService.specializationOf(npc) == Specialization.GROUNDWORKER
+                && levelService.levelOf(npc) >= RegionSurvey.STAKE_OUT_LEVEL;
+    }
+
+    /**
+     * Runs the L12 Stake-Out survey, posts results to the player, and returns true if
+     * the job should proceed. Returns false if the NPC refuses the region.
+     */
+    private boolean runSurvey(Player player, NPC npc, World world,
+                               int minX, int minY, int minZ, int maxX, int maxY, int maxZ,
+                               JobType jobType) {
+        String name = BuilderNpcService.baseNameOf(npc);
+        RegionSurvey.SurveyResult result = RegionSurvey.analyze(
+                world, minX, minY, minZ, maxX, maxY, maxZ, jobType);
+
+        for (String line : RegionSurvey.formatSummary(result, jobType)) {
+            player.sendMessage(Component.text(name + ": " + line, NamedTextColor.AQUA));
+        }
+
+        if (result.refused()) {
+            for (String reason : result.refusals()) {
+                player.sendMessage(Component.text(name + ": " + reason, NamedTextColor.RED));
+            }
+            player.sendMessage(Component.text(name + ": I'm not starting this one — mark a different area.",
+                    NamedTextColor.RED));
+            logger.info(name + " (#" + npc.getId() + ") REFUSED region: " + result.refusals());
+            return false;
+        }
+
+        for (String warning : result.warnings()) {
+            player.sendMessage(Component.text(name + ": " + warning, NamedTextColor.YELLOW));
+        }
+
+        return true;
     }
 }

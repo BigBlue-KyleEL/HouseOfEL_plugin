@@ -69,6 +69,14 @@ final class JobStateStore {
             yaml.set("landscapeTreeCursor", state.landscapeTreeCursor);
             yaml.set("gradientAX", state.gradientAX);
             yaml.set("gradientAZ", state.gradientAZ);
+            yaml.set("floatingIsland", state.floatingIsland);
+        } else if (state.jobType == JobType.COFFERDAM) {
+            yaml.set("minY", state.minY);
+            yaml.set("maxY", state.maxY);
+            yaml.set("cofferdamPhase", state.cofferdamPhase);
+            yaml.set("buildCursor", state.buildCursor);
+            yaml.set("strikeCursor", state.strikeCursor);
+            yaml.set("damBlockPositions", state.damBlockPositions);
         }
         yaml.set("chests", state.chests);
         yaml.set("occupiedColumns", state.occupiedColumns);
@@ -160,6 +168,14 @@ final class JobStateStore {
                 state.landscapeTreeCursor = yaml.getInt("landscapeTreeCursor", -1);
                 state.gradientAX = yaml.getInt("gradientAX");
                 state.gradientAZ = yaml.getInt("gradientAZ");
+                state.floatingIsland = yaml.getBoolean("floatingIsland");
+            } else if (state.jobType == JobType.COFFERDAM) {
+                state.minY = yaml.getInt("minY");
+                state.maxY = yaml.getInt("maxY");
+                state.cofferdamPhase = yaml.getString("cofferdamPhase");
+                state.buildCursor = yaml.getInt("buildCursor");
+                state.strikeCursor = yaml.getInt("strikeCursor");
+                state.damBlockPositions = yaml.getStringList("damBlockPositions");
             }
             state.chests = yaml.getStringList("chests");
             state.occupiedColumns = yaml.getStringList("occupiedColumns");

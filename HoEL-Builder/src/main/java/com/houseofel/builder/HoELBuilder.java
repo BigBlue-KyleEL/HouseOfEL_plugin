@@ -80,7 +80,7 @@ public final class HoELBuilder extends JavaPlugin {
         FreshLedger freshLedger = new FreshLedger();
         HelperTitleService titleService = new HelperTitleService();
         levelService = new HelperLevelService(this, toilDatabase, titleService, deathRecordStore,
-                varietyTracker, presenceTracker, dailyTaperStore);
+                choiceStore, varietyTracker, presenceTracker, dailyTaperStore);
         RecruitmentCost recruitmentCost = new RecruitmentCost(deathRecordStore);
         BuilderNpcService npcService = new BuilderNpcService(levelService, titleService, recruitmentCost, deathRecordStore);
         WorkLedgerBook ledgerBook = new WorkLedgerBook(this);

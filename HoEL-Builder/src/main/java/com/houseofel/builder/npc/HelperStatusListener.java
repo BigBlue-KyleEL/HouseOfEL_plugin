@@ -15,6 +15,8 @@ import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.Bukkit;
+import org.bukkit.Location;
+import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
@@ -84,6 +86,19 @@ public final class HelperStatusListener implements Listener {
                             + "% of the time, slipping on " + errorPercent + "% of blocks.",
                     NamedTextColor.AQUA));
 
+            Entity entity = npc.getEntity();
+            if (entity != null) {
+                Location loc = entity.getLocation();
+                player.sendMessage(Component.text(
+                        BuilderNpcService.baseNameOf(npc) + ": I'm over at "
+                                + loc.getBlockX() + ", " + loc.getBlockY() + ", " + loc.getBlockZ() + ".",
+                        NamedTextColor.AQUA));
+            } else {
+                player.sendMessage(Component.text(
+                        BuilderNpcService.baseNameOf(npc) + " isn't spawned right now.",
+                        NamedTextColor.GRAY));
+            }
+
             List<ScarRecord> scars = deathRecordStore.scarsFor(npc.getUniqueId());
             String scarChoiceSuffix = "";
             ScarChoice choice = deathRecordStore.scarChoiceOf(npc.getUniqueId());
@@ -115,6 +130,11 @@ public final class HelperStatusListener implements Listener {
                         "Handles flooding — sponges up a water breach or plugs a lava one, waits it out, then keeps clearing.",
                         NamedTextColor.GRAY));
             }
+            if (specialization == Specialization.GROUNDWORKER && level >= 12) {
+                player.sendMessage(Component.text(
+                        "Surveys every region before starting — block counts, fluid hazards, spoil estimates. Refuses bad sites.",
+                        NamedTextColor.GRAY));
+            }
             // Any reached Choice-slot level: either the pending offer (not yet decided —
             // matches the picker's own "right-click to choose" framing) or the current
             // pick, same discoverability pattern as the two blocks above.
@@ -122,7 +142,12 @@ public final class HelperStatusListener implements Listener {
                 if (!LevelCurve.isChoiceLevel(choiceLevel)) {
                     continue;
                 }
-                List<MilestoneChoiceOption> options = MilestoneChoiceRegistry.optionsFor(specialization, choiceLevel);
+                String parentChoice = null;
+                if (choiceLevel > 8) {
+                    MilestoneChoiceRecord l8 = choiceStore.find(npc.getUniqueId(), 8);
+                    parentChoice = l8 != null ? l8.choice() : null;
+                }
+                List<MilestoneChoiceOption> options = MilestoneChoiceRegistry.optionsFor(specialization, choiceLevel, parentChoice);
                 if (options.isEmpty()) {
                     continue;
                 }
@@ -134,10 +159,6 @@ public final class HelperStatusListener implements Listener {
                 } else {
                     player.sendMessage(Component.text(
                             "Chosen path: " + record.choice() + ".", NamedTextColor.GRAY));
-                    // Rule 19 — naming the path is not the same as saying what it DOES.
-                    // "An invisible improvement is a wasted level", and the framework calls
-                    // this its single largest failure risk, so each picked path describes
-                    // its own behaviour the same way the level-3/6 verbs above do.
                     if ("QUARRYMAN".equals(record.choice())) {
                         player.sendMessage(Component.text(
                                 "Digs to any depth as a walkable staircase — handles water and lava on the way "

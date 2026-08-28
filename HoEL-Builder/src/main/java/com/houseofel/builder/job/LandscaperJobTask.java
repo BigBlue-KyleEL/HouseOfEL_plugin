@@ -56,7 +56,7 @@ public final class LandscaperJobTask implements JobTask {
     private static final int NO_PROGRESS_TICKS = 20 * 3;
     private static final int WALK_TIMEOUT_TICKS = 20 * 30;
     private static final int PATH_GRACE_TICKS = 20;
-    private static final int PLACE_DELAY_TICKS = 3;
+    private static final int PLACE_DELAY_TICKS = 0; // TODO: revert to 3 after testing
     private static final double NOISE_SCALE = 0.06;
     private static final int NOISE_OCTAVES = 3;
 
@@ -99,6 +99,12 @@ public final class LandscaperJobTask implements JobTask {
     private int noProgressTicks;
     private double closestApproachSquared;
     private int targetColumnX, targetColumnZ;
+    private int[][] redesignHeightmap;
+    private double lastTickHealth = -1;
+    private int regenCounter;
+    private int retreatTicks;
+    private boolean floatingIsland;
+    private int[][] islandBottom;
 
     private final Set<Long> ticketedChunks = new HashSet<>();
 
@@ -182,11 +188,13 @@ public final class LandscaperJobTask implements JobTask {
         RegionOutline outline = new RegionOutline(world, state.minX, state.minY, state.minZ,
                 state.maxX, state.maxY, state.maxZ);
 
-        return new LandscaperJobTask(plugin, jobManager, levelService, state.playerId, npc,
+        LandscaperJobTask task = new LandscaperJobTask(plugin, jobManager, levelService, state.playerId, npc,
                 npcEntity, equipment, label, world, mode, biome, state.minX, state.maxX, state.minY,
                 state.maxY, state.minZ, state.maxZ, spanX, spanZ, outline,
                 Phase.SEEKING, state.landscapeColumn, state.landscapePlaced, state.landscapeTreeCursor,
                 state.gradientAX, state.gradientAZ);
+        task.floatingIsland = state.floatingIsland;
+        return task;
     }
 
     @Override
@@ -286,6 +294,7 @@ public final class LandscaperJobTask implements JobTask {
         state.landscapeTreeCursor = treeCursor;
         state.gradientAX = gradientAX;
         state.gradientAZ = gradientAZ;
+        state.floatingIsland = floatingIsland;
         return state;
     }
 
@@ -295,7 +304,34 @@ public final class LandscaperJobTask implements JobTask {
             return;
         }
 
-        if (hesitationTicks > 0) {
+        if (npcEntity instanceof LivingEntity living) {
+            double health = living.getHealth();
+            if (lastTickHealth >= 0 && health < lastTickHealth) {
+                npc.getNavigator().cancelNavigation();
+                Location npcLoc = npcEntity.getLocation();
+                double awayX = npcLoc.getX() - (targetColumnX + 0.5);
+                double awayZ = npcLoc.getZ() - (targetColumnZ + 0.5);
+                double len = Math.sqrt(awayX * awayX + awayZ * awayZ);
+                if (len > 0.01) { awayX /= len; awayZ /= len; }
+                else { awayX = 1; awayZ = 0; }
+                npc.getNavigator().setTarget(new Location(world,
+                        npcLoc.getX() + awayX * 5, npcLoc.getY(), npcLoc.getZ() + awayZ * 5));
+                retreatTicks = 60;
+                regenCounter = 0;
+            }
+            lastTickHealth = health;
+            if (health < living.getMaxHealth() && retreatTicks <= 0) {
+                regenCounter++;
+                if (regenCounter >= 80) {
+                    living.setHealth(Math.min(living.getMaxHealth(), health + 1));
+                    regenCounter = 0;
+                }
+            }
+        }
+
+        if (retreatTicks > 0) {
+            retreatTicks--;
+        } else if (hesitationTicks > 0) {
             hesitationTicks--;
         } else {
             switch (phase) {
@@ -356,8 +392,12 @@ public final class LandscaperJobTask implements JobTask {
         }
         if (mode == LandscapeMode.REDESIGN) {
             int target = computeRedesignTarget(x, z);
+            int bottom = floatingIsland && islandBottom != null
+                    ? islandBottom[x - minX][z - minZ] : minY;
             for (int y = minY; y <= maxY; y++) {
-                if (y <= target) {
+                if (y < bottom) {
+                    if (world.getBlockAt(x, y, z).getType().isSolid()) return true;
+                } else if (y <= target) {
                     Material desired = materialForRedesign(x, y, z, target);
                     if (world.getBlockAt(x, y, z).getType() != desired) return true;
                 } else if (y == target + 1) {
@@ -378,6 +418,10 @@ public final class LandscaperJobTask implements JobTask {
     }
 
     private void startWalkingToColumn() {
+        if (npcEntity.getLocation().getY() < minY) {
+            beginPlacing();
+            return;
+        }
         int surfaceY = highestSolidY(targetColumnX, targetColumnZ);
         Location target = new Location(world, targetColumnX + 0.5, surfaceY + 1, targetColumnZ + 0.5);
         npc.getNavigator().setTarget(target);
@@ -425,8 +469,40 @@ public final class LandscaperJobTask implements JobTask {
         }
     }
 
+    private void relocateToCompletedColumn() {
+        int bestX = -1, bestZ = -1, bestSurface = -1;
+        double bestDist = Double.MAX_VALUE;
+        for (int i = 0; i < columnCursor && i < spanX * spanZ; i++) {
+            int cx = minX + (i % spanX);
+            int cz = minZ + (i / spanX);
+            int surface = highestSolidY(cx, cz);
+            if (surface < minY) continue;
+            double dx = cx - targetColumnX;
+            double dz = cz - targetColumnZ;
+            double dist = dx * dx + dz * dz;
+            if (dist < bestDist) {
+                bestDist = dist;
+                bestX = cx;
+                bestZ = cz;
+                bestSurface = surface;
+            }
+        }
+        if (bestX >= 0) {
+            int safeY = bestSurface + 1;
+            while (world.getBlockAt(bestX, safeY, bestZ).getType().isSolid()
+                    || world.getBlockAt(bestX, safeY + 1, bestZ).getType().isSolid()) {
+                safeY++;
+            }
+            npcEntity.teleport(new Location(world, bestX + 0.5, safeY, bestZ + 0.5,
+                    npcEntity.getLocation().getYaw(), npcEntity.getLocation().getPitch()));
+        }
+    }
+
     private void beginPlacing() {
         npc.getNavigator().cancelNavigation();
+        if (npcEntity.getLocation().getY() < minY) {
+            relocateToCompletedColumn();
+        }
         if (inTreePhase) {
             plantTree();
             treeCursor++;
@@ -463,7 +539,13 @@ public final class LandscaperJobTask implements JobTask {
                 placeBlock(block, materialForSlope(targetColumnX, placingY, targetColumnZ, columnTargetHeight));
             }
         } else if (mode == LandscapeMode.REDESIGN) {
-            if (placingY <= columnTargetHeight) {
+            int bottom = floatingIsland && islandBottom != null
+                    ? islandBottom[targetColumnX - minX][targetColumnZ - minZ] : minY;
+            if (placingY < bottom) {
+                if (block.getType().isSolid()) {
+                    clearBlock(block);
+                }
+            } else if (placingY <= columnTargetHeight) {
                 Material desired = materialForRedesign(targetColumnX, placingY, targetColumnZ, columnTargetHeight);
                 if (block.getType() != desired) {
                     placeBlock(block, desired);
@@ -500,7 +582,15 @@ public final class LandscaperJobTask implements JobTask {
         double dx = npcLoc.getX() - (targetColumnX + 0.5);
         double dz = npcLoc.getZ() - (targetColumnZ + 0.5);
         if (dx * dx + dz * dz < 2.25 && npcLoc.getY() < placingY + 2) {
-            npcEntity.teleport(new Location(world, npcLoc.getX(), placingY + 1, npcLoc.getZ(),
+            int safeY = placingY + 1;
+            int npcBlockX = npcLoc.getBlockX();
+            int npcBlockZ = npcLoc.getBlockZ();
+            while (world.getBlockAt(npcBlockX, safeY, npcBlockZ).getType().isSolid()
+                    || world.getBlockAt(npcBlockX, safeY + 1, npcBlockZ).getType().isSolid()) {
+                safeY++;
+                if (safeY > maxY + 10) break;
+            }
+            npcEntity.teleport(new Location(world, npcLoc.getX(), safeY, npcLoc.getZ(),
                     npcLoc.getYaw(), npcLoc.getPitch()));
         }
     }
@@ -613,15 +703,7 @@ public final class LandscaperJobTask implements JobTask {
     }
 
     private Material materialForSlope(int x, int y, int z, int targetHeight) {
-        if (y == targetHeight) return Material.GRASS_BLOCK;
-        int depth = targetHeight - y;
-        if (depth <= 3) {
-            if (blockVariation(x, y, z, 0.06)) return Material.COARSE_DIRT;
-            return Material.DIRT;
-        }
-        if (blockVariation(x, y, z, 0.08)) return Material.GRAVEL;
-        if (blockVariation(x + 1000, y, z, 0.04)) return Material.CLAY;
-        return Material.STONE;
+        return BiomePalette.materialAt(landscapeBiome, x, y, z, targetHeight, noiseSeed);
     }
 
     private boolean blockVariation(int x, int y, int z, double chance) {
@@ -631,12 +713,138 @@ public final class LandscaperJobTask implements JobTask {
     }
 
     private int computeRedesignTarget(int x, int z) {
-        double t = gradientFraction(x, z);
-        double noise = octaveNoise(x * NOISE_SCALE, z * NOISE_SCALE);
-        double noiseVar = noise * 0.25;
-        double height = Math.max(0.0, Math.min(1.0, t + noiseVar));
+        if (redesignHeightmap == null) {
+            redesignHeightmap = buildRedesignHeightmap();
+        }
+        return redesignHeightmap[x - minX][z - minZ];
+    }
+
+    private int[][] buildRedesignHeightmap() {
+        int[] edgeNorth = new int[spanX];
+        int[] edgeSouth = new int[spanX];
+        int[] edgeWest = new int[spanZ];
+        int[] edgeEast = new int[spanZ];
+        int solidCount = 0;
+        for (int i = 0; i < spanX; i++) {
+            edgeNorth[i] = sampleEdgeHeight(minX + i, minZ - 1);
+            edgeSouth[i] = sampleEdgeHeight(minX + i, maxZ + 1);
+            if (edgeNorth[i] > minY) solidCount++;
+            if (edgeSouth[i] > minY) solidCount++;
+        }
+        for (int j = 0; j < spanZ; j++) {
+            edgeWest[j] = sampleEdgeHeight(minX - 1, minZ + j);
+            edgeEast[j] = sampleEdgeHeight(maxX + 1, minZ + j);
+            if (edgeWest[j] > minY) solidCount++;
+            if (edgeEast[j] > minY) solidCount++;
+        }
+
+        int totalEdgeSamples = 2 * spanX + 2 * spanZ;
+        if (!floatingIsland && solidCount * 4 < totalEdgeSamples) {
+            floatingIsland = true;
+        }
+        if (floatingIsland) {
+            return buildFloatingIslandHeightmap();
+        }
+
+        int[][] hm = new int[spanX][spanZ];
+        int cornerNW = sampleEdgeHeight(minX - 1, minZ - 1);
+        int cornerNE = sampleEdgeHeight(maxX + 1, minZ - 1);
+        int cornerSW = sampleEdgeHeight(minX - 1, maxZ + 1);
+        int cornerSE = sampleEdgeHeight(maxX + 1, maxZ + 1);
+
+        for (int i = 0; i < spanX; i++) {
+            double u = spanX > 1 ? (double) i / (spanX - 1) : 0.5;
+            for (int j = 0; j < spanZ; j++) {
+                double v = spanZ > 1 ? (double) j / (spanZ - 1) : 0.5;
+                double h = (1 - v) * edgeNorth[i] + v * edgeSouth[i]
+                         + (1 - u) * edgeWest[j] + u * edgeEast[j]
+                         - (1 - u) * (1 - v) * cornerNW
+                         - u * (1 - v) * cornerNE
+                         - (1 - u) * v * cornerSW
+                         - u * v * cornerSE;
+                hm[i][j] = (int) Math.round(h);
+            }
+        }
+
+        for (int pass = 0; pass < 3; pass++) {
+            int[][] smoothed = new int[spanX][spanZ];
+            for (int i = 0; i < spanX; i++) {
+                System.arraycopy(hm[i], 0, smoothed[i], 0, spanZ);
+            }
+            for (int i = 1; i < spanX - 1; i++) {
+                for (int j = 1; j < spanZ - 1; j++) {
+                    double avg = (hm[i - 1][j] + hm[i + 1][j] + hm[i][j - 1] + hm[i][j + 1]) / 4.0;
+                    double diff = hm[i][j] - avg;
+                    if (Math.abs(diff) > 2) {
+                        smoothed[i][j] = (int) Math.round(hm[i][j] - diff * 0.3);
+                    }
+                }
+            }
+            hm = smoothed;
+        }
+
+        for (int i = 0; i < spanX; i++) {
+            int x = minX + i;
+            for (int j = 0; j < spanZ; j++) {
+                int z = minZ + j;
+                double noise = octaveNoise(x * NOISE_SCALE, z * NOISE_SCALE);
+                hm[i][j] += (int) (noise * 2);
+                hm[i][j] = Math.max(minY, Math.min(maxY, hm[i][j]));
+            }
+        }
+
+        return hm;
+    }
+
+    private int[][] buildFloatingIslandHeightmap() {
+        int[][] hm = new int[spanX][spanZ];
+        islandBottom = new int[spanX][spanZ];
         int spanY = maxY - minY;
-        return minY + (int) (height * spanY);
+        double centerX = (spanX - 1) / 2.0;
+        double centerZ = (spanZ - 1) / 2.0;
+        int surfaceBase = minY + (int) (spanY * 0.70);
+        int surfaceAmplitude = Math.max(3, (int) (spanY * 0.30));
+        int deepestBottom = minY + 3;
+
+        for (int i = 0; i < spanX; i++) {
+            int x = minX + i;
+            for (int j = 0; j < spanZ; j++) {
+                int z = minZ + j;
+
+                double surfNoise = octaveNoise(x * NOISE_SCALE, z * NOISE_SCALE);
+                double detailNoise = octaveNoise(x * NOISE_SCALE * 2.5, z * NOISE_SCALE * 2.5) * 0.3;
+                int surfaceY = surfaceBase + (int) ((surfNoise + detailNoise) * surfaceAmplitude);
+                surfaceY = Math.max(minY + 4, Math.min(maxY, surfaceY));
+                hm[i][j] = surfaceY;
+
+                double dx = centerX > 0 ? Math.abs(i - centerX) / centerX : 0;
+                double dz = centerZ > 0 ? Math.abs(j - centerZ) / centerZ : 0;
+                double rawEdge = Math.sqrt(dx * dx + dz * dz);
+                double outlineNoise = octaveNoise((x + 1000) * 0.1, (z + 1000) * 0.1);
+                double edgeFrac = Math.min(1.0, rawEdge / Math.max(0.5, 1.0 + outlineNoise * 0.3));
+                double edgeCurve = edgeFrac * edgeFrac;
+                int depthRange = surfaceY - 1 - deepestBottom;
+                int bottom = deepestBottom + (int) (depthRange * edgeCurve);
+
+                double shapeNoise = octaveNoise((x + 3000) * NOISE_SCALE * 1.5, (z + 3000) * NOISE_SCALE * 1.5);
+                bottom += (int) (shapeNoise * depthRange * 0.3);
+
+                double jagNoise = octaveNoise((x + 500) * NOISE_SCALE * 3, (z + 500) * NOISE_SCALE * 3);
+                bottom += (int) (jagNoise * depthRange * 0.1);
+
+                islandBottom[i][j] = Math.max(minY, Math.min(surfaceY - 1, bottom));
+            }
+        }
+        return hm;
+    }
+
+    private int sampleEdgeHeight(int x, int z) {
+        for (int y = maxY + 10; y >= minY; y--) {
+            if (world.getBlockAt(x, y, z).getType().isSolid()) {
+                return Math.max(minY, Math.min(maxY, y));
+            }
+        }
+        return minY;
     }
 
     private double gradientFraction(int x, int z) {
@@ -651,35 +859,19 @@ public final class LandscaperJobTask implements JobTask {
     }
 
     private Material materialForRedesign(int x, int y, int z, int targetHeight) {
-        if (y == targetHeight) return surfaceBlockForBiome(x, z);
-        int depth = targetHeight - y;
-        if (depth <= 3) {
-            if (blockVariation(x, y, z, 0.06)) return Material.COARSE_DIRT;
-            return subsurfaceBlockForBiome(x, z);
+        Material mat = BiomePalette.materialAt(landscapeBiome, x, y, z, targetHeight, noiseSeed);
+        if (floatingIsland && islandBottom != null && y == islandBottom[x - minX][z - minZ]) {
+            mat = supportBlock(mat);
         }
-        if (blockVariation(x, y, z, 0.08)) return Material.GRAVEL;
-        if (blockVariation(x + 1000, y, z, 0.04)) return Material.CLAY;
-        return Material.STONE;
+        return mat;
     }
 
-    private Material surfaceBlockForBiome(int x, int z) {
-        if (landscapeBiome == null) return Material.GRASS_BLOCK;
-        return switch (landscapeBiome) {
-            case DESERT -> Material.SAND;
-            case BADLANDS -> Material.RED_SAND;
-            case SNOWY -> Material.SNOW_BLOCK;
-            case TAIGA -> Material.PODZOL;
-            case MUSHROOM -> Material.MYCELIUM;
-            default -> Material.GRASS_BLOCK;
-        };
-    }
-
-    private Material subsurfaceBlockForBiome(int x, int z) {
-        if (landscapeBiome == null) return Material.DIRT;
-        return switch (landscapeBiome) {
-            case DESERT -> Material.SAND;
-            case BADLANDS -> Material.RED_SAND;
-            default -> Material.DIRT;
+    private static Material supportBlock(Material mat) {
+        return switch (mat) {
+            case SAND -> Material.SANDSTONE;
+            case RED_SAND -> Material.RED_SANDSTONE;
+            case GRAVEL -> Material.COBBLESTONE;
+            default -> mat;
         };
     }
 
@@ -690,19 +882,27 @@ public final class LandscaperJobTask implements JobTask {
         double v = (h & 0x7fffffffL) / (double) 0x7fffffffL;
         return switch (landscapeBiome) {
             case PLAINS -> {
-                if (v < 0.30) yield Material.SHORT_GRASS;
-                if (v < 0.35) yield Material.POPPY;
-                if (v < 0.39) yield Material.DANDELION;
-                if (v < 0.42) yield Material.CORNFLOWER;
-                if (v < 0.45) yield Material.AZURE_BLUET;
+                if (v < 0.25) yield Material.SHORT_GRASS;
+                if (v < 0.30) yield Material.POPPY;
+                if (v < 0.34) yield Material.DANDELION;
+                if (v < 0.37) yield Material.CORNFLOWER;
+                if (v < 0.39) yield Material.AZURE_BLUET;
+                if (v < 0.41) yield Material.PINK_TULIP;
+                if (v < 0.43) yield Material.RED_TULIP;
+                if (v < 0.44) yield Material.ORANGE_TULIP;
+                if (v < 0.45) yield Material.WHITE_TULIP;
+                if (v < 0.47) yield Material.OXEYE_DAISY;
+                if (v < 0.48) yield Material.ALLIUM;
                 yield null;
             }
             case DESERT -> {
-                if (v < 0.05) yield Material.DEAD_BUSH;
+                if (v < 0.04) yield Material.DEAD_BUSH;
+                if (v < 0.07) yield Material.CACTUS;
                 yield null;
             }
             case BADLANDS -> {
                 if (v < 0.03) yield Material.DEAD_BUSH;
+                if (v < 0.05) yield Material.CACTUS;
                 yield null;
             }
             case SNOWY -> {
@@ -710,13 +910,15 @@ public final class LandscaperJobTask implements JobTask {
                 yield null;
             }
             case TAIGA -> {
-                if (v < 0.20) yield Material.FERN;
-                if (v < 0.28) yield Material.SHORT_GRASS;
+                if (v < 0.18) yield Material.FERN;
+                if (v < 0.26) yield Material.SHORT_GRASS;
+                if (v < 0.30) yield Material.SWEET_BERRY_BUSH;
                 yield null;
             }
             case JUNGLE -> {
-                if (v < 0.25) yield Material.SHORT_GRASS;
-                if (v < 0.38) yield Material.FERN;
+                if (v < 0.22) yield Material.SHORT_GRASS;
+                if (v < 0.35) yield Material.FERN;
+                if (v < 0.38) yield Material.MELON;
                 yield null;
             }
             case MUSHROOM -> {

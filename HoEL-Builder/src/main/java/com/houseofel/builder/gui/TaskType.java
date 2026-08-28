@@ -16,7 +16,8 @@ public enum TaskType {
      * menu can offer it as a distinct, discoverable job rather than making Clearing
      * silently mean something different for one Helper (Kyle, 2026-08-25).
      */
-    LANDSCAPE("Landscaping", Material.IRON_SHOVEL, "Shovel");
+    LANDSCAPE("Landscaping", Material.IRON_SHOVEL, "Shovel"),
+    COFFERDAM("Cofferdam", Material.IRON_SHOVEL, "Shovel");
 
     private final String label;
     private final Material icon;
