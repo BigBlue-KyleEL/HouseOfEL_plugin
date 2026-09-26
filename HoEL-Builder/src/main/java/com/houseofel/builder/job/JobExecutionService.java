@@ -26,6 +26,7 @@ import org.bukkit.inventory.EntityEquipment;
 import org.bukkit.plugin.Plugin;
 
 import java.util.Deque;
+import java.util.function.Consumer;
 import java.util.logging.Logger;
 
 /**
@@ -72,47 +73,30 @@ public final class JobExecutionService {
         return record != null && GroundworkerL8Choice.LANDSCAPER.name().equals(record.choice());
     }
 
-    public void dispatchClear(Player player, NPC npc, TaskType taskType, Target target,
+    public Consumer<Block> dispatchClear(Player player, NPC npc, TaskType taskType, Target target,
                                Location pointA, Location pointB, boolean storeInChest,
                                boolean surfaceOnly, boolean restoreTopsoil) {
-        // Purely a cosmetic starting point — ClearJobTask.beginDigging() picks the real
-        // per-block tool (see BlockTool) the moment it reaches its first block, so
-        // whatever's held here is only ever visible for a step or two at most.
-        Material initialTool = Material.IRON_SHOVEL;
         Entity npcEntity = npc.getEntity();
         if (npcEntity == null) {
             player.sendMessage(Component.text(
                     BuilderNpcService.baseNameOf(npc) + " isn't spawned right now — can't start the job.", NamedTextColor.RED));
-            return;
+            return null;
         }
-        // Belt-and-suspenders: BuilderNpcListener already turns players away at the door
-        // when the ceiling is full, but the gap between opening that menu and hitting
-        // confirm is real — another job could have started in between.
         if (jobManager.isAtCeiling()) {
             String eta = jobManager.etaOfSoonestJob().orElse("a little while");
             player.sendMessage(Component.text(
                     "Every Helper is tied up right now — check back in " + eta + ".", NamedTextColor.RED));
-            return;
+            return null;
         }
-        // Same belt-and-suspenders reasoning, added 2026-08-21: this NPC-specific check
-        // didn't exist before Quarryman shared JobManager's own registry — a latent
-        // double-dispatch race (this NPC already mid-Quarry-job) that a single shared
-        // find() now makes trivial to close here too.
         if (jobManager.find(npc.getId()) != null) {
             player.sendMessage(Component.text(
                     BuilderNpcService.baseNameOf(npc) + " is already busy — wait for that to finish first.", NamedTextColor.RED));
-            return;
+            return null;
         }
 
-        // Ownership (for Rust visibility and recruitment-cost escalation) now tracks
-        // whoever's actually operating a Helper, not just whoever originally recruited
-        // it — reassigned to the dispatching player on every real dispatch, so a
-        // household where several people run Helpers attributes recklessness to whoever's
-        // actually responsible for it, per Kyle's call (2026-08-14).
         deathRecordStore.setOwner(npc.getUniqueId(), player.getUniqueId());
 
         World world = pointA.getWorld();
-        // Warning-only per the Masterfile — no restriction, the job proceeds regardless.
         if (world.getEnvironment() == World.Environment.NETHER
                 || world.getEnvironment() == World.Environment.THE_END) {
             player.sendMessage(Component.text(
@@ -127,64 +111,82 @@ public final class JobExecutionService {
         int maxY = Math.max(pointA.getBlockY(), pointB.getBlockY());
         int maxZ = Math.max(pointA.getBlockZ(), pointB.getBlockZ());
 
-        int spanX = maxX - minX + 1;
-        int spanY = maxY - minY + 1;
-        int spanZ = maxZ - minZ + 1;
-        long totalCells = (long) spanX * spanY * spanZ;
-
-        TextDisplay label = ClearJobTask.spawnLabel(npcEntity.getLocation());
-        EntityEquipment equipment = ClearJobTask.equipTool(npcEntity, initialTool, BuilderNpcService.baseNameOf(npc), taskType.toolNoun());
-
-        player.sendMessage(Component.text(BuilderNpcService.baseNameOf(npc) + ": Right, I'll get started on the "
-                + target.label() + " — " + totalCells + " blocks to check.", NamedTextColor.GREEN));
-        logger.info(player.getName() + " dispatched CLEAR/" + target + " job over " + totalCells + " cells");
-
-        JobStorage storage = storeInChest
-                ? new JobStorage(plugin, world, minX, maxX, minY, maxY, minZ, maxZ)
-                : null;
-
-        // Stand the chest up front rather than lazily on the first haul, so the player
-        // can see where the job's output is going from the moment it starts.
-        if (storage != null) {
-            Location chestAt = storage.depositPoint();
-            if (chestAt == null) {
-                player.sendMessage(Component.text(
-                        "Couldn't find anywhere to place a storage chest — " + BuilderNpcService.baseNameOf(npc)
-                                + " will work without one.", NamedTextColor.RED));
-            } else {
-                String coords = "(" + chestAt.getBlockX() + ", " + chestAt.getBlockY() + ", "
-                        + chestAt.getBlockZ() + ")";
-                player.sendMessage(Component.text("Storage chest placed at " + coords,
-                        NamedTextColor.AQUA));
-                logger.info("Storage chest placed at " + coords + " for " + player.getName() + "'s job");
-            }
-        }
-
-        // Whether THIS job restores topsoil comes from which button was pressed
-        // (Landscaping vs plain Clearing), not from the Helper's class — a Landscaper can
-        // still be asked for a plain clear.
-        boolean restoresTopsoil = restoreTopsoil;
-        // The depth cap, by contrast, is a property of the CLASS, not the job: "It cannot
-        // dig deep — hand it a quarry and it refuses and says so" (V1 Perk Ladders,
-        // Landscaper's own balance clause). Applied to any job a Landscaper takes, so the
-        // cap cannot be side-stepped by using the plain Clearing button.
         if (isLandscaper(npc) && (maxY - minY + 1) > LANDSCAPER_MAX_DEPTH) {
             player.sendMessage(Component.text(BuilderNpcService.baseNameOf(npc)
                     + ": That's a quarry, not landscaping — I work the surface, no deeper than "
                     + LANDSCAPER_MAX_DEPTH + " blocks. Mark something shallower and I'll make it look like it grew there.",
                     NamedTextColor.RED));
-            return;
+            return null;
         }
 
         if (shouldSurvey(npc) && !runSurvey(player, npc, world, minX, minY, minZ, maxX, maxY, maxZ, JobType.CLEAR)) {
-            return;
+            return null;
         }
+
+        JobStorage storage = storeInChest
+                ? new JobStorage(plugin, world, minX, maxX, minY, maxY, minZ, maxZ)
+                : null;
+
+        if (storage != null) {
+            Location chestAt = storage.depositPoint();
+            if (chestAt == null) {
+                player.sendMessage(Component.text(BuilderNpcService.baseNameOf(npc)
+                        + ": I can't find a spot for a chest. Place one down nearby "
+                        + "and tap it with the rod.",
+                        NamedTextColor.YELLOW));
+                return chestBlock -> {
+                    storage.adoptChest(chestBlock);
+                    String c = "(" + chestBlock.getX() + ", " + chestBlock.getY() + ", "
+                            + chestBlock.getZ() + ")";
+                    player.sendMessage(Component.text(BuilderNpcService.baseNameOf(npc)
+                            + ": Got it, I'll use that one at " + c + ".",
+                            NamedTextColor.GREEN));
+                    finishClearDispatch(player, npc, taskType, target, world,
+                            minX, maxX, minY, maxY, minZ, maxZ, storage,
+                            storeInChest, surfaceOnly, restoreTopsoil);
+                };
+            }
+            String coords = "(" + chestAt.getBlockX() + ", " + chestAt.getBlockY() + ", "
+                    + chestAt.getBlockZ() + ")";
+            player.sendMessage(Component.text("Storage chest placed at " + coords,
+                    NamedTextColor.AQUA));
+            logger.info("Storage chest placed at " + coords + " for " + player.getName() + "'s job");
+        }
+
+        finishClearDispatch(player, npc, taskType, target, world,
+                minX, maxX, minY, maxY, minZ, maxZ, storage,
+                storeInChest, surfaceOnly, restoreTopsoil);
+        return null;
+    }
+
+    private void finishClearDispatch(Player player, NPC npc, TaskType taskType, Target target,
+                                      World world, int minX, int maxX, int minY, int maxY, int minZ, int maxZ,
+                                      JobStorage storage, boolean storeInChest, boolean surfaceOnly,
+                                      boolean restoreTopsoil) {
+        Entity npcEntity = npc.getEntity();
+        if (npcEntity == null) return;
+
+        Material initialTool = Material.IRON_SHOVEL;
+        int spanX = maxX - minX + 1;
+        int spanZ = maxZ - minZ + 1;
+        long totalCells = (long) spanX * (maxY - minY + 1) * spanZ;
+
+        TextDisplay label = ClearJobTask.spawnLabel(npcEntity.getLocation());
+        EntityEquipment equipment = ClearJobTask.equipTool(npcEntity, initialTool,
+                BuilderNpcService.baseNameOf(npc), taskType.toolNoun());
+
+        player.sendMessage(Component.text(BuilderNpcService.baseNameOf(npc)
+                + ": Right, I'll get started on the " + target.label() + " — "
+                + totalCells + " blocks to check.", NamedTextColor.GREEN));
+        logger.info(player.getName() + " dispatched CLEAR/" + target + " job over " + totalCells + " cells");
 
         RegionOutline outline = new RegionOutline(world, minX, minY, minZ, maxX, maxY, maxZ);
 
         ClearJobTask task = new ClearJobTask(plugin, jobManager, levelService, redundancyTracker, freshLedger,
-                player, npc, npcEntity, equipment, label, world, target, initialTool, minX, maxX, minY, maxY, minZ, maxZ,
-                spanX, spanZ, totalCells, storage, storeInChest, surfaceOnly, outline, restoresTopsoil, false);
+                player, npc, npcEntity, equipment, label, world, target, initialTool,
+                minX, maxX, minY, maxY, minZ, maxZ,
+                spanX, spanZ, totalCells, storage, storeInChest, surfaceOnly, outline,
+                restoreTopsoil, false);
         jobManager.register(task);
         task.start();
     }
@@ -260,26 +262,25 @@ public final class JobExecutionService {
      * Shares {@link JobManager}'s registry/ceiling/persistence with Clear jobs since
      * 2026-08-21 — see {@link QuarrymanJobTask}'s class doc.
      */
-    public void dispatchQuarryman(Player player, NPC npc, TaskType taskType, Target target,
+    public Consumer<Block> dispatchQuarryman(Player player, NPC npc, TaskType taskType, Target target,
                                    Location pointA, Location pointB, boolean storeInChest,
                                    boolean surfaceOnly, Integer requestedLevels, Integer requestedTargetY) {
-        Material initialTool = Material.IRON_PICKAXE;
         Entity npcEntity = npc.getEntity();
         if (npcEntity == null) {
             player.sendMessage(Component.text(
                     BuilderNpcService.baseNameOf(npc) + " isn't spawned right now — can't start the job.", NamedTextColor.RED));
-            return;
+            return null;
         }
         if (jobManager.isAtCeiling()) {
             String eta = jobManager.etaOfSoonestJob().orElse("a little while");
             player.sendMessage(Component.text(
                     "Every Helper is tied up right now — check back in " + eta + ".", NamedTextColor.RED));
-            return;
+            return null;
         }
         if (jobManager.find(npc.getId()) != null) {
             player.sendMessage(Component.text(
                     BuilderNpcService.baseNameOf(npc) + " is already busy — wait for that to finish first.", NamedTextColor.RED));
-            return;
+            return null;
         }
 
         deathRecordStore.setOwner(npc.getUniqueId(), player.getUniqueId());
@@ -290,20 +291,7 @@ public final class JobExecutionService {
         int maxX = Math.max(pointA.getBlockX(), pointB.getBlockX());
         int minZ = Math.min(pointA.getBlockZ(), pointB.getBlockZ());
         int maxZ = Math.max(pointA.getBlockZ(), pointB.getBlockZ());
-        // The lower of the two marked points' Y is deliberately ignored — depth is now
-        // always an explicit player choice (Level or Coordinates, picked before this area
-        // was even marked), never inferred from the marked volume's own height.
         int topY = Math.max(pointA.getBlockY(), pointB.getBlockY());
-        // Which axis the staircase's footprint slides along as it goes deeper, and which
-        // way — Kyle's own rule (2026-08-21), cross-validated against 8 worked examples
-        // across two differently-shaped marked areas (not an assumption: every one of the
-        // 8 checks out exactly). Compare the click's own X delta to its own Z delta, not
-        // either axis's span and not a fixed axis: same sign (point B is diagonally
-        // "ahead" of point A along the X=Z line — both coordinates moved the same way)
-        // steps along X, using that shared sign. Opposite signs (point B is diagonally
-        // "ahead" along the X=-Z line) steps along Z, using Z's own sign. Defaults to +1
-        // for the degenerate all-zero case (no real diagonal to read a direction from)
-        // rather than leaving the footprint direction undefined.
         int dx = pointB.getBlockX() - pointA.getBlockX();
         int dz = pointB.getBlockZ() - pointA.getBlockZ();
         boolean stepsAlongX = Integer.signum(dx) == Integer.signum(dz);
@@ -312,59 +300,40 @@ public final class JobExecutionService {
             stepDirection = 1;
         }
 
-        // Coordinates mode gives a target Y directly; Level mode gives a block count
-        // directly. Both resolve to the same requestedDepth. Kyle's explicit call,
-        // 2026-08-20: the marked footprint's own size is NOT a constraint on depth — any
-        // footprint can reach any depth (see buildDigOrder's own doc for how a footprint
-        // too narrow for a full graduated staircase still digs safely, as a shaft
-        // instead). The one real, physically-necessary check is Coordinates mode's own
-        // target genuinely being below the marked area — "that doesn't make sense",
-        // Kyle's own words — plus not digging below the world's own floor.
         int requestedDepth;
         if (requestedTargetY != null) {
             if (requestedTargetY >= topY) {
                 player.sendMessage(Component.text(BuilderNpcService.baseNameOf(npc)
                         + ": Y coordinate destination and work area is invalid — " + requestedTargetY
                         + " isn't below where you marked (top is " + topY + ").", NamedTextColor.RED));
-                return;
+                return null;
             }
             requestedDepth = topY - requestedTargetY + 1;
         } else if (requestedLevels != null) {
             requestedDepth = requestedLevels;
         } else {
-            // Defensive only — both the Java wizard and the Bedrock form always resolve
-            // one or the other before a Quarry dispatch ever reaches here.
             requestedDepth = 1;
         }
 
         if (requestedDepth < 1) {
             player.sendMessage(Component.text(BuilderNpcService.baseNameOf(npc)
                     + ": Can't dig a negative number of blocks — ask for at least 1.", NamedTextColor.RED));
-            return;
+            return null;
         }
         int bottomY = topY - requestedDepth + 1;
         if (bottomY < world.getMinHeight()) {
             player.sendMessage(Component.text(BuilderNpcService.baseNameOf(npc)
                     + ": That goes below the bottom of the world (Y " + world.getMinHeight()
                     + ") — ask for a shallower depth.", NamedTextColor.RED));
-            return;
+            return null;
         }
 
         if (shouldSurvey(npc) && !runSurvey(player, npc, world, minX, bottomY, minZ, maxX, topY, maxZ, JobType.QUARRY)) {
-            return;
+            return null;
         }
 
         Deque<Block> digOrder = QuarrymanJobTask.buildDigOrder(world, minX, maxX, minZ, maxZ, topY, requestedDepth,
                 stepsAlongX, stepDirection);
-
-        TextDisplay label = ClearJobTask.spawnLabel(npcEntity.getLocation());
-        EntityEquipment equipment = ClearJobTask.equipTool(npcEntity, initialTool, BuilderNpcService.baseNameOf(npc), taskType.toolNoun());
-
-        player.sendMessage(Component.text(BuilderNpcService.baseNameOf(npc) + ": Right, I'll step this down as I go "
-                + "— one block deeper each row, " + requestedDepth + " block(s) deep by the far end. "
-                + digOrder.size() + " blocks to check.", NamedTextColor.GREEN));
-        logger.info(player.getName() + " dispatched QUARRY job over " + digOrder.size() + " cells, depth "
-                + requestedDepth);
 
         JobStorage storage = storeInChest
                 ? new JobStorage(plugin, world, minX, maxX, bottomY, topY, minZ, maxZ)
@@ -373,16 +342,56 @@ public final class JobExecutionService {
         if (storage != null) {
             Location chestAt = storage.depositPoint();
             if (chestAt == null) {
-                player.sendMessage(Component.text(
-                        "Couldn't find anywhere to place a storage chest — " + BuilderNpcService.baseNameOf(npc)
-                                + " will work without one.", NamedTextColor.RED));
-            } else {
-                String coords = "(" + chestAt.getBlockX() + ", " + chestAt.getBlockY() + ", "
-                        + chestAt.getBlockZ() + ")";
-                player.sendMessage(Component.text("Storage chest placed at " + coords, NamedTextColor.AQUA));
-                logger.info("Storage chest placed at " + coords + " for " + player.getName() + "'s job");
+                player.sendMessage(Component.text(BuilderNpcService.baseNameOf(npc)
+                        + ": I can't find a spot for a chest. Place one down nearby "
+                        + "and tap it with the rod.",
+                        NamedTextColor.YELLOW));
+                int finalRequestedDepth = requestedDepth;
+                boolean finalStepsAlongX = stepsAlongX;
+                int finalStepDirection = stepDirection;
+                return chestBlock -> {
+                    storage.adoptChest(chestBlock);
+                    String c = "(" + chestBlock.getX() + ", " + chestBlock.getY() + ", "
+                            + chestBlock.getZ() + ")";
+                    player.sendMessage(Component.text(BuilderNpcService.baseNameOf(npc)
+                            + ": Got it, I'll use that one at " + c + ".",
+                            NamedTextColor.GREEN));
+                    finishQuarryDispatch(player, npc, world, minX, maxX, minZ, maxZ, topY,
+                            finalRequestedDepth, finalStepsAlongX, finalStepDirection,
+                            digOrder, storage);
+                };
             }
+            String coords = "(" + chestAt.getBlockX() + ", " + chestAt.getBlockY() + ", "
+                    + chestAt.getBlockZ() + ")";
+            player.sendMessage(Component.text("Storage chest placed at " + coords, NamedTextColor.AQUA));
+            logger.info("Storage chest placed at " + coords + " for " + player.getName() + "'s job");
         }
+
+        finishQuarryDispatch(player, npc, world, minX, maxX, minZ, maxZ, topY,
+                requestedDepth, stepsAlongX, stepDirection, digOrder, storage);
+        return null;
+    }
+
+    private void finishQuarryDispatch(Player player, NPC npc, World world,
+                                       int minX, int maxX, int minZ, int maxZ, int topY,
+                                       int requestedDepth, boolean stepsAlongX, int stepDirection,
+                                       Deque<Block> digOrder, JobStorage storage) {
+        Entity npcEntity = npc.getEntity();
+        if (npcEntity == null) return;
+
+        Material initialTool = Material.IRON_PICKAXE;
+        int bottomY = topY - requestedDepth + 1;
+
+        TextDisplay label = ClearJobTask.spawnLabel(npcEntity.getLocation());
+        EntityEquipment equipment = ClearJobTask.equipTool(npcEntity, initialTool,
+                BuilderNpcService.baseNameOf(npc), TaskType.QUARRY.toolNoun());
+
+        player.sendMessage(Component.text(BuilderNpcService.baseNameOf(npc)
+                + ": Right, I'll step this down as I go — one block deeper each row, "
+                + requestedDepth + " block(s) deep by the far end. "
+                + digOrder.size() + " blocks to check.", NamedTextColor.GREEN));
+        logger.info(player.getName() + " dispatched QUARRY job over " + digOrder.size()
+                + " cells, depth " + requestedDepth);
 
         RegionOutline outline = new RegionOutline(world, minX, bottomY, minZ, maxX, topY, maxZ);
 
@@ -394,23 +403,23 @@ public final class JobExecutionService {
         task.start();
     }
 
-    public void dispatchCofferdam(Player player, NPC npc, Location pointA, Location pointB) {
+    public Consumer<Block> dispatchCofferdam(Player player, NPC npc, Location pointA, Location pointB) {
         Entity npcEntity = npc.getEntity();
         if (npcEntity == null) {
             player.sendMessage(Component.text(
                     BuilderNpcService.baseNameOf(npc) + " isn't spawned right now — can't start the job.", NamedTextColor.RED));
-            return;
+            return null;
         }
         if (jobManager.isAtCeiling()) {
             String eta = jobManager.etaOfSoonestJob().orElse("a little while");
             player.sendMessage(Component.text(
                     "Every Helper is tied up right now — check back in " + eta + ".", NamedTextColor.RED));
-            return;
+            return null;
         }
         if (jobManager.find(npc.getId()) != null) {
             player.sendMessage(Component.text(
                     BuilderNpcService.baseNameOf(npc) + " is already busy — wait for that to finish first.", NamedTextColor.RED));
-            return;
+            return null;
         }
 
         deathRecordStore.setOwner(npc.getUniqueId(), player.getUniqueId());
@@ -424,7 +433,6 @@ public final class JobExecutionService {
         int maxY = Math.max(pointA.getBlockY(), pointB.getBlockY());
         int maxZ = Math.max(pointA.getBlockZ(), pointB.getBlockZ());
 
-        // Water presence check — needed at all levels, not just L12+.
         boolean hasWater = false;
         outer:
         for (int x = minX; x <= maxX; x++) {
@@ -441,14 +449,50 @@ public final class JobExecutionService {
             player.sendMessage(Component.text(BuilderNpcService.baseNameOf(npc)
                     + ": There's no water in that area — a cofferdam wouldn't do anything.",
                     NamedTextColor.RED));
-            return;
+            return null;
         }
 
         if (shouldSurvey(npc) && !runSurvey(player, npc, world, minX, minY, minZ, maxX, maxY, maxZ, JobType.COFFERDAM)) {
-            return;
+            return null;
         }
 
         int wallBlocks = CofferdamJobTask.computeBuildOrder(minX, maxX, minY, maxY, minZ, maxZ).size();
+
+        JobStorage storage = new JobStorage(plugin, world, minX, maxX, minY, maxY, minZ, maxZ);
+        Location chestAt = storage.depositPoint();
+        if (chestAt == null) {
+            player.sendMessage(Component.text(BuilderNpcService.baseNameOf(npc)
+                    + ": I can't find a spot for a chest out here. Place one down nearby "
+                    + "and tap it with the rod.",
+                    NamedTextColor.YELLOW));
+            return chestBlock -> {
+                storage.adoptChest(chestBlock);
+                String c = "(" + chestBlock.getX() + ", " + chestBlock.getY() + ", "
+                        + chestBlock.getZ() + ")";
+                player.sendMessage(Component.text(BuilderNpcService.baseNameOf(npc)
+                        + ": Got it, I'll use that one at " + c + ".",
+                        NamedTextColor.GREEN));
+                finishCofferdamDispatch(player, npc, storage, world,
+                        minX, maxX, minY, maxY, minZ, maxZ, wallBlocks);
+            };
+        }
+
+        String coords = "(" + chestAt.getBlockX() + ", " + chestAt.getBlockY() + ", "
+                + chestAt.getBlockZ() + ")";
+        player.sendMessage(Component.text("Storage chest placed at " + coords
+                + " — fill it with cobblestone for the dam walls.", NamedTextColor.AQUA));
+        logger.info("Storage chest placed at " + coords + " for " + player.getName() + "'s cofferdam");
+
+        finishCofferdamDispatch(player, npc, storage, world,
+                minX, maxX, minY, maxY, minZ, maxZ, wallBlocks);
+        return null;
+    }
+
+    private void finishCofferdamDispatch(Player player, NPC npc, JobStorage storage, World world,
+                                          int minX, int maxX, int minY, int maxY, int minZ, int maxZ,
+                                          int wallBlocks) {
+        Entity npcEntity = npc.getEntity();
+        if (npcEntity == null) return;
 
         TextDisplay label = ClearJobTask.spawnLabel(npcEntity.getLocation());
         EntityEquipment equipment = ClearJobTask.equipTool(npcEntity, Material.IRON_SHOVEL,
@@ -460,26 +504,142 @@ public final class JobExecutionService {
                 NamedTextColor.GREEN));
         logger.info(player.getName() + " dispatched COFFERDAM job, up to " + wallBlocks + " wall blocks");
 
-        JobStorage storage = new JobStorage(plugin, world, minX, maxX, minY, maxY, minZ, maxZ);
-        Location chestAt = storage.depositPoint();
-        if (chestAt == null) {
-            player.sendMessage(Component.text(
-                    "Couldn't find anywhere to place a storage chest — "
-                            + BuilderNpcService.baseNameOf(npc) + " can't work without one.",
-                    NamedTextColor.RED));
-            return;
-        }
-        String coords = "(" + chestAt.getBlockX() + ", " + chestAt.getBlockY() + ", "
-                + chestAt.getBlockZ() + ")";
-        player.sendMessage(Component.text("Storage chest placed at " + coords
-                + " — fill it with cobblestone for the dam walls.", NamedTextColor.AQUA));
-        logger.info("Storage chest placed at " + coords + " for " + player.getName() + "'s cofferdam");
-
         RegionOutline outline = new RegionOutline(world, minX, minY, minZ, maxX, maxY, maxZ);
 
         CofferdamJobTask task = new CofferdamJobTask(plugin, jobManager, levelService,
                 player.getUniqueId(), npc, npcEntity, equipment, label, world,
                 minX, maxX, minY, maxY, minZ, maxZ, outline, storage);
+        jobManager.register(task);
+        task.start();
+    }
+
+    public Consumer<Block> dispatchShaftMiner(Player player, NPC npc, Location pointA, Location pointB,
+                                                Integer requestedLevels, Integer requestedTargetY) {
+        Entity npcEntity = npc.getEntity();
+        if (npcEntity == null) {
+            player.sendMessage(Component.text(
+                    BuilderNpcService.baseNameOf(npc) + " isn't spawned right now — can't start the job.", NamedTextColor.RED));
+            return null;
+        }
+        if (jobManager.isAtCeiling()) {
+            String eta = jobManager.etaOfSoonestJob().orElse("a little while");
+            player.sendMessage(Component.text(
+                    "Every Helper is tied up right now — check back in " + eta + ".", NamedTextColor.RED));
+            return null;
+        }
+        if (jobManager.find(npc.getId()) != null) {
+            player.sendMessage(Component.text(
+                    BuilderNpcService.baseNameOf(npc) + " is already busy — wait for that to finish first.", NamedTextColor.RED));
+            return null;
+        }
+
+        deathRecordStore.setOwner(npc.getUniqueId(), player.getUniqueId());
+
+        World world = pointA.getWorld();
+
+        int minX = Math.min(pointA.getBlockX(), pointB.getBlockX());
+        int maxX = Math.max(pointA.getBlockX(), pointB.getBlockX());
+        int minZ = Math.min(pointA.getBlockZ(), pointB.getBlockZ());
+        int maxZ = Math.max(pointA.getBlockZ(), pointB.getBlockZ());
+        int topY = Math.max(pointA.getBlockY(), pointB.getBlockY());
+
+        int spanX = maxX - minX + 1;
+        int spanZ = maxZ - minZ + 1;
+        if (spanX < 2 || spanZ < 2) {
+            player.sendMessage(Component.text(BuilderNpcService.baseNameOf(npc)
+                    + ": That footprint is too narrow for a proper shaft — mark at least a 2x2 area.",
+                    NamedTextColor.RED));
+            return null;
+        }
+
+        int requestedDepth;
+        if (requestedTargetY != null) {
+            if (requestedTargetY >= topY) {
+                player.sendMessage(Component.text(BuilderNpcService.baseNameOf(npc)
+                        + ": Y coordinate destination and work area is invalid — " + requestedTargetY
+                        + " isn't below where you marked (top is " + topY + ").", NamedTextColor.RED));
+                return null;
+            }
+            requestedDepth = topY - requestedTargetY + 1;
+        } else if (requestedLevels != null) {
+            requestedDepth = requestedLevels;
+        } else {
+            requestedDepth = 1;
+        }
+
+        if (requestedDepth < 1) {
+            player.sendMessage(Component.text(BuilderNpcService.baseNameOf(npc)
+                    + ": Can't dig a negative number of blocks — ask for at least 1.", NamedTextColor.RED));
+            return null;
+        }
+        int bottomY = topY - requestedDepth + 1;
+        if (bottomY < world.getMinHeight()) {
+            player.sendMessage(Component.text(BuilderNpcService.baseNameOf(npc)
+                    + ": That goes below the bottom of the world (Y " + world.getMinHeight()
+                    + ") — ask for a shallower depth.", NamedTextColor.RED));
+            return null;
+        }
+
+        if (shouldSurvey(npc) && !runSurvey(player, npc, world, minX, bottomY, minZ, maxX, topY, maxZ, JobType.SHAFT_MINER)) {
+            return null;
+        }
+
+        Deque<Block> digOrder = ShaftMinerJobTask.buildDigOrder(world, minX, maxX, minZ, maxZ, topY, requestedDepth);
+
+        JobStorage storage = new JobStorage(plugin, world, minX, maxX, bottomY, topY, minZ, maxZ);
+        Location chestAt = storage.depositPoint();
+        if (chestAt == null) {
+            player.sendMessage(Component.text(BuilderNpcService.baseNameOf(npc)
+                    + ": I can't find a spot for a chest. Place one down nearby "
+                    + "and tap it with the rod.",
+                    NamedTextColor.YELLOW));
+            int finalRequestedDepth = requestedDepth;
+            return chestBlock -> {
+                storage.adoptChest(chestBlock);
+                String c = "(" + chestBlock.getX() + ", " + chestBlock.getY() + ", "
+                        + chestBlock.getZ() + ")";
+                player.sendMessage(Component.text(BuilderNpcService.baseNameOf(npc)
+                        + ": Got it, I'll use that one at " + c + ".",
+                        NamedTextColor.GREEN));
+                finishShaftMinerDispatch(player, npc, world, minX, maxX, minZ, maxZ, topY,
+                        finalRequestedDepth, digOrder, storage);
+            };
+        }
+
+        String coords = "(" + chestAt.getBlockX() + ", " + chestAt.getBlockY() + ", "
+                + chestAt.getBlockZ() + ")";
+        player.sendMessage(Component.text("Storage chest placed at " + coords, NamedTextColor.AQUA));
+        logger.info("Storage chest placed at " + coords + " for " + player.getName() + "'s shaft miner job");
+
+        finishShaftMinerDispatch(player, npc, world, minX, maxX, minZ, maxZ, topY,
+                requestedDepth, digOrder, storage);
+        return null;
+    }
+
+    private void finishShaftMinerDispatch(Player player, NPC npc, World world,
+                                           int minX, int maxX, int minZ, int maxZ, int topY,
+                                           int requestedDepth, Deque<Block> digOrder, JobStorage storage) {
+        Entity npcEntity = npc.getEntity();
+        if (npcEntity == null) return;
+
+        Material initialTool = Material.IRON_PICKAXE;
+        int bottomY = topY - requestedDepth + 1;
+
+        TextDisplay label = ClearJobTask.spawnLabel(npcEntity.getLocation());
+        EntityEquipment equipment = ClearJobTask.equipTool(npcEntity, initialTool,
+                BuilderNpcService.baseNameOf(npc), TaskType.SHAFT_MINER.toolNoun());
+
+        player.sendMessage(Component.text(BuilderNpcService.baseNameOf(npc)
+                + ": Right, I'll sink this shaft straight down — " + requestedDepth
+                + " block(s) deep. " + digOrder.size() + " blocks to check.", NamedTextColor.GREEN));
+        logger.info(player.getName() + " dispatched SHAFT_MINER job over " + digOrder.size()
+                + " cells, depth " + requestedDepth);
+
+        RegionOutline outline = new RegionOutline(world, minX, bottomY, minZ, maxX, topY, maxZ);
+
+        ShaftMinerJobTask task = new ShaftMinerJobTask(plugin, jobManager, levelService, redundancyTracker,
+                freshLedger, player.getUniqueId(), npc, npcEntity, equipment, label, world, initialTool,
+                minX, maxX, minZ, maxZ, topY, requestedDepth, digOrder, storage, outline);
         jobManager.register(task);
         task.start();
     }

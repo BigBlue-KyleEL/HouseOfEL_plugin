@@ -5,11 +5,16 @@ import com.houseofel.builder.choice.MilestoneChoiceRecord;
 import com.houseofel.builder.choice.MilestoneChoiceRegistry;
 import com.houseofel.builder.choice.MilestoneChoiceStore;
 import com.houseofel.builder.gui.BedrockJobForm;
+import com.houseofel.builder.gui.BusyMenuLayout;
 import com.houseofel.builder.gui.JavaJobDialog;
+import com.houseofel.builder.gui.JobWizardHandler;
 import com.houseofel.builder.gui.MilestoneChoiceDialog;
 import com.houseofel.builder.gui.MilestoneChoiceForm;
 import com.houseofel.builder.job.JobManager;
 import com.houseofel.builder.toil.LevelCurve;
+import com.houseofel.core.gui.GuiCapabilityService;
+import com.houseofel.core.gui.ScreenService;
+import com.houseofel.core.gui.UiPath;
 import net.citizensnpcs.api.event.NPCRightClickEvent;
 import net.citizensnpcs.api.npc.NPC;
 import org.bukkit.entity.Player;
@@ -17,37 +22,37 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 
 import java.util.List;
-
-/**
- * Opens the task-configuration flow when a player right-clicks a Helper NPC — a native
- * Dialog for Java players, or a native Form for Bedrock players. Both are single-shot
- * menus (pick everything, hit one button) rather than a chest-style inventory, since
- * clicking items as makeshift buttons reads as awkward on Java and is outright broken
- * on Bedrock (whose touch controls treat any inventory click as pick-up-then-place).
- *
- * <p>If every Helper is already busy up to the concurrency ceiling, both platforms get
- * a "can't help you right now" notice instead, with a rough ETA for the soonest job to
- * free up.
- */
+import java.util.logging.Logger;
 public final class BuilderNpcListener implements Listener {
 
+    private static final Logger LOGGER = Logger.getLogger("HoEL-Builder");
+
+    private final GuiCapabilityService capabilityService;
+    private final ScreenService screenService;
     private final BuilderNpcService npcService;
     private final HelperLevelService levelService;
     private final JavaJobDialog javaDialog;
     private final BedrockJobForm bedrockForm;
+    private final JobWizardHandler wizardHandler;
     private final JobManager jobManager;
     private final MilestoneChoiceStore choiceStore;
     private final MilestoneChoiceDialog choiceDialog;
     private final MilestoneChoiceForm choiceForm;
 
-    public BuilderNpcListener(BuilderNpcService npcService, HelperLevelService levelService,
-                               JavaJobDialog javaDialog, BedrockJobForm bedrockForm, JobManager jobManager,
+    public BuilderNpcListener(GuiCapabilityService capabilityService, ScreenService screenService,
+                               BuilderNpcService npcService,
+                               HelperLevelService levelService,
+                               JavaJobDialog javaDialog, BedrockJobForm bedrockForm,
+                               JobWizardHandler wizardHandler, JobManager jobManager,
                                MilestoneChoiceStore choiceStore,
                                MilestoneChoiceDialog choiceDialog, MilestoneChoiceForm choiceForm) {
+        this.capabilityService = capabilityService;
+        this.screenService = screenService;
         this.npcService = npcService;
         this.levelService = levelService;
         this.javaDialog = javaDialog;
         this.bedrockForm = bedrockForm;
+        this.wizardHandler = wizardHandler;
         this.jobManager = jobManager;
         this.choiceStore = choiceStore;
         this.choiceDialog = choiceDialog;
@@ -61,7 +66,9 @@ public final class BuilderNpcListener implements Listener {
         }
         Player player = event.getClicker();
         NPC npc = event.getNPC();
-        boolean isBedrock = BedrockJobForm.isBedrockPlayer(player);
+        UiPath uiPath = capabilityService.getUiPath(player);
+        boolean isBedrock = uiPath == UiPath.BEDROCK;
+        LOGGER.info(player.getName() + " → " + npc.getName() + " [" + uiPath + "]");
 
         // Null for a pre-1-F NPC that was never assigned a specialization — both
         // open()s fall back to just the Helper's name in that case. The level drives the
@@ -95,6 +102,8 @@ public final class BuilderNpcListener implements Listener {
         if (jobManager.find(npc.getId()) != null) {
             if (isBedrock) {
                 bedrockForm.showStatusOnly(player, npc, specialization, level);
+            } else if (uiPath == UiPath.MOD) {
+                wizardHandler.showStatusOnly(player, npc, specialization, level);
             } else {
                 javaDialog.showStatusOnly(player, npc, specialization, level);
             }
@@ -105,6 +114,8 @@ public final class BuilderNpcListener implements Listener {
             String eta = jobManager.etaOfSoonestJob().orElse("a little while");
             if (isBedrock) {
                 bedrockForm.showBusy(player, npc, eta);
+            } else if (uiPath == UiPath.MOD) {
+                screenService.openScreen(player, BusyMenuLayout.create(npc, eta));
             } else {
                 javaDialog.showBusy(player, npc, eta);
             }
@@ -113,6 +124,8 @@ public final class BuilderNpcListener implements Listener {
 
         if (isBedrock) {
             bedrockForm.open(player, npc, specialization, level);
+        } else if (uiPath == UiPath.MOD) {
+            wizardHandler.openMainMenu(player, npc, specialization, level, jobManager);
         } else {
             javaDialog.open(player, npc, specialization, level);
         }

@@ -169,6 +169,25 @@ public final class JobStorage {
         columnSign = savedColumnSign;
     }
 
+    /**
+     * Adopts a player-placed chest as this job's storage instead of auto-placing one.
+     * Used when {@link #depositPoint()} returns null and the player manually places
+     * and selects a chest via the Surveyor's Rod.
+     */
+    public void adoptChest(Block chestBlock) {
+        chests.add(chestBlock);
+        occupiedColumns.add(columnKey(chestBlock.getX(), chestBlock.getZ()));
+        if (anchor == null) {
+            anchor = chestBlock;
+            lastCubeAnchor = chestBlock;
+            cubeUnitIndex = 1;
+            double centreX = (minX + maxX) / 2.0;
+            double centreZ = (minZ + maxZ) / 2.0;
+            columnSign = chestBlock.getX() >= centreX ? 1 : -1;
+            rowSign = chestBlock.getZ() >= centreZ ? 1 : -1;
+        }
+    }
+
     /** Where the NPC should walk to unload. Places the first chest if there isn't one yet. */
     public Location depositPoint() {
         if (chests.isEmpty() && !addChest()) {

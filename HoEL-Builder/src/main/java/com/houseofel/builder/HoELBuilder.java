@@ -18,6 +18,7 @@ import com.houseofel.builder.death.WorkLedgerBook;
 import com.houseofel.builder.death.WorkLedgerRecoveryListener;
 import com.houseofel.builder.gui.BedrockJobForm;
 import com.houseofel.builder.gui.JavaJobDialog;
+import com.houseofel.builder.gui.JobWizardHandler;
 import com.houseofel.builder.gui.MilestoneChoiceDialog;
 import com.houseofel.builder.gui.MilestoneChoiceForm;
 import com.houseofel.builder.job.JobExecutionService;
@@ -42,9 +43,11 @@ import com.houseofel.builder.region.SurveyorRod;
 import com.houseofel.builder.timing.HelperTempo;
 import com.houseofel.builder.title.HelperTitleService;
 import com.houseofel.builder.toil.ToilDatabase;
+import com.houseofel.core.HoELCore;
+import com.houseofel.core.gui.GuiCapabilityService;
+import com.houseofel.core.gui.ScreenService;
 import net.citizensnpcs.api.CitizensAPI;
 import net.citizensnpcs.api.npc.NPC;
-import org.bukkit.Bukkit;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitTask;
 
@@ -96,10 +99,22 @@ public final class HoELBuilder extends JavaPlugin {
         MilestoneChoiceDialog choiceDialog = new MilestoneChoiceDialog(this, choiceStore, choiceService);
         MilestoneChoiceForm choiceForm = new MilestoneChoiceForm(this, choiceStore, choiceService);
 
-        getCommand("builder").setExecutor(
-                new BuilderCommand(specializationDialog, specializationForm, regionService));
+        HoELCore core = (HoELCore) getServer().getPluginManager().getPlugin("HoEL-Core");
+        GuiCapabilityService capabilityService = core.getCapabilityService();
+        ScreenService screenService = core.getScreenService();
+
+        JobWizardHandler wizardHandler = new JobWizardHandler(this, screenService,
+                regionService, deathRecordStore, choiceStore, levelService);
+        screenService.setDispatchHandler(wizardHandler);
+        getServer().getPluginManager().registerEvents(wizardHandler, this);
+
+        BuilderCommand builderCommand = new BuilderCommand(specializationDialog, specializationForm,
+                regionService, levelService, screenService, wizardHandler, jobManager);
+        getCommand("builder").setExecutor(builderCommand);
+        getCommand("builder").setTabCompleter(builderCommand);
         getServer().getPluginManager().registerEvents(
-                new BuilderNpcListener(npcService, levelService, javaDialog, bedrockForm, jobManager,
+                new BuilderNpcListener(capabilityService, screenService, npcService, levelService,
+                        javaDialog, bedrockForm, wizardHandler, jobManager,
                         choiceStore, choiceDialog, choiceForm), this);
         getServer().getPluginManager().registerEvents(
                 new HelperCommandListener(this, npcService, jobManager), this);

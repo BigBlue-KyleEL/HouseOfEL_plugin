@@ -1,0 +1,19 @@
+{
+    "schemaVersion": 1,
+    "id": "houseofel-gui",
+    "version": "${version}",
+    "name": "House of EL GUI",
+    "description": "Custom GUI renderer for the House of EL server",
+    "authors": ["KyleEL"],
+    "contact": {},
+    "license": "All Rights Reserved",
+    "environment": "client",
+    "entrypoints": {
+        "client": ["com.houseofel.fabric.HouseOfElClient"]
+    },
+    "depends": {
+        "fabricloader": ">=0.19.3",
+        "fabric-api": ">=0.147.0",
+        "minecraft": ">=26.1.2"
+    }
+}

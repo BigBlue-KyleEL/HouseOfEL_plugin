@@ -65,7 +65,7 @@ public final class RegionSurvey {
         List<String> warnings = new ArrayList<>();
         List<String> refusals = new ArrayList<>();
 
-        if (jobType == JobType.CLEAR || jobType == JobType.QUARRY) {
+        if (jobType == JobType.CLEAR || jobType == JobType.QUARRY || jobType == JobType.SHAFT_MINER) {
             if (minY <= world.getMinHeight() + 3) {
                 refusals.add("That region bottoms out at Y=" + minY
                         + ", right at the world floor — did you mean to go that deep?");
@@ -119,7 +119,7 @@ public final class RegionSurvey {
         List<String> lines = new ArrayList<>();
         long total = result.solidBlocks + result.airBlocks + result.waterBlocks + result.lavaBlocks;
 
-        if (jobType == JobType.CLEAR || jobType == JobType.QUARRY) {
+        if (jobType == JobType.CLEAR || jobType == JobType.QUARRY || jobType == JobType.SHAFT_MINER) {
             lines.add("Survey: " + result.solidBlocks + " solid, "
                     + result.waterBlocks + " water, " + result.lavaBlocks + " lava, "
                     + result.airBlocks + " air — " + total + " total.");

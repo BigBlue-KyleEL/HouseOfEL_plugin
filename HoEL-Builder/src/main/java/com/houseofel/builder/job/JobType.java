@@ -12,5 +12,6 @@ enum JobType {
     CLEAR,
     QUARRY,
     LANDSCAPE,
-    COFFERDAM
+    COFFERDAM,
+    SHAFT_MINER
 }

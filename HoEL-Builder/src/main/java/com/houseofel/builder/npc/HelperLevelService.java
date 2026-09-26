@@ -205,6 +205,20 @@ public final class HelperLevelService {
         }
     }
 
+    /** Admin override — sets an NPC's level and adjusts banked Toil to match. */
+    public void setLevel(NPC npc, int targetLevel) {
+        HelperLedgerRecord record = recordOf(npc);
+        if (record == null) return;
+        int clampedLevel = Math.min(targetLevel, LevelCurve.MAX_LEVEL);
+        int targetToil = LevelCurve.toilThresholdFor(clampedLevel);
+        HelperLedgerRecord updated = new HelperLedgerRecord(
+                npc.getUniqueId(), record.specialization(), clampedLevel, targetToil);
+        store.save(updated);
+        cache.put(npc.getUniqueId(), updated);
+        mirrorToPdc(npc, updated);
+        titleService.applyTitle(npc, record.specialization(), clampedLevel);
+    }
+
     /**
      * Death Policy's rank-floor fallback — the one place a level can be lost. Floors both
      * level and banked Toil down to the last rank actually reached (or 1, if never ranked),

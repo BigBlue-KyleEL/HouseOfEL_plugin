@@ -4,13 +4,21 @@ main: com.houseofel.builder.HoELBuilder
 api-version: '1.13'
 author: Kyle
 description: House of EL - Builder module (Helper NPC builder/gatherer companion systems)
-depend: [Citizens]
+depend: [Citizens, HoEL-Core]
 softdepend: [floodgate]
 commands:
   builder:
     description: Manage Helper (builder/gatherer) NPCs
-    usage: /builder spawn|confirm|cancel
+    usage: /builder spawn|confirm|cancel|testmenu <npcId> [specialization] [tier] [player]
 permissions:
   houseofel.builder.spawn:
     description: Allows spawning a Helper NPC
+    default: false
+
+  houseofel.builder.testbusy:
+    description: Allows previewing the busy menu without creating jobs
+    default: false
+
+  houseofel.builder.testmenu:
+    description: Allows previewing main-menu class logos without changing NPC data
     default: false

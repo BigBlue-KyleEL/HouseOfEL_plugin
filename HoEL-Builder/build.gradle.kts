@@ -39,7 +39,9 @@ dependencies {
         exclude(group = "*", module = "*")
     }
     compileOnly("org.geysermc.floodgate:api:2.2.5-SNAPSHOT")
+    compileOnly(project(":HoEL-Core"))
     implementation("org.xerial:sqlite-jdbc:3.53.2.1")
+    implementation(project(":common"))
 }
 
 tasks.shadowJar {

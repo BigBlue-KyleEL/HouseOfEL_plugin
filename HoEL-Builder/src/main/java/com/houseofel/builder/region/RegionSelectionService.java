@@ -11,6 +11,8 @@ import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
+import org.bukkit.Material;
+import org.bukkit.block.Block;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.scheduler.BukkitTask;
@@ -18,6 +20,7 @@ import org.bukkit.scheduler.BukkitTask;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Consumer;
 import java.util.logging.Logger;
 
 /**
@@ -49,6 +52,7 @@ public final class RegionSelectionService {
     private final SurveyorRod rod;
     private final JobExecutionService jobExecutionService;
     private final Map<UUID, PendingJob> jobs = new ConcurrentHashMap<>();
+    private final Map<UUID, PendingChestSelection> chestSelections = new ConcurrentHashMap<>();
 
     public RegionSelectionService(Plugin plugin, SurveyorRod rod, JobExecutionService jobExecutionService) {
         this.plugin = plugin;
@@ -105,6 +109,22 @@ public final class RegionSelectionService {
     }
 
     /**
+     * Enters chest-selection mode: gives the player back the Surveyor's Rod so they can
+     * tap a chest they placed themselves. Used when automatic chest placement fails.
+     */
+    public void beginChestSelection(Player player, NPC npc, Consumer<Block> callback) {
+        clearChestSelection(player.getUniqueId());
+        if (!rod.giveTo(player, BuilderNpcService.baseNameOf(npc))) {
+            player.sendMessage(Component.text(
+                    BuilderNpcService.baseNameOf(npc)
+                            + ": You can't even hold the Surveyor's Rod. Make space.",
+                    NamedTextColor.RED));
+            return;
+        }
+        chestSelections.put(player.getUniqueId(), new PendingChestSelection(npc, callback));
+    }
+
+    /**
      * Any click/tap while unlocked marks whichever point isn't set yet — point A first,
      * then point B. Once locked, clicks do nothing; confirming or cancelling happens via
      * a "Yep"/"Wait" chat reply (see {@link RegionConfirmListener}) or the equivalent
@@ -112,6 +132,12 @@ public final class RegionSelectionService {
      * identically regardless of platform.
      */
     public void onClick(Player player, Location location) {
+        PendingChestSelection chestSel = chestSelections.get(player.getUniqueId());
+        if (chestSel != null) {
+            handleChestClick(player, location, chestSel);
+            return;
+        }
+
         PendingJob job = jobs.get(player.getUniqueId());
         if (job == null || job.locked()) {
             return;
@@ -133,6 +159,21 @@ public final class RegionSelectionService {
         tryLock(player, job);
     }
 
+    private void handleChestClick(Player player, Location location, PendingChestSelection sel) {
+        Block block = location.getBlock();
+        if (block.getType() != Material.CHEST && block.getType() != Material.TRAPPED_CHEST) {
+            player.sendMessage(Component.text(BuilderNpcService.baseNameOf(sel.npc)
+                    + ": That's not a chest. Place one down and tap it.",
+                    NamedTextColor.RED));
+            return;
+        }
+        chestSelections.remove(player.getUniqueId());
+        rod.removeAllFrom(player);
+        logger.info(player.getName() + " selected chest at " + describe(location)
+                + " for " + BuilderNpcService.baseNameOf(sel.npc));
+        sel.callback.accept(block);
+    }
+
     private void doConfirm(Player player, PendingJob job) {
         logger.info(player.getName() + " confirmed " + job.taskType + "/" + job.target + " region "
                 + describe(job.pointA) + " to " + describe(job.pointB));
@@ -140,9 +181,14 @@ public final class RegionSelectionService {
         if (job.taskType == TaskType.CLEAR) {
             Location pointA = job.pointA;
             Location pointB = job.pointB;
+            NPC npc = job.npc;
             finish(player);
-            jobExecutionService.dispatchClear(player, job.npc, job.taskType, job.target,
-                    pointA, pointB, job.storeInChest, job.surfaceOnly, false);
+            Consumer<Block> needsChest = jobExecutionService.dispatchClear(player, npc,
+                    job.taskType, job.target, pointA, pointB, job.storeInChest,
+                    job.surfaceOnly, false);
+            if (needsChest != null) {
+                beginChestSelection(player, npc, needsChest);
+            }
             return;
         }
 
@@ -158,17 +204,40 @@ public final class RegionSelectionService {
         if (job.taskType == TaskType.QUARRY) {
             Location pointA = job.pointA;
             Location pointB = job.pointB;
+            NPC npc = job.npc;
             finish(player);
-            jobExecutionService.dispatchQuarryman(player, job.npc, job.taskType, job.target,
-                    pointA, pointB, job.storeInChest, job.surfaceOnly, job.requestedLevels, job.requestedTargetY);
+            Consumer<Block> needsChest = jobExecutionService.dispatchQuarryman(player, npc,
+                    job.taskType, job.target, pointA, pointB, job.storeInChest,
+                    job.surfaceOnly, job.requestedLevels, job.requestedTargetY);
+            if (needsChest != null) {
+                beginChestSelection(player, npc, needsChest);
+            }
             return;
         }
 
         if (job.taskType == TaskType.COFFERDAM) {
             Location pointA = job.pointA;
             Location pointB = job.pointB;
+            NPC npc = job.npc;
             finish(player);
-            jobExecutionService.dispatchCofferdam(player, job.npc, pointA, pointB);
+            Consumer<Block> needsChest = jobExecutionService.dispatchCofferdam(player, npc,
+                    pointA, pointB);
+            if (needsChest != null) {
+                beginChestSelection(player, npc, needsChest);
+            }
+            return;
+        }
+
+        if (job.taskType == TaskType.SHAFT_MINER) {
+            Location pointA = job.pointA;
+            Location pointB = job.pointB;
+            NPC npc = job.npc;
+            finish(player);
+            Consumer<Block> needsChest = jobExecutionService.dispatchShaftMiner(player, npc,
+                    pointA, pointB, job.requestedLevels, job.requestedTargetY);
+            if (needsChest != null) {
+                beginChestSelection(player, npc, needsChest);
+            }
             return;
         }
 
@@ -233,11 +302,16 @@ public final class RegionSelectionService {
 
     /** Thread-safe existence check for the async chat listener — see {@link RegionConfirmListener}. */
     public boolean hasPending(UUID playerId) {
-        return jobs.containsKey(playerId);
+        return jobs.containsKey(playerId) || chestSelections.containsKey(playerId);
     }
 
     /** Confirm/cancel entry point for both the "Yep"/"Wait" chat reply and the /builder command fallback. */
     public void confirmPending(Player player) {
+        if (chestSelections.containsKey(player.getUniqueId())) {
+            player.sendMessage(Component.text(
+                    "Tap a chest with the rod to select it.", NamedTextColor.YELLOW));
+            return;
+        }
         PendingJob job = jobs.get(player.getUniqueId());
         if (job == null || !job.locked()) {
             player.sendMessage(Component.text("No pending region to confirm.", NamedTextColor.RED));
@@ -247,6 +321,14 @@ public final class RegionSelectionService {
     }
 
     public void cancelPending(Player player) {
+        PendingChestSelection chestSel = chestSelections.remove(player.getUniqueId());
+        if (chestSel != null) {
+            rod.removeAllFrom(player);
+            player.sendMessage(Component.text(BuilderNpcService.baseNameOf(chestSel.npc)
+                    + " lowers the rod. Come find me again when you're ready for a new job.",
+                    NamedTextColor.RED));
+            return;
+        }
         PendingJob job = jobs.get(player.getUniqueId());
         if (job == null || !job.locked()) {
             player.sendMessage(Component.text("No pending region to cancel.", NamedTextColor.RED));
@@ -266,6 +348,10 @@ public final class RegionSelectionService {
         if (job != null) {
             job.cancelScheduledTasks();
         }
+    }
+
+    private void clearChestSelection(UUID playerId) {
+        chestSelections.remove(playerId);
     }
 
     private void drawBoxOutline(Player player, Location a, Location b) {
@@ -332,6 +418,16 @@ public final class RegionSelectionService {
                 timeoutTask.cancel();
                 timeoutTask = null;
             }
+        }
+    }
+
+    private static final class PendingChestSelection {
+        private final NPC npc;
+        private final Consumer<Block> callback;
+
+        private PendingChestSelection(NPC npc, Consumer<Block> callback) {
+            this.npc = npc;
+            this.callback = callback;
         }
     }
 }

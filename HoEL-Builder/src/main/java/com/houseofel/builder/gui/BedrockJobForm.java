@@ -53,324 +53,221 @@ public final class BedrockJobForm {
     }
 
     public void open(Player player, NPC npc, Specialization specialization, int level) {
-        FloodgatePlayer floodgatePlayer = floodgatePlayer(player);
-        if (floodgatePlayer == null) {
-            return;
+        java.util.List<TaskType> jobs = taskOptionsFor(npc, specialization, level);
+        SimpleForm.Builder form = SimpleForm.builder()
+                .title(HelperTitleFormatter.dispatchTitleOf(npc, specialization, deathRecordStore, choiceStore))
+                .content(statusContent(npc, specialization, level));
+        for (TaskType type : jobs) {
+            String label = switch (type) {
+                case QUARRY -> "Lvl.8: Quarryman";
+                case LANDSCAPE -> "Lvl.8: Landscaper";
+                case COFFERDAM -> "Lvl.16: Cofferdam";
+                case SHAFT_MINER -> "Lvl.16: Shaft Miner";
+                default -> type.label();
+            };
+            if (specialization != null && type == specialization.taskType()) label += " ★ (specialty)";
+            form.button(label);
         }
-
-        // Bracket tags (scar choice, Choice-slot picks) are built by the shared
-        // HelperTitleFormatter — see it for why this isn't inlined here.
-        String title = HelperTitleFormatter.dispatchTitleOf(npc, specialization, deathRecordStore, choiceStore);
-        String flavor = FlavorLadder.flavorFor(specialization, level);
-        String hearts = HelperTitleFormatter.heartsFor(npc);
-        // Same shared line JavaJobDialog uses — see xpBarFor. Absent for an unassigned Helper.
-        String xpBar = HelperTitleFormatter.xpBarFor(npc, specialization, levelService);
-        // Same shared line the report command and JavaJobDialog use — see rustLineFor.
-        // Replaces the always-on world-space boss bar removed 2026-08-19 (Kyle's call).
-        String rustLine = HelperTitleFormatter.rustLineFor(npc, deathRecordStore);
-
-        CustomForm.Builder form = CustomForm.builder().title(title);
-        // Absent for an unassigned/still-green Helper (flavor/XP bar) or a non-rusted one
-        // (rust line) — no empty label in either case. A label OCCUPIES a response slot (it
-        // comes back as null), so its presence shifts every following component's index —
-        // hence answerOffset below. Verified against Cumulus' own response implementation;
-        // getDropdown/getToggle index absolutely and do not skip labels.
-        int answerOffset = 0;
-        if (flavor != null) {
-            form.label(flavor);
-            answerOffset++;
-        }
-        if (hearts != null) {
-            form.label(hearts);
-            answerOffset++;
-        }
-        if (xpBar != null) {
-            form.label(xpBar);
-            answerOffset++;
-        }
-        if (rustLine != null) {
-            form.label(rustLine);
-            answerOffset++;
-        }
-        int offset = answerOffset;
-        // Task Type and Target are both dropdowns on this ONE form, submitted together —
-        // unlike JavaJobDialog's step-by-step wizard, there's no point where Task Type has
-        // already been picked before Target renders. "Anything" (Groundworker's level-3
-        // verb) is gated on specialization/level only, not on whichever Task Type the
-        // player ends up picking — the same looseness this form already has for any other
-        // Task Type/Target mismatch (e.g. Wheat on a Groundworker), which already just
-        // executes without earning Toil rather than being blocked.
-        Target[] availableTargets = targetsFor(specialization, level);
-        // Depth section — Quarrying only, but Cumulus's CustomForm has no conditional/
-        // reactive fields at all (confirmed against the real jar, 2026-08-20: no
-        // "enabled if" hook anywhere, everything submits as one flat atomic batch), and
-        // Task Type itself is just another dropdown on this SAME form, not decided until
-        // submit. So these fields always render regardless of which Task Type ends up
-        // picked, and onSubmit() below only reads/uses them when Task Type resolves to
-        // QUARRY — same trade-off as no true divider existing either (see the "— Depth —"
-        // label immediately below).
-        // Mirrors the Java menu (Kyle, 2026-08-25): four general jobs, then a separator
-        // naming the level-8 path, then that path's own job. A Bedrock dropdown has no
-        // disabled/heading entry, so the separator is a real selectable row that resolves
-        // to null in taskOptions and is rejected on submit — the closest equivalent, and
-        // the same compromise the "— Depth —" label already makes.
-        TaskType[] taskOptions = taskOptionsFor(npc, specialization, level);
-        floodgatePlayer.sendForm(
-                form.dropdown("Task Type", labelsOf(taskOptions, specialization))
-                        .dropdown("Target", labelsOf(availableTargets))
-                        .toggle("Surface Only", true)
-                        .toggle("Store in Chest", true)
-                        .label("— Depth — (Quarrying only)")
-                        .dropdown("Depth Mode", "Level", "Coordinates")
-                        .input("Blocks deep", "e.g. 12")
-                        .input("Target Y coordinate", "e.g. 64")
-                        .label("— Landscaping Mode — (Landscaping only)")
-                        .dropdown("Landscape Style", "Fill to the Brim", "Sloping Terrain", "Redesign")
-                        .dropdown("Biome (Redesign only)", "Plains", "Desert", "Badlands",
-                                "Snowy Tundra", "Taiga", "Jungle", "Mushroom Island")
-                        .validResultHandler(response -> onSubmit(player, npc, response, offset, availableTargets, taskOptions))
-                        .closedOrInvalidResultHandler(() -> onClosed(player))
-                        .build());
-    }
-
-    /** Every {@link Target} the dropdown should offer — "Anything" only for a level-3+ Groundworker. */
-    private Target[] targetsFor(Specialization specialization, int level) {
-        boolean showAnything = specialization == Specialization.GROUNDWORKER && level >= 3;
-        if (showAnything) {
-            return Target.values();
-        }
-        Target[] withoutAny = new Target[Target.values().length - 1];
-        int i = 0;
-        for (Target candidate : Target.values()) {
-            if (candidate != Target.ANY_EARTH) {
-                withoutAny[i++] = candidate;
+        form.validResultHandler(response -> onMain(player, () -> {
+            int index = response.clickedButtonId();
+            if (index < 0 || index >= jobs.size()) return;
+            TaskType type = jobs.get(index);
+            // Recheck unlocks in case the Helper changed while this form was open.
+            Specialization currentSpec = levelService.specializationOf(npc);
+            int currentLevel = levelService.levelOf(npc);
+            if (!taskOptionsFor(npc, currentSpec, currentLevel).contains(type)) return;
+            switch (type) {
+                case QUARRY, SHAFT_MINER -> showDepth(player, npc, type);
+                case LANDSCAPE -> showLandscapeMode(player, npc);
+                case COFFERDAM -> regionService.beginCofferdamJob(player, npc);
+                default -> showTargets(player, npc, type, currentSpec, currentLevel);
             }
-        }
-        return withoutAny;
+        }));
+        form.closedOrInvalidResultHandler(() -> onClosed(player));
+        send(player, form.build());
     }
 
-    /**
-     * Shown instead of the usual task dropdowns when this Helper is already mid-job — a
-     * read-only status view (flavour/hearts/XP bar/Rust), same content JavaJobDialog's
-     * equivalent shows, since there's nothing to dispatch right now. Kyle's report,
-     * 2026-08-20: right-clicking a busy Helper was still opening the full job form.
-     */
+    private String statusContent(NPC npc, Specialization specialization, int level) {
+        java.util.List<String> lines = new java.util.ArrayList<>();
+        String flavor = FlavorLadder.flavorFor(specialization, level);
+        if (flavor != null && !flavor.isBlank()) lines.add(flavor);
+        String hearts = HelperTitleFormatter.heartsFor(npc);
+        if (hearts != null) lines.add(hearts);
+        lines.add("Level " + level
+                + (level >= com.houseofel.builder.toil.LevelCurve.MAX_LEVEL ? " (max)" : "")
+                + " — " + levelService.bankedToilOf(npc) + " Toil banked.");
+        if (level < com.houseofel.builder.toil.LevelCurve.MAX_LEVEL) {
+            String progress = HelperTitleFormatter.xpBarFor(npc, specialization, levelService);
+            if (progress != null) lines.add(progress);
+        }
+        String rust = HelperTitleFormatter.rustLineFor(npc, deathRecordStore);
+        if (rust != null) lines.add(rust);
+        return String.join("\n", lines);
+    }
+
     public void showStatusOnly(Player player, NPC npc, Specialization specialization, int level) {
-        FloodgatePlayer floodgatePlayer = floodgatePlayer(player);
-        if (floodgatePlayer == null) {
-            return;
-        }
-
-        String title = HelperTitleFormatter.dispatchTitleOf(npc, specialization, deathRecordStore, choiceStore);
-        StringBuilder content = new StringBuilder(BuilderNpcService.baseNameOf(npc) + " is busy working right now.");
-        String flavor = FlavorLadder.flavorFor(specialization, level);
-        String hearts = HelperTitleFormatter.heartsFor(npc);
-        String xpBar = HelperTitleFormatter.xpBarFor(npc, specialization, levelService);
-        String rustLine = HelperTitleFormatter.rustLineFor(npc, deathRecordStore);
-        if (flavor != null) {
-            content.append("\n\n").append(flavor);
-        }
-        if (hearts != null) {
-            content.append("\n").append(hearts);
-        }
-        if (xpBar != null) {
-            content.append("\n").append(xpBar);
-        }
-        if (rustLine != null) {
-            content.append("\n").append(rustLine);
-        }
-
-        floodgatePlayer.sendForm(
-                SimpleForm.builder()
-                        .title(title)
-                        .content(content.toString())
-                        .button("Okay")
-                        .build());
+        send(player, SimpleForm.builder()
+                .title(HelperTitleFormatter.dispatchTitleOf(npc, specialization, deathRecordStore, choiceStore))
+                .content("Busy working right now.\n\n" + statusContent(npc, specialization, level))
+                .button("Okay").build());
     }
 
-    /** Shown instead of the usual flow when the concurrency ceiling is full. */
     public void showBusy(Player player, NPC npc, String eta) {
-        FloodgatePlayer floodgatePlayer = floodgatePlayer(player);
-        if (floodgatePlayer == null) {
-            return;
-        }
-
-        floodgatePlayer.sendForm(
-                SimpleForm.builder()
-                        .title(BuilderNpcService.baseNameOf(npc) + " is busy")
-                        .content("Can't help you right now, kiddo — every pair of hands is spoken "
-                                + "for. Check back in " + eta + ".")
-                        .button("Okay")
-                        .build());
+        send(player, SimpleForm.builder().title(npc.getName() + " is busy")
+                .content("Can't help you right now, kiddo — every pair of hands is spoken for. "
+                        + "Check back in " + eta + ".")
+                .button("Okay").build());
     }
 
-    private FloodgatePlayer floodgatePlayer(Player player) {
-        return FloodgateApi.getInstance().getPlayer(player.getUniqueId());
+    private void showTargets(Player player, NPC npc, TaskType type, Specialization specialization, int level) {
+        // Match the Java wizard: Anything is only available for Clearing at Groundworker L3+.
+        java.util.List<Target> targets = java.util.Arrays.stream(Target.values())
+                .filter(t -> t != Target.ANY_EARTH || (type == TaskType.CLEAR
+                        && specialization == Specialization.GROUNDWORKER && level >= 3)).toList();
+        SimpleForm.Builder form = SimpleForm.builder().title(BuilderNpcService.baseNameOf(npc) + " — Target");
+        for (Target target : targets) form.button(target.label());
+        form.button("Cancel");
+        form.validResultHandler(response -> onMain(player, () -> {
+            int index = response.clickedButtonId();
+            if (index >= 0 && index < targets.size()) {
+                showConfirm(player, npc, type, targets.get(index), null, null);
+            }
+        }));
+        form.closedOrInvalidResultHandler(() -> onClosed(player));
+        send(player, form.build());
     }
 
-    private void onSubmit(Player player, NPC npc, org.geysermc.cumulus.response.CustomFormResponse response,
-                           int offset, Target[] availableTargets, TaskType[] taskOptions) {
-        // A dropdown's answer is the selected index (an int), not its label — reading it
-        // as a String is what actually threw the ClassCastException on submit.
-        // `offset` accounts for the optional flavour label ahead of these — see open().
-        // Read back against the SAME target list the form was built from (availableTargets),
-        // not the full Target.values() — "Anything" may have been omitted at build time.
-        TaskType taskType = taskOptions[response.getDropdown(offset)];
-        if (taskType == null) {
-            player.sendMessage(Component.text(
-                    "That's just a heading — pick one of the jobs above or below it.", NamedTextColor.RED));
-            return;
+    private void showConfirm(Player player, NPC npc, TaskType type, Target target,
+                               Integer levels, Integer targetY) {
+        CustomForm.Builder form = CustomForm.builder()
+                .title(BuilderNpcService.baseNameOf(npc) + " — " + type.label() + " " + target.label());
+        int answerOffset = 0;
+        if (levels != null || targetY != null) {
+            form.label(levels != null ? "Depth: " + levels + " blocks" : "Target Y: " + targetY);
+            answerOffset++;
         }
-
-        if (taskType == TaskType.LANDSCAPE) {
-            int modeIndex = response.getDropdown(offset + 9);
-            LandscapeMode mode = LandscapeMode.values()[Math.min(modeIndex, LandscapeMode.values().length - 1)];
-            LandscapeBiome biome = null;
-            if (mode == LandscapeMode.REDESIGN) {
-                int biomeIndex = response.getDropdown(offset + 10);
-                LandscapeBiome[] biomes = LandscapeBiome.values();
-                biome = biomes[Math.min(biomeIndex, biomes.length - 1)];
-            }
-            LandscapeBiome finalBiome = biome;
-            Bukkit.getScheduler().runTask(plugin, () ->
-                    regionService.beginLandscapeJob(player, npc, mode, finalBiome));
-            return;
-        }
-
-        if (taskType == TaskType.COFFERDAM) {
-            Bukkit.getScheduler().runTask(plugin, () ->
-                    regionService.beginCofferdamJob(player, npc));
-            return;
-        }
-
-        Target target = availableTargets[response.getDropdown(offset + 1)];
-        boolean surfaceOnly = response.getToggle(offset + 2);
-        boolean storeInChest = response.getToggle(offset + 3);
-
-        // Depth fields always render (see open()'s comment on why) but only mean anything
-        // once Task Type has actually resolved to QUARRY — reading them for any other
-        // task type would just be acting on values the player had no reason to fill in.
-        Integer requestedLevels = null;
-        Integer requestedTargetY = null;
-        if (taskType == TaskType.QUARRY) {
-            // offset+4 is the "— Depth —" label itself — occupies a slot exactly like the
-            // flavour/hearts/xpBar/rustLine labels above, confirmed against the real
-            // Cumulus response implementation the same way those already were.
-            boolean coordinatesMode = response.getDropdown(offset + 5) == 1;
-            if (coordinatesMode) {
-                requestedTargetY = parseFormInt(player, npc, response.getInput(offset + 7));
-            } else {
-                requestedLevels = parseFormInt(player, npc, response.getInput(offset + 6));
-            }
-            if (requestedLevels == null && requestedTargetY == null) {
-                // parseFormInt already messaged the player about the bad number.
-                return;
-            }
-        }
-
-        Integer finalRequestedLevels = requestedLevels;
-        Integer finalRequestedTargetY = requestedTargetY;
-        // The form response arrives off the main thread — beginJob() hands out an item
-        // and drives the region-selection flow, both of which need to run on it.
-        Bukkit.getScheduler().runTask(plugin, () ->
-                regionService.beginJob(player, npc, taskType, target, storeInChest, surfaceOnly,
-                        finalRequestedLevels, finalRequestedTargetY));
+        final int offset = answerOffset;
+        form.toggle("Surface Only", true).toggle("Store in Chest", true);
+        // Cumulus labels occupy response slots; the captured offset tracks the optional depth label.
+        form.validResultHandler(response -> {
+            boolean surfaceOnly = response.getToggle(offset);
+            boolean storeInChest = response.getToggle(offset + 1);
+            onMain(player, () -> send(player, org.geysermc.cumulus.form.ModalForm.builder()
+                    .title("Confirm job")
+                    .content(BuilderNpcService.baseNameOf(npc) + " — " + type.label() + " " + target.label()
+                            + "\nSurface Only: " + surfaceOnly + "\nStore in Chest: " + storeInChest)
+                    .button1("Send to Work").button2("Cancel")
+                    .validResultHandler(answer -> {
+                        if (answer.clickedFirst()) onMain(player, () ->
+                                regionService.beginJob(player, npc, type, target, storeInChest, surfaceOnly,
+                                        levels, targetY));
+                    }).build()));
+        });
+        form.closedOrInvalidResultHandler(() -> onClosed(player));
+        send(player, form.build());
     }
 
-    /**
-     * Cumulus's input fields are unvalidated free text (confirmed against the real jar,
-     * 2026-08-20 — no numeric-only mode exists on InputComponent) — parses it, or
-     * messages the player and returns null on anything non-numeric.
-     */
+    private void showDepth(Player player, NPC npc, TaskType type) {
+        send(player, SimpleForm.builder().title(BuilderNpcService.baseNameOf(npc) + " — Depth")
+                .button("Level").button("Coordinates").button("Cancel")
+                .validResultHandler(response -> onMain(player, () -> {
+                    int index = response.clickedButtonId();
+                    if (index == 0 || index == 1) showDepthInput(player, npc, type, index == 1);
+                }))
+                .closedOrInvalidResultHandler(() -> onClosed(player)).build());
+    }
+
+    private void showDepthInput(Player player, NPC npc, TaskType type, boolean coordinates) {
+        send(player, CustomForm.builder().title(BuilderNpcService.baseNameOf(npc) + " — Depth")
+                .input(coordinates ? "Target Y coordinate" : "Blocks deep", coordinates ? "e.g. 64" : "e.g. 12")
+                .validResultHandler(response -> {
+                    String input = response.getInput(0); // No labels precede this input.
+                    onMain(player, () -> {
+                        Integer value = parseFormInt(player, npc, input);
+                        if (value == null) {
+                            showDepthInput(player, npc, type, coordinates);
+                            return;
+                        }
+                        Integer levels = coordinates ? null : value;
+                        Integer targetY = coordinates ? value : null;
+                        if (type == TaskType.SHAFT_MINER) {
+                            regionService.beginJob(player, npc, type, Target.ANY_EARTH, true, false, levels, targetY);
+                        } else {
+                            showConfirm(player, npc, type, Target.ANY_EARTH, levels, targetY);
+                        }
+                    });
+                }).closedOrInvalidResultHandler(() -> onClosed(player)).build());
+    }
+
+    private void showLandscapeMode(Player player, NPC npc) {
+        LandscapeMode[] modes = LandscapeMode.values();
+        SimpleForm.Builder form = SimpleForm.builder().title(BuilderNpcService.baseNameOf(npc) + " — Landscaping");
+        for (LandscapeMode mode : modes) form.button(mode.label());
+        form.button("Cancel").validResultHandler(response -> onMain(player, () -> {
+            int index = response.clickedButtonId();
+            if (index < 0 || index >= modes.length) return;
+            if (modes[index] == LandscapeMode.REDESIGN) showLandscapeBiome(player, npc);
+            else regionService.beginLandscapeJob(player, npc, modes[index], null);
+        })).closedOrInvalidResultHandler(() -> onClosed(player));
+        send(player, form.build());
+    }
+
+    private void showLandscapeBiome(Player player, NPC npc) {
+        LandscapeBiome[] biomes = LandscapeBiome.values();
+        SimpleForm.Builder form = SimpleForm.builder().title(BuilderNpcService.baseNameOf(npc) + " — Choose Biome");
+        for (LandscapeBiome biome : biomes) form.button(biome.label());
+        form.button("Cancel").validResultHandler(response -> onMain(player, () -> {
+            int index = response.clickedButtonId();
+            if (index >= 0 && index < biomes.length) {
+                regionService.beginLandscapeJob(player, npc, LandscapeMode.REDESIGN, biomes[index]);
+            }
+        })).closedOrInvalidResultHandler(() -> onClosed(player));
+        send(player, form.build());
+    }
+
+    private java.util.List<TaskType> taskOptionsFor(NPC npc, Specialization specialization, int level) {
+        java.util.List<TaskType> jobs = new java.util.ArrayList<>(java.util.List.of(
+                TaskType.MINE, TaskType.LUMBERJACK, TaskType.FARM, TaskType.CLEAR));
+        if (specialization != Specialization.GROUNDWORKER || level < 8) return jobs;
+        MilestoneChoiceRecord l8 = choiceStore.find(npc.getUniqueId(), 8);
+        if (l8 == null) return jobs;
+        if (GroundworkerL8Choice.QUARRYMAN.name().equals(l8.choice())) jobs.add(TaskType.QUARRY);
+        else if (GroundworkerL8Choice.LANDSCAPER.name().equals(l8.choice())) jobs.add(TaskType.LANDSCAPE);
+        else return jobs;
+        if (level >= 16) {
+            MilestoneChoiceRecord l16 = choiceStore.find(npc.getUniqueId(), 16);
+            if (l16 != null) {
+                if (GroundworkerL16Choice.COFFERDAM.name().equals(l16.choice())) jobs.add(TaskType.COFFERDAM);
+                else if (GroundworkerL16Choice.SHAFT_MINER.name().equals(l16.choice())) jobs.add(TaskType.SHAFT_MINER);
+            }
+        }
+        return jobs;
+    }
+
     private Integer parseFormInt(Player player, NPC npc, String rawText) {
         if (rawText != null) {
             try {
                 return Integer.parseInt(rawText.trim());
-            } catch (NumberFormatException ignored) {
-                // Falls through to the message below.
-            }
+            } catch (NumberFormatException ignored) {}
         }
         player.sendMessage(Component.text(
                 BuilderNpcService.baseNameOf(npc) + ": That's not a whole number — try again.", NamedTextColor.RED));
         return null;
     }
 
+    /** All Bukkit/NPC reads, job starts and next-screen construction run on the server thread. */
+    private void onMain(Player player, Runnable action) {
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            if (player.isOnline()) action.run();
+        });
+    }
+
+    private void send(Player player, org.geysermc.cumulus.form.Form form) {
+        FloodgatePlayer floodgatePlayer = FloodgateApi.getInstance().getPlayer(player.getUniqueId());
+        if (floodgatePlayer != null) floodgatePlayer.sendForm(form);
+    }
+
     private void onClosed(Player player) {
-        Bukkit.getScheduler().runTask(plugin, () ->
-                player.sendMessage(Component.text("No job configured.", NamedTextColor.RED)));
-    }
-
-    /**
-     * Spec-distinct styling's Bedrock half: {@code CustomForm} dropdown options are plain
-     * text with no color/tooltip lever (see the Custom GUI Pathway reference note), so the
-     * task type matching this Helper's specialization gets a text marker instead of
-     * JavaJobDialog's color+tooltip. Absent entirely for an unassigned Helper.
-     */
-    private String[] labelsOf(TaskType[] types, Specialization specialization) {
-        String[] labels = new String[types.length];
-        int sepIndex = 0;
-        for (int i = 0; i < types.length; i++) {
-            if (types[i] == null) {
-                labels[i] = sepIndex < separatorLabels.size() ? separatorLabels.get(sepIndex) : "—";
-                sepIndex++;
-                continue;
-            }
-            boolean isSpecialty = specialization != null && types[i] == specialization.taskType();
-            labels[i] = isSpecialty ? types[i].label() + " ★ (specialty)" : types[i].label();
-        }
-        return labels;
-    }
-
-    private final java.util.List<String> separatorLabels = new java.util.ArrayList<>();
-
-    /**
-     * Four general jobs, then — only for a Groundworker that has actually PICKED at level
-     * 8 — a null separator slot and that path's own job. L16 choices (Cofferdam, etc.) get
-     * a second separator and entry. Null is the separator; callers must reject it on submit.
-     */
-    private TaskType[] taskOptionsFor(NPC npc, Specialization specialization, int level) {
-        separatorLabels.clear();
-        TaskType[] general = {TaskType.MINE, TaskType.LUMBERJACK, TaskType.FARM, TaskType.CLEAR};
-        if (specialization != Specialization.GROUNDWORKER || level < 8) {
-            return general;
-        }
-        MilestoneChoiceRecord l8Record = choiceStore.find(npc.getUniqueId(), 8);
-        if (l8Record == null) {
-            return general;
-        }
-        TaskType specialised;
-        String pathName;
-        if (GroundworkerL8Choice.QUARRYMAN.name().equals(l8Record.choice())) {
-            specialised = TaskType.QUARRY;
-            pathName = "Quarryman";
-        } else if (GroundworkerL8Choice.LANDSCAPER.name().equals(l8Record.choice())) {
-            specialised = TaskType.LANDSCAPE;
-            pathName = "Landscaper";
-        } else {
-            return general;
-        }
-        separatorLabels.add("— Level 8: " + pathName + " —");
-
-        TaskType l16Job = null;
-        if (level >= 16) {
-            MilestoneChoiceRecord l16Record = choiceStore.find(npc.getUniqueId(), 16);
-            if (l16Record != null && GroundworkerL16Choice.COFFERDAM.name().equals(l16Record.choice())) {
-                l16Job = TaskType.COFFERDAM;
-            }
-        }
-        if (l16Job != null) {
-            separatorLabels.add("— Level 16: Cofferdam —");
-            return new TaskType[] {general[0], general[1], general[2], general[3],
-                    null, specialised, null, l16Job};
-        }
-        return new TaskType[] {general[0], general[1], general[2], general[3], null, specialised};
-    }
-
-    private String[] labelsOf(Target[] targets) {
-        String[] labels = new String[targets.length];
-        for (int i = 0; i < targets.length; i++) {
-            labels[i] = targets[i].label();
-        }
-        return labels;
+        onMain(player, () -> player.sendMessage(Component.text("No job configured.", NamedTextColor.RED)));
     }
 }

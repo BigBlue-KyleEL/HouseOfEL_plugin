@@ -15,13 +15,22 @@ import org.bukkit.Particle;
 import org.bukkit.Sound;
 import org.bukkit.World;
 import org.bukkit.block.Block;
+import org.bukkit.block.data.Levelled;
+import org.bukkit.block.data.Waterlogged;
 import org.bukkit.entity.Display;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.LivingEntity;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.TextDisplay;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.EventPriority;
+import org.bukkit.event.HandlerList;
+import org.bukkit.event.Listener;
+import org.bukkit.event.block.BlockFromToEvent;
 import org.bukkit.inventory.EntityEquipment;
 import org.bukkit.plugin.Plugin;
+import org.bukkit.potion.PotionEffect;
+import org.bukkit.potion.PotionEffectType;
 import org.bukkit.scheduler.BukkitTask;
 
 import java.util.ArrayList;
@@ -61,6 +70,12 @@ public final class CofferdamJobTask implements JobTask {
     private static final int PATH_GRACE_TICKS = 20;
     private static final int PLACE_DELAY_TICKS = 3;
     private static final int MAINTENANCE_SCAN_TICKS = 20 * 20;
+    private static final Material BULKHEAD_PLUG_MATERIAL = Material.COBBLESTONE;
+    private static final int BULKHEAD_SETTLE_TICKS = 60;
+    private static final int BULKHEAD_SPONGE_SPACING = 5;
+    private static final int BULKHEAD_WAVE_TICKS_PER_STEP = 4;
+    private static final int COFFERDAM_MAX_SPONGES_PER_WAVE = 36;
+    private static final int COFFERDAM_MAX_PLUGS = 64;
 
     private final Plugin plugin;
     private final Logger logger;
@@ -92,6 +107,13 @@ public final class CofferdamJobTask implements JobTask {
     private int outlineTicks;
     private int strikeCursor;
     private boolean announcedHalf;
+    private final List<Block> bulkheadPlugs = new ArrayList<>();
+    private final List<Block> bulkheadWaveAnchors = new ArrayList<>();
+    private int bulkheadWaveIndex;
+    private int bulkheadWaveStepTicks;
+    private int bulkheadTicks;
+    private int drainPassCount;
+    private Listener waterIntrusionListener;
 
     private final Set<Long> ticketedChunks = new HashSet<>();
     private final long startedAtMillis = System.currentTimeMillis();
@@ -231,6 +253,11 @@ public final class CofferdamJobTask implements JobTask {
                 .fallDistance(MAX_TOLERATED_FALL)
                 .stuckAction(SafeStuckAction.INSTANCE);
         paused = false;
+        if (npcEntity instanceof LivingEntity living) {
+            living.addPotionEffect(new PotionEffect(
+                    PotionEffectType.WATER_BREATHING, PotionEffect.INFINITE_DURATION,
+                    0, false, false));
+        }
         refreshChunkTickets();
         task = Bukkit.getScheduler().runTaskTimer(plugin, this::tick, 0L, 1L);
     }
@@ -257,18 +284,12 @@ public final class CofferdamJobTask implements JobTask {
     public void cancelJob() {
         if (cofferdamPhase == CofferdamPhase.MAINTAINING
                 || cofferdamPhase == CofferdamPhase.DRAINING) {
-            cofferdamPhase = CofferdamPhase.STRIKING;
-            strikeCursor = damBlocks.size() - 1;
-            walkState = WalkState.SEEKING;
-            messagePlayer(Component.text(
-                    BuilderNpcService.baseNameOf(npc)
-                            + ": Right, I'll pull the dam down and put the blocks back.",
-                    NamedTextColor.YELLOW));
-            return;
+            clearBulkheadPlugs();
+            bulkheadWaveAnchors.clear();
+            unregisterWaterIntrusionListener();
         }
-        teardown();
-        logger.info(BuilderNpcService.baseNameOf(npc) + "'s cofferdam job was cancelled ["
-                + damBlocks.size() + " dam blocks placed]");
+        finish(BuilderNpcService.baseNameOf(npc)
+                + ": All done — dam walls stay in place. " + damBlocks.size() + " block(s) used.");
     }
 
     @Override
@@ -436,6 +457,7 @@ public final class CofferdamJobTask implements JobTask {
         world.playSound(block.getLocation(), Sound.BLOCK_STONE_PLACE, 0.7f, 1.0f);
         world.spawnParticle(Particle.BLOCK, block.getLocation().add(0.5, 0.5, 0.5),
                 6, 0.25, 0.25, 0.25, block.getBlockData());
+        escapeIfTrapped();
 
         placeDelay = PLACE_DELAY_TICKS;
         buildCursor++;
@@ -459,40 +481,221 @@ public final class CofferdamJobTask implements JobTask {
         walkState = WalkState.SEEKING;
     }
 
-    // ── DRAINING phase (stub — full implementation in Phase C) ──────────
+    // ── DRAINING phase — scaled Bulkhead sponge wave ─────────────────────
 
     private void tickDraining() {
-        drainInterior();
-        cofferdamPhase = CofferdamPhase.MAINTAINING;
-        maintenanceTicks = 0;
-        messagePlayer(Component.text(
-                BuilderNpcService.baseNameOf(npc)
-                        + ": The area is dry. I'll keep it that way — cancel the job when "
-                        + "you're done working inside.",
-                NamedTextColor.GREEN));
-        logger.info(BuilderNpcService.baseNameOf(npc)
-                + "'s cofferdam entered maintenance [damBlocks=" + damBlocks.size() + "]");
+        if (bulkheadWaveIndex < bulkheadWaveAnchors.size()) {
+            bulkheadWaveStepTicks--;
+            if (bulkheadWaveStepTicks > 0) return;
+
+            Block anchor = bulkheadWaveAnchors.get(bulkheadWaveIndex);
+            if (!anchor.getType().isSolid()) {
+                anchor.setType(Material.SPONGE);
+                bulkheadPlugs.add(anchor);
+                world.spawnParticle(Particle.SPLASH, anchor.getLocation().add(0.5, 0.5, 0.5),
+                        12, 0.3, 0.3, 0.3, 0.05);
+                world.playSound(anchor.getLocation(), Sound.BLOCK_SPONGE_PLACE, 1.0f, 1.0f);
+            }
+            bulkheadWaveIndex++;
+            bulkheadWaveStepTicks = BULKHEAD_WAVE_TICKS_PER_STEP;
+
+            if (bulkheadWaveIndex == bulkheadWaveAnchors.size()) {
+                bulkheadTicks = BULKHEAD_SETTLE_TICKS;
+            }
+            return;
+        }
+
+        if (bulkheadTicks > 0) {
+            bulkheadTicks--;
+            return;
+        }
+
+        if (!bulkheadPlugs.isEmpty()) {
+            clearBulkheadPlugs();
+            bulkheadWaveAnchors.clear();
+            bulkheadWaveIndex = 0;
+            logger.info(BuilderNpcService.baseNameOf(npc)
+                    + "'s cofferdam drain pass " + drainPassCount
+                    + " complete, checking for remaining water");
+        }
+
+        List<Block> waterAnchors = selectDrainAnchors();
+        List<Block> lavaPlugs = detectInteriorLava();
+
+        if (waterAnchors.isEmpty() && lavaPlugs.isEmpty()) {
+            int swept = drainInterior();
+            logger.info("[cofferdam-debug] drain sweep removed " + swept + " blocks, "
+                    + "interior range x[" + (minX + 1) + ".." + (maxX - 1)
+                    + "] y[" + (minY + 1) + ".." + (maxY - 1)
+                    + "] z[" + (minZ + 1) + ".." + (maxZ - 1) + "]");
+            cofferdamPhase = CofferdamPhase.MAINTAINING;
+            maintenanceTicks = 0;
+            messagePlayer(Component.text(
+                    BuilderNpcService.baseNameOf(npc)
+                            + ": The area is dry. I'll keep it that way — cancel the job when "
+                            + "you're done working inside.",
+                    NamedTextColor.GREEN));
+            logger.info(BuilderNpcService.baseNameOf(npc)
+                    + "'s cofferdam entered maintenance [damBlocks=" + damBlocks.size()
+                    + ", drainPasses=" + drainPassCount + "]");
+            return;
+        }
+
+        drainPassCount++;
+        beginDrainWave(waterAnchors, lavaPlugs);
     }
 
-    private void drainInterior() {
-        for (int x = minX + 1; x < maxX; x++) {
-            for (int z = minZ + 1; z < maxZ; z++) {
-                for (int y = maxY - 1; y > minY; y--) {
+    private void beginDrainWave(List<Block> waterAnchors, List<Block> lavaPlugs) {
+        for (Block source : lavaPlugs) {
+            source.setType(BULKHEAD_PLUG_MATERIAL);
+            bulkheadPlugs.add(source);
+        }
+        bulkheadWaveAnchors.clear();
+        bulkheadWaveAnchors.addAll(waterAnchors);
+        bulkheadWaveIndex = 0;
+        bulkheadWaveStepTicks = BULKHEAD_WAVE_TICKS_PER_STEP;
+        bulkheadTicks = bulkheadWaveAnchors.isEmpty() ? BULKHEAD_SETTLE_TICKS : 0;
+        logger.info(BuilderNpcService.baseNameOf(npc) + "'s cofferdam drain pass "
+                + drainPassCount + ": " + waterAnchors.size() + " sponge(s) queued, "
+                + lavaPlugs.size() + " lava source(s) plugged");
+    }
+
+    private List<Block> selectDrainAnchors() {
+        List<Block> anchors = new ArrayList<>();
+        int spacingSq = BULKHEAD_SPONGE_SPACING * BULKHEAD_SPONGE_SPACING;
+        int waterCount = 0;
+        int totalScanned = 0;
+        for (int y = maxY - 1; y > minY; y--) {
+            for (int x = minX + 1; x < maxX; x++) {
+                for (int z = minZ + 1; z < maxZ; z++) {
+                    totalScanned++;
                     Block block = world.getBlockAt(x, y, z);
                     Material type = block.getType();
-                    if (type == Material.WATER || type == Material.SEAGRASS
-                            || type == Material.TALL_SEAGRASS || type == Material.KELP
-                            || type == Material.KELP_PLANT) {
+                    if (type == Material.SPONGE || type == Material.WET_SPONGE) {
                         block.setType(Material.AIR);
+                        continue;
+                    }
+                    if (type != Material.WATER) continue;
+                    waterCount++;
+                    boolean farEnough = true;
+                    for (Block anchor : anchors) {
+                        int dx = block.getX() - anchor.getX();
+                        int dy = block.getY() - anchor.getY();
+                        int dz = block.getZ() - anchor.getZ();
+                        if (dx * dx + dy * dy + dz * dz < spacingSq) {
+                            farEnough = false;
+                            break;
+                        }
+                    }
+                    if (farEnough) {
+                        anchors.add(block);
+                        if (anchors.size() >= COFFERDAM_MAX_SPONGES_PER_WAVE) {
+                            logger.info("[cofferdam-debug] selectDrainAnchors scanned="
+                                    + totalScanned + " waterFound=" + waterCount
+                                    + " anchorsSelected=" + anchors.size());
+                            return anchors;
+                        }
                     }
                 }
             }
+        }
+        logger.info("[cofferdam-debug] selectDrainAnchors scanned=" + totalScanned
+                + " waterFound=" + waterCount + " anchorsSelected=" + anchors.size());
+        return anchors;
+    }
+
+    private List<Block> detectInteriorLava() {
+        List<Block> lava = new ArrayList<>();
+        for (int y = maxY - 1; y > minY; y--) {
+            for (int x = minX + 1; x < maxX; x++) {
+                for (int z = minZ + 1; z < maxZ; z++) {
+                    Block block = world.getBlockAt(x, y, z);
+                    if (block.getType() == Material.LAVA
+                            && block.getBlockData() instanceof Levelled levelled
+                            && levelled.getLevel() == 0) {
+                        lava.add(block);
+                        if (lava.size() >= COFFERDAM_MAX_PLUGS) {
+                            return lava;
+                        }
+                    }
+                }
+            }
+        }
+        return lava;
+    }
+
+    private void clearBulkheadPlugs() {
+        for (Block plug : bulkheadPlugs) {
+            plug.setType(Material.AIR);
+        }
+        bulkheadPlugs.clear();
+    }
+
+    private int drainInterior() {
+        int removed = 0;
+        int scanned = 0;
+        java.util.Map<Material, Integer> typeCounts = new java.util.EnumMap<>(Material.class);
+        for (int x = minX + 1; x < maxX; x++) {
+            for (int z = minZ + 1; z < maxZ; z++) {
+                for (int y = maxY - 1; y > minY; y--) {
+                    scanned++;
+                    Block block = world.getBlockAt(x, y, z);
+                    Material type = block.getType();
+                    typeCounts.merge(type, 1, Integer::sum);
+                    if (type == Material.WATER || type == Material.SEAGRASS
+                            || type == Material.TALL_SEAGRASS || type == Material.KELP
+                            || type == Material.KELP_PLANT) {
+                        block.setType(Material.AIR, false);
+                        removed++;
+                    } else if (block.getBlockData() instanceof Waterlogged wl
+                            && wl.isWaterlogged()) {
+                        wl.setWaterlogged(false);
+                        block.setBlockData(wl, false);
+                        removed++;
+                    }
+                }
+            }
+        }
+        logger.info("[cofferdam-debug] drainInterior scanned=" + scanned
+                + " removed=" + removed + " types=" + typeCounts);
+        return removed;
+    }
+
+    // ── Water intrusion listener (Phase D) ────────────────────────────────
+
+    private void registerWaterIntrusionListener() {
+        waterIntrusionListener = new Listener() {
+            @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+            public void onBlockFromTo(BlockFromToEvent event) {
+                Block to = event.getToBlock();
+                if (to.getWorld() != world) return;
+                int x = to.getX(), y = to.getY(), z = to.getZ();
+                if (x > minX && x < maxX && y > minY && y < maxY && z > minZ && z < maxZ) {
+                    Material fromType = event.getBlock().getType();
+                    if (fromType == Material.WATER || fromType == Material.LAVA) {
+                        event.setCancelled(true);
+                    }
+                }
+            }
+        };
+        Bukkit.getPluginManager().registerEvents(waterIntrusionListener, plugin);
+        logger.info(BuilderNpcService.baseNameOf(npc)
+                + "'s cofferdam water intrusion listener registered");
+    }
+
+    private void unregisterWaterIntrusionListener() {
+        if (waterIntrusionListener != null) {
+            HandlerList.unregisterAll(waterIntrusionListener);
+            waterIntrusionListener = null;
         }
     }
 
     // ── MAINTAINING phase ──────────────────────────────────────────────────
 
     private void tickMaintaining() {
+        if (waterIntrusionListener == null) {
+            registerWaterIntrusionListener();
+        }
         maintenanceTicks++;
         if (maintenanceTicks < MAINTENANCE_SCAN_TICKS) {
             return;
@@ -516,8 +719,16 @@ public final class CofferdamJobTask implements JobTask {
             for (int z = minZ + 1; z < maxZ; z++) {
                 for (int y = maxY - 1; y > minY; y--) {
                     Block block = world.getBlockAt(x, y, z);
-                    if (block.getType() == Material.WATER) {
-                        block.setType(Material.AIR);
+                    Material type = block.getType();
+                    if (type == Material.WATER || type == Material.SEAGRASS
+                            || type == Material.TALL_SEAGRASS || type == Material.KELP
+                            || type == Material.KELP_PLANT) {
+                        block.setType(Material.AIR, false);
+                        drained++;
+                    } else if (block.getBlockData() instanceof Waterlogged wl
+                            && wl.isWaterlogged()) {
+                        wl.setWaterlogged(false);
+                        block.setBlockData(wl, false);
                         drained++;
                     }
                 }
@@ -602,6 +813,12 @@ public final class CofferdamJobTask implements JobTask {
                 order.add(new int[]{maxX, y, z});
             }
         }
+        // Ceiling — interior of top face; perimeter at y=maxY already covered by walls
+        for (int x = minX + 1; x < maxX; x++) {
+            for (int z = minZ + 1; z < maxZ; z++) {
+                order.add(new int[]{x, maxY, z});
+            }
+        }
         return order;
     }
 
@@ -615,7 +832,14 @@ public final class CofferdamJobTask implements JobTask {
                 int pct = total <= 0 ? 0 : (int) (buildCursor * 100L / total);
                 text = "Dam " + pct + "%";
             }
-            case DRAINING -> text = "Draining...";
+            case DRAINING -> {
+                if (!bulkheadWaveAnchors.isEmpty()) {
+                    int placed = Math.min(bulkheadWaveIndex, bulkheadWaveAnchors.size());
+                    text = "Draining " + placed + "/" + bulkheadWaveAnchors.size();
+                } else {
+                    text = "Draining...";
+                }
+            }
             case MAINTAINING -> text = "Maintaining";
             case STRIKING -> {
                 int total = damBlocks.size();
@@ -648,10 +872,44 @@ public final class CofferdamJobTask implements JobTask {
             task = null;
         }
         npc.getNavigator().cancelNavigation();
+        clearBulkheadPlugs();
+        bulkheadWaveAnchors.clear();
+        unregisterWaterIntrusionListener();
+        if (npcEntity instanceof LivingEntity living) {
+            living.removePotionEffect(PotionEffectType.WATER_BREATHING);
+        }
         releaseChunkTickets();
         label.remove();
         if (equipment != null) {
             equipment.setItemInMainHand(null);
+        }
+    }
+
+    private void escapeIfTrapped() {
+        Location loc = npcEntity.getLocation();
+        Block feet = world.getBlockAt(loc);
+        Block head = world.getBlockAt(loc.getBlockX(), loc.getBlockY() + 1, loc.getBlockZ());
+        if (!feet.getType().isSolid() && !head.getType().isSolid()) {
+            return;
+        }
+        for (int r = 1; r <= 3; r++) {
+            for (int dx = -r; dx <= r; dx++) {
+                for (int dz = -r; dz <= r; dz++) {
+                    for (int dy = -1; dy <= 2; dy++) {
+                        int fx = loc.getBlockX() + dx;
+                        int fy = loc.getBlockY() + dy;
+                        int fz = loc.getBlockZ() + dz;
+                        Block cf = world.getBlockAt(fx, fy, fz);
+                        Block ch = world.getBlockAt(fx, fy + 1, fz);
+                        if (!cf.getType().isSolid() && !ch.getType().isSolid()) {
+                            npcEntity.teleport(new Location(world,
+                                    fx + 0.5, fy, fz + 0.5,
+                                    loc.getYaw(), loc.getPitch()));
+                            return;
+                        }
+                    }
+                }
+            }
         }
     }
 

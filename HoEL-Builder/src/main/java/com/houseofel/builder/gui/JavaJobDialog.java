@@ -104,7 +104,7 @@ public final class JavaJobDialog {
                                             // everything within its own footprint, so there's
                                             // nothing for a Target step to offer. Goes to the
                                             // depth picker instead of straight to confirm.
-                                            showDepthStep(p, npc, Target.ANY_EARTH);
+                                            showDepthStep(p, npc, Target.ANY_EARTH, TaskType.QUARRY);
                                         } else {
                                             showTargetStep(p, npc, type, specialization, level);
                                         }
@@ -126,7 +126,7 @@ public final class JavaJobDialog {
                                 if (audience instanceof Player p) {
                                     Bukkit.getScheduler().runTask(plugin, () -> {
                                         if (specialised == TaskType.QUARRY) {
-                                            showDepthStep(p, npc, Target.ANY_EARTH);
+                                            showDepthStep(p, npc, Target.ANY_EARTH, TaskType.QUARRY);
                                         } else {
                                             showLandscapeConfirmStep(p, npc);
                                         }
@@ -145,6 +145,20 @@ public final class JavaJobDialog {
                                 if (audience instanceof Player p) {
                                     Bukkit.getScheduler().runTask(plugin, () ->
                                             regionService.beginCofferdamJob(p, npc));
+                                }
+                            },
+                            ClickCallback.Options.builder().build())));
+        }
+
+        if (hasShaftMiner(npc, specialization, level)) {
+            buttons.add(ActionButton.create(
+                    Component.text("Lvl.16: Shaft Miner", NamedTextColor.GOLD),
+                    Component.text("Digs straight down, layer by layer, through the marked footprint."), 150,
+                    DialogAction.customClick(
+                            (view, audience) -> {
+                                if (audience instanceof Player p) {
+                                    Bukkit.getScheduler().runTask(plugin, () ->
+                                            showDepthStep(p, npc, Target.ANY_EARTH, TaskType.SHAFT_MINER));
                                 }
                             },
                             ClickCallback.Options.builder().build())));
@@ -286,6 +300,14 @@ public final class JavaJobDialog {
         return record != null && GroundworkerL16Choice.COFFERDAM.name().equals(record.choice());
     }
 
+    private boolean hasShaftMiner(NPC npc, Specialization specialization, int level) {
+        if (specialization != Specialization.GROUNDWORKER || level < 16) {
+            return false;
+        }
+        MilestoneChoiceRecord record = choiceStore.find(npc.getUniqueId(), 16);
+        return record != null && GroundworkerL16Choice.SHAFT_MINER.name().equals(record.choice());
+    }
+
     private void showLandscapeConfirmStep(Player player, NPC npc) {
         List<ActionButton> buttons = new ArrayList<>();
         for (LandscapeMode mode : LandscapeMode.values()) {
@@ -332,14 +354,15 @@ public final class JavaJobDialog {
                 .type(DialogType.multiAction(buttons).build())));
     }
 
-    private void showDepthStep(Player player, NPC npc, Target target) {
+    private void showDepthStep(Player player, NPC npc, Target target, TaskType taskType) {
+        String jobLabel = taskType == TaskType.SHAFT_MINER ? "Shaft Mining" : "Quarrying";
         Component depthTitle = Component.text("— Depth —", NamedTextColor.GOLD).decorate(TextDecoration.BOLD);
         ActionButton levelButton = ActionButton.create(Component.text("Level"),
                 Component.text("Type how many blocks deep to go."), 150,
                 DialogAction.customClick(
                         (view, audience) -> {
                             if (audience instanceof Player p) {
-                                Bukkit.getScheduler().runTask(plugin, () -> showDepthLevelStep(p, npc, target));
+                                Bukkit.getScheduler().runTask(plugin, () -> showDepthLevelStep(p, npc, target, taskType));
                             }
                         },
                         ClickCallback.Options.builder().build()));
@@ -348,21 +371,22 @@ public final class JavaJobDialog {
                 DialogAction.customClick(
                         (view, audience) -> {
                             if (audience instanceof Player p) {
-                                Bukkit.getScheduler().runTask(plugin, () -> showDepthCoordinateStep(p, npc, target));
+                                Bukkit.getScheduler().runTask(plugin, () -> showDepthCoordinateStep(p, npc, target, taskType));
                             }
                         },
                         ClickCallback.Options.builder().build()));
 
         player.showDialog(Dialog.create(factory -> factory.empty()
-                .base(DialogBase.builder(Component.text(BuilderNpcService.baseNameOf(npc) + " — Quarrying"))
+                .base(DialogBase.builder(Component.text(BuilderNpcService.baseNameOf(npc) + " — " + jobLabel))
                         .body(List.of(DialogBody.plainMessage(depthTitle)))
                         .build())
                 .type(DialogType.multiAction(List.of(levelButton, coordinatesButton)).build())));
     }
 
-    private void showDepthLevelStep(Player player, NPC npc, Target target) {
+    private void showDepthLevelStep(Player player, NPC npc, Target target, TaskType taskType) {
+        String jobLabel = taskType == TaskType.SHAFT_MINER ? "Shaft Mining" : "Quarrying";
         player.showDialog(Dialog.create(factory -> factory.empty()
-                .base(DialogBase.builder(Component.text(BuilderNpcService.baseNameOf(npc) + " — Depth (Level)"))
+                .base(DialogBase.builder(Component.text(BuilderNpcService.baseNameOf(npc) + " — " + jobLabel + " Depth (Level)"))
                         .inputs(List.of(DialogInput.text("levels", Component.text("Blocks deep")).build()))
                         .build())
                 .type(DialogType.confirmation(
@@ -372,8 +396,14 @@ public final class JavaJobDialog {
                                             if (audience instanceof Player p) {
                                                 Integer levels = parseDialogInt(p, npc, view.getText("levels"));
                                                 if (levels != null) {
-                                                    Bukkit.getScheduler().runTask(plugin, () ->
-                                                            showConfirmStep(p, npc, TaskType.QUARRY, target, levels, null));
+                                                    Bukkit.getScheduler().runTask(plugin, () -> {
+                                                        if (taskType == TaskType.SHAFT_MINER) {
+                                                            regionService.beginJob(p, npc, taskType, target,
+                                                                    true, false, levels, null);
+                                                        } else {
+                                                            showConfirmStep(p, npc, taskType, target, levels, null);
+                                                        }
+                                                    });
                                                 }
                                             }
                                         },
@@ -381,9 +411,10 @@ public final class JavaJobDialog {
                         ActionButton.create(Component.text("Cancel"), null, 150, null)))));
     }
 
-    private void showDepthCoordinateStep(Player player, NPC npc, Target target) {
+    private void showDepthCoordinateStep(Player player, NPC npc, Target target, TaskType taskType) {
+        String jobLabel = taskType == TaskType.SHAFT_MINER ? "Shaft Mining" : "Quarrying";
         player.showDialog(Dialog.create(factory -> factory.empty()
-                .base(DialogBase.builder(Component.text(BuilderNpcService.baseNameOf(npc) + " — Depth (Coordinates)"))
+                .base(DialogBase.builder(Component.text(BuilderNpcService.baseNameOf(npc) + " — " + jobLabel + " Depth (Coordinates)"))
                         .inputs(List.of(DialogInput.text("targetY", Component.text("Target Y coordinate")).build()))
                         .build())
                 .type(DialogType.confirmation(
@@ -393,8 +424,14 @@ public final class JavaJobDialog {
                                             if (audience instanceof Player p) {
                                                 Integer targetY = parseDialogInt(p, npc, view.getText("targetY"));
                                                 if (targetY != null) {
-                                                    Bukkit.getScheduler().runTask(plugin, () ->
-                                                            showConfirmStep(p, npc, TaskType.QUARRY, target, null, targetY));
+                                                    Bukkit.getScheduler().runTask(plugin, () -> {
+                                                        if (taskType == TaskType.SHAFT_MINER) {
+                                                            regionService.beginJob(p, npc, taskType, target,
+                                                                    true, false, null, targetY);
+                                                        } else {
+                                                            showConfirmStep(p, npc, taskType, target, null, targetY);
+                                                        }
+                                                    });
                                                 }
                                             }
                                         },

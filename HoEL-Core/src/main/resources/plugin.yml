@@ -4,6 +4,7 @@ main: com.houseofel.core.HoELCore
 api-version: '1.13'
 author: Kyle
 description: House of EL - Core module (base /hel command, shared services)
+softdepend: [floodgate]
 commands:
   hel:
     description: House of EL base command

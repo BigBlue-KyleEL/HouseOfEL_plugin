@@ -17,7 +17,8 @@ public enum TaskType {
      * silently mean something different for one Helper (Kyle, 2026-08-25).
      */
     LANDSCAPE("Landscaping", Material.IRON_SHOVEL, "Shovel"),
-    COFFERDAM("Cofferdam", Material.IRON_SHOVEL, "Shovel");
+    COFFERDAM("Cofferdam", Material.IRON_SHOVEL, "Shovel"),
+    SHAFT_MINER("Shaft Miner", Material.IRON_PICKAXE, "Pickaxe");
 
     private final String label;
     private final Material icon;
