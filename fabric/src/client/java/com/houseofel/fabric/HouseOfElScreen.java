@@ -530,7 +530,8 @@ public class HouseOfElScreen extends Screen {
         }
 
         if (super.keyPressed(event)) return true;
-        if (this.minecraft.options.keyInventory.matches(event)) {
+        // Let charTyped receive the inventory-bound key while a text field owns focus.
+        if (focusedTextInputId == null && this.minecraft.options.keyInventory.matches(event)) {
             onClose();
             return true;
         }
