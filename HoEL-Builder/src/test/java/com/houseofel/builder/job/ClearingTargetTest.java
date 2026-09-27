@@ -187,7 +187,7 @@ class ClearingTargetTest {
     }
 
     @Test
-    void searchAndPagesKeepAllMatchesBeyondTenWithoutDuplicates() {
+    void searchKeepsAllMatchesBeyondTenWithoutDuplicates() {
         Set<Material> original = EnumSet.copyOf(TAGS.get("mineable/pickaxe"));
         List<Material> copper = List.of(Material.COPPER_BLOCK, Material.CUT_COPPER, Material.EXPOSED_COPPER,
                 Material.WEATHERED_COPPER, Material.OXIDIZED_COPPER, Material.WAXED_COPPER_BLOCK,
@@ -199,14 +199,6 @@ class ClearingTargetTest {
             List<Material> results = ClearingPicker.search("copper");
             assertEquals(copper.size(), results.size());
             assertEquals(Set.copyOf(copper), Set.copyOf(results));
-            List<Material> paged = new ArrayList<>();
-            for (int page = 0; page < ClearingPicker.pageCount(results); page++) {
-                paged.addAll(ClearingPicker.page(results, page));
-            }
-            assertEquals(results, paged);
-            assertEquals(ClearingPicker.page(results, 0), ClearingPicker.page(results, -1));
-            assertEquals(ClearingPicker.page(results, 2), ClearingPicker.page(results, Integer.MAX_VALUE));
-            assertTrue(ClearingPicker.page(List.of(), 99).isEmpty());
         } finally {
             TAGS.put("mineable/pickaxe", original);
         }
@@ -274,33 +266,62 @@ class ClearingTargetTest {
             everything.ifPresent(button -> {
                 assertEquals(state == ClearingPicker.EverythingState.AVAILABLE, button.enabled());
                 assertEquals("Everything", button.text());
+                var decoded = children(OpenScreenPayload.fromBytes(JobMenuLayout.clearingTargetScreen(helperNpc(), state).toBytes()));
+                var wireButton = decoded.stream().filter(e -> e.id().equals("btn_everything"))
+                        .map(GuiElement.Button.class::cast).findFirst().orElseThrow();
+                assertEquals(state == ClearingPicker.EverythingState.LOCKED ? "Unlocks at L3" : null, wireButton.tooltip());
                 assertEquals("houseofel:gui/button_disabled", button.textureDisabled());
             });
         }
     }
 
     @Test
-    void temporaryModPickerFitsItsPanelAndSerializesWithTheExistingClientSchema() {
-        var results = new ArrayList<>(ClearingPicker.search(""));
-        results.add(Material.HOPPER);
-        for (int page = 0; page < ClearingPicker.pageCount(results); page++) {
-            var screen = JobMenuLayout.clearingPickerScreen(helperNpc(), "block", results, page);
-            var decoded = OpenScreenPayload.fromBytes(screen.toBytes());
-            assertEquals(JobMenuLayout.CLEARING_PICKER, decoded.screenId());
-            var panel = (GuiElement.Panel) decoded.root().getFirst();
-            var children = panel.children();
-            var buttons = children.stream().filter(GuiElement.Button.class::isInstance)
-                    .map(GuiElement.Button.class::cast).toList();
-            assertEquals(ClearingPicker.page(results, page).size(), buttons.stream()
-                    .filter(button -> button.action().startsWith("pick:")).count());
-            for (var button : buttons) {
-                assertTrue(button.offset()[1] >= 0);
-                assertTrue(button.offset()[1] + button.size()[1] <= panel.size()[1], button.id());
-                assertTrue(Math.abs(button.offset()[0]) + button.size()[0] / 2 <= panel.size()[0] / 2, button.id());
-            }
-            assertEquals(page > 0, buttons.stream().filter(b -> b.action().equals("previous")).findFirst().orElseThrow().enabled());
-            assertEquals(page == 0, buttons.stream().filter(b -> b.action().equals("next")).findFirst().orElseThrow().enabled());
-        }
+    void liveModPickerRoundTripsFullPoolIconsAndNarrowRows() {
+        var results = ClearingTargetPool.allowedMaterials().stream()
+                .sorted(java.util.Comparator.comparing(Target::blockLabel)).toList();
+        var screen = JobMenuLayout.clearingPickerScreen(helperNpc(), results);
+        assertTrue(screen.toBytes().length < org.bukkit.plugin.messaging.Messenger.MAX_MESSAGE_SIZE);
+        var decoded = OpenScreenPayload.fromBytes(screen.toBytes());
+        var panel = (GuiElement.Panel) decoded.root().getFirst();
+        var list = panel.children().stream().filter(GuiElement.SearchableList.class::isInstance)
+                .map(GuiElement.SearchableList.class::cast).findFirst().orElseThrow();
+        assertEquals(results.stream().map(Enum::name).toList(), list.options().stream().map(GuiElement.SearchOption::id).toList());
+        assertEquals(170, list.size()[0]);
+        assertTrue(list.offset()[1] + list.size()[1] < panel.size()[1]);
+        assertEquals("minecraft:stone", list.options().stream().filter(o -> o.id().equals("STONE")).findFirst().orElseThrow().itemId());
+        var state = new com.houseofel.common.net.SearchableListState(list);
+        assertEquals(ClearingPicker.search("").stream().map(Enum::name).toList(), state.matches().stream().map(GuiElement.SearchOption::id).toList());
+        state.updateQuery("  MINECRAFT:GRASS_BLOCK  ");
+        assertEquals(List.of("GRASS_BLOCK"), state.matches().stream().map(GuiElement.SearchOption::id).toList());
+        state.updateQuery("does_not_exist");
+        assertTrue(state.matches().isEmpty());
+        assertNull(state.row(0));
+        state.updateQuery("");
+        assertEquals(0, state.first());
+    }
+
+    @Test
+    void liveListScrollReachesEveryResultAndResetsWhenQueryChanges() {
+        var options = java.util.stream.IntStream.range(0, 500)
+                .mapToObj(i -> new GuiElement.SearchOption("BLOCK_" + i, "Block " + i, "minecraft:stone")).toList();
+        var list = new GuiElement.SearchableList("blocks", com.houseofel.common.net.Anchor.TOP_CENTER,
+                new int[]{0, 0}, true, new int[]{170, 160}, "search", "pick_block", null, null,
+                "Common picks", "matching blocks", "No matching blocks", options, List.of("BLOCK_2", "BLOCK_1"));
+        var state = new com.houseofel.common.net.SearchableListState(list);
+        assertEquals(List.of("BLOCK_2", "BLOCK_1"), state.matches().stream().map(GuiElement.SearchOption::id).toList());
+        state.updateQuery("block");
+        assertEquals(500, state.matches().size());
+        assertEquals(6, state.visibleRows());
+        state.scrollTo(Integer.MAX_VALUE);
+        assertEquals(494, state.first());
+        assertEquals("BLOCK_499", state.row(5).id());
+        assertNull(state.row(6));
+        assertNull(state.row(-1));
+        state.updateQuery("block 499");
+        assertEquals(0, state.first());
+        assertEquals("BLOCK_499", state.row(0).id());
+        state.scrollTo(-1);
+        assertEquals(0, state.first());
     }
 
     @Test
@@ -309,6 +330,11 @@ class ClearingTargetTest {
         var confirm = children(JobMenuLayout.confirmScreen(helperNpc(), TaskType.CLEAR, target));
         assertTrue(confirm.stream().anyMatch(element -> element instanceof GuiElement.Label label
                 && label.id().equals("selected_block") && label.text().equals("Grass Block")));
+        var icon = confirm.stream().filter(GuiElement.ItemIcon.class::isInstance)
+                .map(GuiElement.ItemIcon.class::cast).findFirst().orElseThrow();
+        assertEquals("minecraft:grass_block", icon.itemId());
+        var decodedConfirm = children(OpenScreenPayload.fromBytes(JobMenuLayout.confirmScreen(helperNpc(), TaskType.CLEAR, target).toBytes()));
+        assertTrue(decodedConfirm.stream().anyMatch(e -> e instanceof GuiElement.ItemIcon i && i.itemId().equals(icon.itemId())));
         var legacy = children(JobMenuLayout.targetScreen(helperNpc(),
                 List.of(Target.STONE, Target.DIRT, Target.OAK_LOG, Target.WHEAT)));
         assertEquals(List.of("Stone", "Dirt", "Oak Log", "Wheat"), legacy.stream()

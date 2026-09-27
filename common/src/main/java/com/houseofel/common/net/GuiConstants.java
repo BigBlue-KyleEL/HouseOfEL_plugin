@@ -2,7 +2,7 @@ package com.houseofel.common.net;
 
 public final class GuiConstants {
 
-    public static final int SCHEMA_VERSION = 2;
+    public static final int SCHEMA_VERSION = 3;
 
     public static final String HANDSHAKE_CHANNEL = "houseofel:handshake";
     public static final String OPEN_SCREEN_CHANNEL = "houseofel:open_screen";

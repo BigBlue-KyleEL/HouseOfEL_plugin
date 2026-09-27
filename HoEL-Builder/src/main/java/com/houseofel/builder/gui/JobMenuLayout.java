@@ -87,10 +87,12 @@ public final class JobMenuLayout {
         int y = 90;
         if (state != ClearingPicker.EverythingState.HIDDEN) {
             boolean enabled = state == ClearingPicker.EverythingState.AVAILABLE;
-            children.add(sizedButton("btn_everything", 0, y, BTN_W, "everything", "Everything", enabled));
+            children.add(new GuiElement.Button("btn_everything", Anchor.TOP_CENTER, new int[]{0, y}, true,
+                    new int[]{BTN_W, BTN_H}, "everything", "Everything", "houseofel:gui/button_normal",
+                    "houseofel:gui/button_hover", "houseofel:gui/button_disabled", enabled,
+                    enabled ? null : "Unlocks at L3"));
             y += 24;
             if (!enabled) {
-                // Tooltip needs the slice 3 client/schema update; keep the reason visible for now.
                 children.add(label("locked_reason", y, "Unlocks at L3", "#AAAAAA"));
                 y += 18;
             }
@@ -99,31 +101,22 @@ public final class JobMenuLayout {
         return wrapInPanel(CLEARING_TARGET, y + 24, children);
     }
 
-    /** Temporary slice 2 picker: six rows per page, every result remains reachable. */
-    public static OpenScreenPayload clearingPickerScreen(NPC npc, String query,
-                                                          List<org.bukkit.Material> results, int page) {
-        int safePage = Math.clamp(page, 0, ClearingPicker.pageCount(results) - 1);
+    /** Entire runtime pool is sent once. Filtering and scrolling are local to the mod. */
+    public static OpenScreenPayload clearingPickerScreen(NPC npc, List<org.bukkit.Material> offered) {
         List<GuiElement> children = new ArrayList<>();
         children.add(label("title", 32, BuilderNpcService.baseNameOf(npc) + " — Specific Block", "#FFFFFF"));
-        children.add(new GuiElement.TextInput("search", Anchor.TOP_CENTER, new int[]{-48, 50}, true,
-                new int[]{230, 18}, "Block name", query));
-        children.add(sizedButton("btn_search", 127, 49, 90, "search", "Search", true));
-        String status = results.isEmpty() ? "No matching blocks — try another name."
-                : (query.isBlank() ? "Common picks" : results.size() + " matching blocks")
-                + " — Page " + (safePage + 1) + "/" + ClearingPicker.pageCount(results);
-        children.add(label("results_status", 76, status, "#AAAAAA"));
-        int y = 92;
-        for (org.bukkit.Material material : ClearingPicker.page(results, safePage)) {
-            children.add(sizedButton("pick_" + material.name(), 0, y, 170,
-                    "pick:" + material.name(), Target.blockLabel(material), true));
-            y += 24;
-        }
-        children.add(sizedButton("btn_previous", -89, 242, 170, "previous", "Previous", safePage > 0));
-        children.add(sizedButton("btn_next", 89, 242, 170, "next", "Next",
-                safePage + 1 < ClearingPicker.pageCount(results)));
-        children.add(sizedButton("btn_back", -89, 266, 170, "back", "Back", true));
-        children.add(sizedButton("btn_cancel", 89, 266, 170, "cancel", "Cancel", true));
-        return wrapInPanel(CLEARING_PICKER, 286, children);
+        children.add(new GuiElement.TextInput("search", Anchor.TOP_CENTER, new int[]{0, 50}, true,
+                new int[]{170, 18}, "Type a block name…", ""));
+        var options = offered.stream().map(material -> new GuiElement.SearchOption(
+                material.name(), Target.blockLabel(material), material.getKey().toString())).toList();
+        var quick = ClearingPicker.search("").stream().filter(offered::contains).map(Enum::name).toList();
+        children.add(new GuiElement.SearchableList("blocks", Anchor.TOP_CENTER, new int[]{0, 76}, true,
+                new int[]{170, 160}, "search", "pick_block", "houseofel:gui/button_normal",
+                "houseofel:gui/button_hover", "Common picks", "matching blocks", "No matching blocks",
+                options, quick));
+        children.add(sizedButton("btn_back", -89, 250, 170, "back", "Back", true));
+        children.add(sizedButton("btn_cancel", 89, 250, 170, "cancel", "Cancel", true));
+        return wrapInPanel(CLEARING_PICKER, 270, children);
     }
 
     private static GuiElement.Button sizedButton(String id, int x, int y, int width,
@@ -141,6 +134,9 @@ public final class JobMenuLayout {
         children.add(label("title", y, header, "#FFFFFF"));
         y += 20;
         if (target.isSpecificBlock()) {
+            children.add(new GuiElement.ItemIcon("selected_icon", Anchor.TOP_CENTER, new int[]{0, y}, true,
+                    target.specificMaterial().getKey().toString()));
+            y += 20;
             children.add(label("selected_block", y, target.label(), "#FFD700"));
             y += 20;
         }

@@ -5,6 +5,9 @@ import com.houseofel.common.net.DispatchPayload;
 import com.houseofel.common.net.DispatchValue;
 import com.houseofel.common.net.GuiElement;
 import com.houseofel.common.net.ScreenClosedPayload;
+import com.houseofel.common.net.SearchableListState;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.world.item.ItemStack;
 import com.houseofel.fabric.net.DispatchCustomPayload;
 import com.houseofel.fabric.net.ScreenClosedCustomPayload;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
@@ -49,6 +52,13 @@ public class HouseOfElScreen extends Screen {
     private final Map<String, Boolean> toggleValues = new LinkedHashMap<>();
     private final Map<String, Integer> dropdownValues = new LinkedHashMap<>();
 
+    private final Map<String, SearchableListState> listStates = new LinkedHashMap<>();
+    private final Map<String, ItemStack> itemIcons = new LinkedHashMap<>();
+    private final List<ResolvedList> resolvedLists = new ArrayList<>();
+    private record ResolvedList(GuiElement.SearchableList element, int x, int y) {}
+    private String draggingListId;
+    private String hoverTooltip;
+
     private String focusedTextInputId;
     private int textCursorPos;
     private String openDropdownId;
@@ -79,6 +89,7 @@ public class HouseOfElScreen extends Screen {
                         toggleValues.put(t.id(), t.initial());
                 case GuiElement.Dropdown d ->
                         dropdownValues.put(d.id(), d.initial());
+                case GuiElement.SearchableList l -> listStates.put(l.id(), new SearchableListState(l));
                 case GuiElement.Panel p -> {
                     if (p.children() != null) initInputState(p.children());
                 }
@@ -130,6 +141,8 @@ public class HouseOfElScreen extends Screen {
     public void extractRenderState(GuiGraphicsExtractor g, int mouseX, int mouseY, float partialTick) {
         super.extractRenderState(g, mouseX, mouseY, partialTick);
 
+        hoverTooltip = null;
+        resolvedLists.clear();
         resolvedButtons.clear();
         resolvedTextInputs.clear();
         resolvedToggles.clear();
@@ -160,6 +173,7 @@ public class HouseOfElScreen extends Screen {
         }
 
         pose.popMatrix();
+        if (hoverTooltip != null) g.setTooltipForNextFrame(Component.literal(hoverTooltip), mouseX, mouseY);
     }
 
     private void renderElement(GuiGraphicsExtractor g, GuiElement element,
@@ -175,6 +189,11 @@ public class HouseOfElScreen extends Screen {
             case GuiElement.TextInput t -> renderTextInput(g, t, px, py, pw, ph);
             case GuiElement.Toggle t -> renderToggle(g, t, px, py, pw, ph, mx, my);
             case GuiElement.Dropdown d -> renderDropdown(g, d, px, py, pw, ph, mx, my);
+            case GuiElement.ItemIcon i -> {
+                int[] pos = resolveAnchor(i.anchor(), i.offset(), 16, 16, px, py, pw, ph);
+                renderItemIcon(g, i.itemId(), pos[0], pos[1]);
+            }
+            case GuiElement.SearchableList l -> renderSearchableList(g, l, px, py, pw, ph, mx, my);
             case GuiElement.Unknown u -> renderUnknown(g, u, px, py, pw, ph);
         }
     }
@@ -265,6 +284,8 @@ public class HouseOfElScreen extends Screen {
             g.text(this.font, button.text(), textX, textY, textColor, true);
         }
 
+        if (button.tooltip() != null && mx >= x && mx < x + w && my >= y && my < y + h)
+            hoverTooltip = button.tooltip();
         resolvedButtons.add(new ResolvedButton(button, x, y));
     }
 
@@ -379,6 +400,111 @@ public class HouseOfElScreen extends Screen {
         }
     }
 
+    private void renderItemIcon(GuiGraphicsExtractor g, String itemId, int x, int y) {
+        ItemStack stack = itemIcons.computeIfAbsent(itemId, key -> {
+            Identifier identifier = Identifier.tryParse(key);
+            if (identifier == null || !BuiltInRegistries.ITEM.containsKey(identifier)) return ItemStack.EMPTY;
+            return new ItemStack(BuiltInRegistries.ITEM.getValue(identifier));
+        });
+        if (stack.isEmpty()) {
+            // Some mineable blocks have no inventory item; they remain selectable by name.
+            g.text(this.font, "?", x + 5, y + 4, 0xFFAAAAAA, true);
+        } else {
+            g.item(stack, x, y);
+        }
+    }
+
+    private SearchableListState listState(GuiElement.SearchableList list) {
+        SearchableListState state = listStates.get(list.id());
+        StringBuilder input = textInputValues.get(list.searchInputId());
+        state.updateQuery(input == null ? "" : input.toString());
+        return state;
+    }
+
+    private void renderSearchableList(GuiGraphicsExtractor g, GuiElement.SearchableList list,
+                                      int px, int py, int pw, int ph, float mx, float my) {
+        int w = list.size()[0], h = list.size()[1];
+        int[] pos = resolveAnchor(list.anchor(), list.offset(), w, h, px, py, pw, ph);
+        int x = pos[0], y = pos[1];
+        SearchableListState state = listState(list);
+        String status = state.matches().isEmpty() ? list.noResultsLabel()
+                : state.isQuickPicks() ? list.emptyLabel() : state.matches().size() + " " + list.resultsLabel();
+        g.text(this.font, status, x + (w - this.font.width(status)) / 2, y, 0xFFAAAAAA, true);
+        for (int row = 0; row < state.visibleRows(); row++) {
+            GuiElement.SearchOption option = state.row(row);
+            if (option == null) break;
+            int ry = y + 16 + row * 24;
+            boolean hover = mx >= x && mx < x + w && my >= ry && my < ry + 20;
+            String texture = hover && list.textureHover() != null ? list.textureHover() : list.texture();
+            if (texture != null) {
+                g.blit(RenderPipelines.GUI_TEXTURED, resolveTexture(texture), x, ry, 0f, 0f, w, 20, w, 20);
+            } else {
+                drawBorderedBox(g, x, ry, w, 20, hover ? 0xFF505050 : 0xFF303030, 0xFF808080);
+            }
+            renderItemIcon(g, option.itemId(), x + 7, ry + 2);
+            String label = option.label();
+            int available = w - 38;
+            if (this.font.width(label) > available) {
+                label = this.font.plainSubstrByWidth(label, available - this.font.width("…")) + "…";
+            }
+            g.text(this.font, label, x + 28, ry + (20 - this.font.lineHeight) / 2,
+                    hover ? 0xFFFFFFA0 : 0xFFFFFFFF, true);
+            if (hover) hoverTooltip = option.label();
+        }
+        if (state.maxFirst() > 0) {
+            int trackY = y + 16, trackH = state.visibleRows() * 24 - 4;
+            int thumbH = Math.max(12, trackH * state.visibleRows() / state.matches().size());
+            int thumbY = trackY + Math.round((trackH - thumbH) * (float) state.first() / state.maxFirst());
+            g.fill(x + w + 4, trackY, x + w + 10, trackY + trackH, 0xFF252525);
+            g.fill(x + w + 4, thumbY, x + w + 10, thumbY + thumbH, 0xFFC5A36B);
+        }
+        resolvedLists.add(new ResolvedList(list, x, y));
+    }
+
+    private void scrollListToMouse(ResolvedList list, float y) {
+        SearchableListState state = listState(list.element());
+        int trackH = state.visibleRows() * 24 - 4;
+        int thumbH = Math.max(12, trackH * state.visibleRows() / Math.max(1, state.matches().size()));
+        float fraction = (y - list.y() - 16 - thumbH / 2f) / Math.max(1, trackH - thumbH);
+        state.scrollTo(Math.round(fraction * state.maxFirst()));
+    }
+
+    @Override
+    public boolean mouseScrolled(double x, double y, double horizontal, double vertical) {
+        float mx = (float) ((x - canvasX) / scale), my = (float) ((y - canvasY) / scale);
+        for (ResolvedList list : resolvedLists) {
+            if (mx >= list.x() && mx < list.x() + list.element().size()[0] + 10
+                    && my >= list.y() && my < list.y() + list.element().size()[1]) {
+                SearchableListState state = listState(list.element());
+                if (vertical != 0) state.scrollTo(state.first() - (int) Math.copySign(Math.max(1, Math.round(Math.abs(vertical) * 3)), vertical));
+                return true;
+            }
+        }
+        return super.mouseScrolled(x, y, horizontal, vertical);
+    }
+
+    @Override
+    public boolean mouseDragged(MouseButtonEvent event, double dx, double dy) {
+        if (draggingListId != null && event.button() == 0) {
+            for (ResolvedList list : resolvedLists) {
+                if (list.element().id().equals(draggingListId)) {
+                    scrollListToMouse(list, (float) ((event.y() - canvasY) / scale));
+                    return true;
+                }
+            }
+        }
+        return super.mouseDragged(event, dx, dy);
+    }
+
+    @Override
+    public boolean mouseReleased(MouseButtonEvent event) {
+        if (event.button() == 0 && draggingListId != null) {
+            draggingListId = null;
+            return true;
+        }
+        return super.mouseReleased(event);
+    }
+
     private void renderUnknown(GuiGraphicsExtractor g, GuiElement.Unknown unknown,
                                 int px, int py, int pw, int ph) {
         LOGGER.warn("[HouseOfEL] Unknown element type '{}' (id='{}')",
@@ -453,7 +579,29 @@ public class HouseOfElScreen extends Screen {
         }
 
         // Text inputs — set focus
-        String prevFocus = focusedTextInputId;
+        for (ResolvedList list : resolvedLists) {
+            int w = list.element().size()[0];
+            SearchableListState state = listState(list.element());
+            if (cmx >= list.x() + w + 4 && cmx < list.x() + w + 10
+                    && cmy >= list.y() + 16 && cmy < list.y() + list.element().size()[1]
+                    && state.maxFirst() > 0) {
+                draggingListId = list.element().id();
+                scrollListToMouse(list, cmy);
+                return true;
+            }
+            if (cmx >= list.x() && cmx < list.x() + w && cmy >= list.y() + 16) {
+                int row = (int) (cmy - list.y() - 16) / 24;
+                GuiElement.SearchOption option = state.row(row);
+                if (option != null && (cmy - list.y() - 16) % 24 < 20) {
+                    Map<String, DispatchValue> values = new LinkedHashMap<>(gatherValues());
+                    values.put(list.element().id(), new DispatchValue.StringVal(option.id()));
+                    ClientPlayNetworking.send(new DispatchCustomPayload(
+                            new DispatchPayload(screenId, list.element().action(), values)));
+                    return true;
+                }
+            }
+        }
+
         focusedTextInputId = null;
         for (ResolvedTextInput rt : resolvedTextInputs) {
             int w = rt.element.size()[0], h = rt.element.size()[1];

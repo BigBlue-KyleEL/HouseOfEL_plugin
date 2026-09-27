@@ -17,7 +17,7 @@ public final class HoELCore extends JavaPlugin {
     @Override
     public void onEnable() {
         saveDefaultConfig();
-        int minSchema = getConfig().getInt("minimum-schema-version", 1);
+        int minSchema = getConfig().getInt("minimum-schema-version", GuiConstants.SCHEMA_VERSION);
 
         getLogger().info("Plugin speaks schema v" + GuiConstants.SCHEMA_VERSION
                 + ", requires v" + minSchema + " minimum.");

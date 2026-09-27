@@ -222,9 +222,8 @@ public final class JobWizardHandler implements ScreenDispatchHandler, Listener {
         NPC npc = lookupNpc(session);
         if (npc == null) return;
         if ("specific_block".equals(action)) {
-            session.search = "";
-            session.page = 0;
-            session.results = ClearingPicker.search("");
+            session.results = ClearingTargetPool.allowedMaterials().stream()
+                    .sorted(java.util.Comparator.comparing(Target::blockLabel)).toList();
             showClearingPicker(player, npc, session);
         } else if ("everything".equals(action)) {
             chooseClearingTarget(player, npc, session, Target.ANY_EARTH);
@@ -233,7 +232,7 @@ public final class JobWizardHandler implements ScreenDispatchHandler, Listener {
 
     private void showClearingPicker(Player player, NPC npc, WizardSession session) {
         screenService.openScreen(player, JobMenuLayout.clearingPickerScreen(npc,
-                session.search, session.results, session.page));
+                session.results));
     }
 
     private void handleClearingPicker(Player player, String action, Map<String, DispatchValue> values) {
@@ -245,28 +244,15 @@ public final class JobWizardHandler implements ScreenDispatchHandler, Listener {
             showClearingTarget(player, npc);
             return;
         }
-        if ("search".equals(action)) {
-            if (!(values.get("search") instanceof DispatchValue.StringVal value)) return;
-            session.search = ClearingPicker.query(value.value());
-            session.results = ClearingPicker.search(session.search);
-            session.page = 0;
-        } else if ("previous".equals(action)) {
-            session.page = Math.max(0, session.page - 1);
-        } else if ("next".equals(action)) {
-            session.page = Math.min(ClearingPicker.pageCount(session.results) - 1, session.page + 1);
-        } else if (action.startsWith("pick:")) {
-            try {
-                Material material = Material.valueOf(action.substring(5));
-                if (!ClearingPicker.page(session.results, session.page).contains(material)) return;
-                chooseClearingTarget(player, npc, session, Target.specificBlock(material));
-            } catch (IllegalArgumentException invalid) {
-                player.sendMessage(Component.text("That block is not available for Clearing.", NamedTextColor.RED));
-            }
-            return;
-        } else {
-            return;
+        if (!"pick_block".equals(action) || !(values.get("blocks") instanceof DispatchValue.StringVal value)) return;
+        try {
+            Material material = Material.valueOf(value.value());
+            if (!session.results.contains(material)) return;
+            // specificBlock revalidates the live tags, including if they changed since opening.
+            chooseClearingTarget(player, npc, session, Target.specificBlock(material));
+        } catch (IllegalArgumentException invalid) {
+            player.sendMessage(Component.text("That block is not available for Clearing.", NamedTextColor.RED));
         }
-        showClearingPicker(player, npc, session);
     }
 
     private void chooseClearingTarget(Player player, NPC npc, WizardSession session, Target target) {
@@ -497,9 +483,7 @@ public final class JobWizardHandler implements ScreenDispatchHandler, Listener {
         final int level;
         TaskType taskType;
         Target target;
-        String search = "";
         List<Material> results = List.of();
-        int page;
         Integer depthLevels;
         Integer depthTargetY;
 

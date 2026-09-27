@@ -11,7 +11,6 @@ import java.util.Set;
 
 /** Shared search and authorization rules for all three Clearing wizards. */
 public final class ClearingPicker {
-    public static final int PAGE_SIZE = 6;
     private static final List<Material> COMMON_PICKS = List.of(Material.DIRT, Material.STONE,
             Material.GRAVEL, Material.SAND, Material.DEEPSLATE, Material.GRASS_BLOCK);
 
@@ -37,16 +36,6 @@ public final class ClearingPicker {
             String name = Target.blockLabel(material).toLowerCase(Locale.ROOT);
             return Arrays.stream(words).allMatch(name::contains);
         }).sorted(Comparator.comparing(Target::blockLabel)).toList();
-    }
-
-    public static int pageCount(List<Material> results) {
-        return Math.max(1, (results.size() + PAGE_SIZE - 1) / PAGE_SIZE);
-    }
-
-    public static List<Material> page(List<Material> results, int page) {
-        int safePage = Math.clamp(page, 0, pageCount(results) - 1);
-        int start = safePage * PAGE_SIZE;
-        return results.subList(start, Math.min(start + PAGE_SIZE, results.size()));
     }
 
     /** Rechecked at pick and submit time, including after class/level changes. */

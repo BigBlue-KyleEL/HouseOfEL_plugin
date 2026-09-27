@@ -10,7 +10,7 @@ import java.util.List;
 public sealed interface GuiElement
         permits GuiElement.Panel, GuiElement.Label, GuiElement.Image,
                 GuiElement.Button, GuiElement.TextInput, GuiElement.Toggle,
-                GuiElement.Dropdown, GuiElement.Unknown {
+                GuiElement.Dropdown, GuiElement.SearchableList, GuiElement.ItemIcon, GuiElement.Unknown {
 
     String id();
     Anchor anchor();
@@ -31,7 +31,31 @@ public sealed interface GuiElement
     record Button(String id, Anchor anchor, int[] offset, boolean visible,
                   int[] size, String action, String text,
                   String texture, String textureHover, String textureDisabled,
-                  boolean enabled) implements GuiElement {}
+                  boolean enabled, String tooltip) implements GuiElement {
+        public Button(String id, Anchor anchor, int[] offset, boolean visible,
+                      int[] size, String action, String text, String texture,
+                      String textureHover, String textureDisabled, boolean enabled) {
+            this(id, anchor, offset, visible, size, action, text, texture,
+                    textureHover, textureDisabled, enabled, null);
+        }
+    }
+
+    record ItemIcon(String id, Anchor anchor, int[] offset, boolean visible,
+                    String itemId) implements GuiElement {}
+
+    record SearchOption(String id, String label, String itemId) {}
+
+    /** Size includes a 16px status header; rows are 24px high. Dispatches chosen id under this element id. */
+    record SearchableList(String id, Anchor anchor, int[] offset, boolean visible,
+                          int[] size, String searchInputId, String action,
+                          String texture, String textureHover, String emptyLabel,
+                          String resultsLabel, String noResultsLabel,
+                          List<SearchOption> options, List<String> quickPickIds) implements GuiElement {
+        public SearchableList {
+            options = List.copyOf(options);
+            quickPickIds = List.copyOf(quickPickIds);
+        }
+    }
 
     record TextInput(String id, Anchor anchor, int[] offset, boolean visible,
                      int[] size, String placeholder, String initial) implements GuiElement {}
@@ -91,6 +115,7 @@ public sealed interface GuiElement
                 writeNullableUTF(dos, b.textureHover);
                 writeNullableUTF(dos, b.textureDisabled);
                 dos.writeBoolean(b.enabled);
+                writeNullableUTF(dos, b.tooltip);
             }
             case TextInput t -> {
                 dos.writeUTF("text_input");
@@ -114,6 +139,32 @@ public sealed interface GuiElement
                 dos.writeInt(d.options.size());
                 for (String opt : d.options) dos.writeUTF(opt);
                 dos.writeInt(d.initial);
+            }
+            case ItemIcon i -> {
+                dos.writeUTF("item_icon");
+                writeCommon(dos, i);
+                dos.writeUTF(i.itemId);
+            }
+            case SearchableList l -> {
+                dos.writeUTF("searchable_list");
+                writeCommon(dos, l);
+                dos.writeInt(l.size[0]);
+                dos.writeInt(l.size[1]);
+                dos.writeUTF(l.searchInputId);
+                dos.writeUTF(l.action);
+                writeNullableUTF(dos, l.texture);
+                writeNullableUTF(dos, l.textureHover);
+                dos.writeUTF(l.emptyLabel);
+                dos.writeUTF(l.resultsLabel);
+                dos.writeUTF(l.noResultsLabel);
+                dos.writeInt(l.options.size());
+                for (SearchOption option : l.options) {
+                    dos.writeUTF(option.id);
+                    dos.writeUTF(option.label);
+                    dos.writeUTF(option.itemId);
+                }
+                dos.writeInt(l.quickPickIds.size());
+                for (String quickId : l.quickPickIds) dos.writeUTF(quickId);
             }
             case Unknown u -> {
                 dos.writeUTF(u.typeName);
@@ -151,7 +202,7 @@ public sealed interface GuiElement
                     new int[] { dis.readInt(), dis.readInt() },
                     dis.readUTF(), readNullableUTF(dis),
                     readNullableUTF(dis), readNullableUTF(dis), readNullableUTF(dis),
-                    dis.readBoolean());
+                    dis.readBoolean(), readNullableUTF(dis));
             case "text_input" -> new TextInput(id, anchor, offset, visible,
                     new int[] { dis.readInt(), dis.readInt() },
                     readNullableUTF(dis), readNullableUTF(dis));
@@ -164,6 +215,24 @@ public sealed interface GuiElement
                 for (int i = 0; i < optCount; i++) options.add(dis.readUTF());
                 yield new Dropdown(id, anchor, offset, visible, size,
                         Collections.unmodifiableList(options), dis.readInt());
+            }
+            case "item_icon" -> new ItemIcon(id, anchor, offset, visible, dis.readUTF());
+            case "searchable_list" -> {
+                int[] size = {dis.readInt(), dis.readInt()};
+                String input = dis.readUTF(), action = dis.readUTF();
+                String texture = readNullableUTF(dis), hover = readNullableUTF(dis);
+                String empty = dis.readUTF(), results = dis.readUTF(), noResults = dis.readUTF();
+                int count = dis.readInt();
+                if (count < 0 || count > 10000) throw new IOException("Invalid list size");
+                List<SearchOption> options = new ArrayList<>(count);
+                for (int i = 0; i < count; i++)
+                    options.add(new SearchOption(dis.readUTF(), dis.readUTF(), dis.readUTF()));
+                int quickCount = dis.readInt();
+                if (quickCount < 0 || quickCount > count) throw new IOException("Invalid quick-pick count");
+                List<String> quick = new ArrayList<>(quickCount);
+                for (int i = 0; i < quickCount; i++) quick.add(dis.readUTF());
+                yield new SearchableList(id, anchor, offset, visible, size, input, action,
+                        texture, hover, empty, results, noResults, options, quick);
             }
             default -> new Unknown(id, anchor, offset, visible, type);
         };
