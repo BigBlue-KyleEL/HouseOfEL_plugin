@@ -13,7 +13,7 @@ public final class Target {
     public static final Target OAK_LOG = new Target("OAK_LOG", "Oak Log", Material.OAK_LOG, null);
     public static final Target WHEAT = new Target("WHEAT", "Wheat", Material.WHEAT, null);
     /** Groundworker L3: the full pickaxe/shovel family, including ores, except spawners. */
-    public static final Target ANY_EARTH = new Target("ANY_EARTH", "Anything", Material.DIRT, null);
+    public static final Target ANY_EARTH = new Target("ANY_EARTH", "Everything", Material.DIRT, null);
 
     private final String name;
     private final String label;
@@ -32,12 +32,16 @@ public final class Target {
         if (material == null || !ClearingTargetPool.allowedMaterials().contains(material)) {
             throw new IllegalArgumentException("Not an allowed specific Clearing block: " + material);
         }
+        return new Target("SPECIFIC_BLOCK", blockLabel(material), material, material);
+    }
+
+    public static String blockLabel(Material material) {
         StringBuilder label = new StringBuilder();
         for (String word : material.name().toLowerCase(Locale.ROOT).split("_")) {
             if (!label.isEmpty()) label.append(' ');
             label.append(Character.toUpperCase(word.charAt(0))).append(word.substring(1));
         }
-        return new Target("SPECIFIC_BLOCK", label.toString(), material, material);
+        return label.toString();
     }
 
     /** Legacy menu choices only. Specific Block is created with an explicit material. */

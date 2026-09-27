@@ -16,6 +16,7 @@ import net.citizensnpcs.api.npc.NPC;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import org.bukkit.Bukkit;
+import org.bukkit.Material;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.Plugin;
 import org.geysermc.cumulus.form.CustomForm;
@@ -119,7 +120,80 @@ public final class BedrockJobForm {
                 .button("Okay").build());
     }
 
+    private void showClearingTargets(Player player, NPC npc) {
+        ClearingPicker.EverythingState state = ClearingPicker.everythingState(
+                levelService.specializationOf(npc), levelService.levelOf(npc));
+        SimpleForm.Builder form = SimpleForm.builder()
+                .title(BuilderNpcService.baseNameOf(npc) + " — Clearing").button("Specific Block");
+        boolean showEverything = state != ClearingPicker.EverythingState.HIDDEN;
+        if (showEverything) form.button(state == ClearingPicker.EverythingState.AVAILABLE
+                ? "Everything" : "Everything (Unlocks at L3)");
+        form.button("Cancel");
+        form.validResultHandler(response -> onMain(player, () -> {
+            int index = response.clickedButtonId();
+            if (index == 0) showClearingResults(player, npc, "");
+            else if (showEverything && index == 1 && validateClearingPick(player, npc, Target.ANY_EARTH)) {
+                showConfirm(player, npc, TaskType.CLEAR, Target.ANY_EARTH, null, null);
+            }
+        }));
+        form.closedOrInvalidResultHandler(() -> onClosed(player));
+        send(player, form.build());
+    }
+
+    private void showClearingSearch(Player player, NPC npc, String query) {
+        send(player, CustomForm.builder().title(BuilderNpcService.baseNameOf(npc) + " — Search Blocks")
+                .input("Block name (submit to search)", "e.g. stone", query)
+                .validResultHandler(response -> {
+                    String submitted = response.getInput(0);
+                    onMain(player, () -> showClearingResults(player, npc, submitted));
+                }).closedOrInvalidResultHandler(() -> onClosed(player)).build());
+    }
+
+    /** SimpleForm supplies native scrolling; no matches are truncated. */
+    private void showClearingResults(Player player, NPC npc, String query) {
+        String search = ClearingPicker.query(query);
+        java.util.List<Material> results = ClearingPicker.search(search);
+        String status = results.isEmpty() ? "No matching blocks. Try another name."
+                : search.isBlank() ? "Common picks — choose one block." : results.size() + " matching blocks — choose one.";
+        SimpleForm.Builder form = SimpleForm.builder().title(BuilderNpcService.baseNameOf(npc) + " — Specific Block")
+                .content(status).button("Search");
+        for (Material material : results) form.button(Target.blockLabel(material));
+        form.button("Back").button("Cancel");
+        form.validResultHandler(response -> onMain(player, () -> {
+            int index = response.clickedButtonId();
+            if (index == 0) {
+                showClearingSearch(player, npc, search);
+            } else if (index >= 1 && index <= results.size()) {
+                try {
+                    Target target = Target.specificBlock(results.get(index - 1));
+                    if (validateClearingPick(player, npc, target)) {
+                        showConfirm(player, npc, TaskType.CLEAR, target, null, null);
+                    }
+                } catch (IllegalArgumentException invalid) {
+                    player.sendMessage(Component.text("That block is no longer available for Clearing.", NamedTextColor.RED));
+                    showClearingResults(player, npc, search);
+                }
+            } else if (index == results.size() + 1) {
+                showClearingTargets(player, npc);
+            }
+        }));
+        form.closedOrInvalidResultHandler(() -> onClosed(player));
+        send(player, form.build());
+    }
+
+    private boolean validateClearingPick(Player player, NPC npc, Target target) {
+        if (ClearingPicker.isAllowed(target, levelService.specializationOf(npc), levelService.levelOf(npc))) return true;
+        player.sendMessage(Component.text(target == Target.ANY_EARTH
+                ? "Everything unlocks at Groundworker L3." : "That Clearing target is no longer available.", NamedTextColor.YELLOW));
+        showClearingTargets(player, npc);
+        return false;
+    }
+
     private void showTargets(Player player, NPC npc, TaskType type, Specialization specialization, int level) {
+        if (type == TaskType.CLEAR) {
+            showClearingTargets(player, npc);
+            return;
+        }
         // Match the Java wizard: Anything is only available for Clearing at Groundworker L3+.
         java.util.List<Target> targets = java.util.Arrays.stream(Target.values())
                 .filter(t -> t != Target.ANY_EARTH || (type == TaskType.CLEAR
@@ -139,6 +213,7 @@ public final class BedrockJobForm {
 
     private void showConfirm(Player player, NPC npc, TaskType type, Target target,
                                Integer levels, Integer targetY) {
+        if (type == TaskType.CLEAR && !validateClearingPick(player, npc, target)) return;
         CustomForm.Builder form = CustomForm.builder()
                 .title(BuilderNpcService.baseNameOf(npc) + " — " + type.label() + " " + target.label());
         int answerOffset = 0;
@@ -158,9 +233,10 @@ public final class BedrockJobForm {
                             + "\nSurface Only: " + surfaceOnly + "\nStore in Chest: " + storeInChest)
                     .button1("Send to Work").button2("Cancel")
                     .validResultHandler(answer -> {
-                        if (answer.clickedFirst()) onMain(player, () ->
-                                regionService.beginJob(player, npc, type, target, storeInChest, surfaceOnly,
-                                        levels, targetY));
+                        if (answer.clickedFirst()) onMain(player, () -> {
+                            if (type == TaskType.CLEAR && !validateClearingPick(player, npc, target)) return;
+                            regionService.beginJob(player, npc, type, target, storeInChest, surfaceOnly, levels, targetY);
+                        });
                     }).build()));
         });
         form.closedOrInvalidResultHandler(() -> onClosed(player));

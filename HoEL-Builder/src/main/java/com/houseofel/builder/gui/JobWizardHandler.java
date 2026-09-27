@@ -21,6 +21,7 @@ import net.citizensnpcs.api.npc.NPC;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import org.bukkit.Bukkit;
+import org.bukkit.Material;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
@@ -107,6 +108,7 @@ public final class JobWizardHandler implements ScreenDispatchHandler, Listener {
 
     private void handleDispatch(Player player, String screenId, String action,
                                  Map<String, DispatchValue> values) {
+        if (!player.isOnline() || !screenId.equals(screenService.getOpenScreen(player))) return;
         if ("dismiss".equals(action) || "cancel".equals(action)) {
             screenService.closeScreen(player, screenId);
             sessions.remove(player.getUniqueId());
@@ -114,7 +116,6 @@ public final class JobWizardHandler implements ScreenDispatchHandler, Listener {
         }
 
         if (MainMenuLayout.SCREEN_ID.equals(screenId)) {
-            if (!screenId.equals(screenService.getOpenScreen(player))) return;
             WizardSession session = sessions.get(player.getUniqueId());
             if (session == null) return;
             NPC npc = lookupNpc(session);
@@ -124,6 +125,8 @@ public final class JobWizardHandler implements ScreenDispatchHandler, Listener {
         switch (screenId) {
             case JobMenuLayout.JOB_TYPE, MainMenuLayout.SCREEN_ID -> handleTaskType(player, action);
             case JobMenuLayout.JOB_TARGET -> handleTarget(player, action);
+            case JobMenuLayout.CLEARING_TARGET -> handleClearingTarget(player, action);
+            case JobMenuLayout.CLEARING_PICKER -> handleClearingPicker(player, action, values);
             case JobMenuLayout.JOB_CONFIRM -> handleConfirm(player, action, values);
             case JobMenuLayout.JOB_DEPTH -> handleDepthChoice(player, action);
             case JobMenuLayout.JOB_DEPTH_LEVEL -> handleDepthLevel(player, values);
@@ -174,6 +177,11 @@ public final class JobWizardHandler implements ScreenDispatchHandler, Listener {
 
     private void advanceToTarget(Player player, WizardSession session, NPC npc, TaskType taskType) {
         session.taskType = taskType;
+        session.target = null;
+        if (taskType == TaskType.CLEAR) {
+            showClearingTarget(player, npc);
+            return;
+        }
         List<Target> targets = new ArrayList<>();
         for (Target t : Target.values()) {
             if (t == Target.ANY_EARTH
@@ -194,7 +202,7 @@ public final class JobWizardHandler implements ScreenDispatchHandler, Listener {
         if (npc == null) return;
 
         for (Target t : Target.values()) {
-            if (t.name().equalsIgnoreCase(action)) {
+            if (session.taskType != TaskType.CLEAR && t != Target.ANY_EARTH && t.name().equalsIgnoreCase(action)) {
                 session.target = t;
                 screenService.openScreen(player,
                         JobMenuLayout.confirmScreen(npc, session.taskType, t));
@@ -203,12 +211,87 @@ public final class JobWizardHandler implements ScreenDispatchHandler, Listener {
         }
     }
 
-    private void handleConfirm(Player player, String action, Map<String, DispatchValue> values) {
-        if (!"send_to_work".equals(action)) return;
-        WizardSession session = sessions.remove(player.getUniqueId());
-        if (session == null) return;
+    private void showClearingTarget(Player player, NPC npc) {
+        screenService.openScreen(player, JobMenuLayout.clearingTargetScreen(npc,
+                ClearingPicker.everythingState(levelService.specializationOf(npc), levelService.levelOf(npc))));
+    }
+
+    private void handleClearingTarget(Player player, String action) {
+        WizardSession session = sessions.get(player.getUniqueId());
+        if (session == null || session.taskType != TaskType.CLEAR) return;
         NPC npc = lookupNpc(session);
         if (npc == null) return;
+        if ("specific_block".equals(action)) {
+            session.search = "";
+            session.page = 0;
+            session.results = ClearingPicker.search("");
+            showClearingPicker(player, npc, session);
+        } else if ("everything".equals(action)) {
+            chooseClearingTarget(player, npc, session, Target.ANY_EARTH);
+        }
+    }
+
+    private void showClearingPicker(Player player, NPC npc, WizardSession session) {
+        screenService.openScreen(player, JobMenuLayout.clearingPickerScreen(npc,
+                session.search, session.results, session.page));
+    }
+
+    private void handleClearingPicker(Player player, String action, Map<String, DispatchValue> values) {
+        WizardSession session = sessions.get(player.getUniqueId());
+        if (session == null || session.taskType != TaskType.CLEAR) return;
+        NPC npc = lookupNpc(session);
+        if (npc == null) return;
+        if ("back".equals(action)) {
+            showClearingTarget(player, npc);
+            return;
+        }
+        if ("search".equals(action)) {
+            if (!(values.get("search") instanceof DispatchValue.StringVal value)) return;
+            session.search = ClearingPicker.query(value.value());
+            session.results = ClearingPicker.search(session.search);
+            session.page = 0;
+        } else if ("previous".equals(action)) {
+            session.page = Math.max(0, session.page - 1);
+        } else if ("next".equals(action)) {
+            session.page = Math.min(ClearingPicker.pageCount(session.results) - 1, session.page + 1);
+        } else if (action.startsWith("pick:")) {
+            try {
+                Material material = Material.valueOf(action.substring(5));
+                if (!ClearingPicker.page(session.results, session.page).contains(material)) return;
+                chooseClearingTarget(player, npc, session, Target.specificBlock(material));
+            } catch (IllegalArgumentException invalid) {
+                player.sendMessage(Component.text("That block is not available for Clearing.", NamedTextColor.RED));
+            }
+            return;
+        } else {
+            return;
+        }
+        showClearingPicker(player, npc, session);
+    }
+
+    private void chooseClearingTarget(Player player, NPC npc, WizardSession session, Target target) {
+        if (!ClearingPicker.isAllowed(target, levelService.specializationOf(npc), levelService.levelOf(npc))) {
+            player.sendMessage(Component.text("Everything unlocks at Groundworker L3.", NamedTextColor.YELLOW));
+            showClearingTarget(player, npc);
+            return;
+        }
+        session.target = target;
+        screenService.openScreen(player, JobMenuLayout.confirmScreen(npc, TaskType.CLEAR, target));
+    }
+
+    private void handleConfirm(Player player, String action, Map<String, DispatchValue> values) {
+        if (!"send_to_work".equals(action)) return;
+        WizardSession session = sessions.get(player.getUniqueId());
+        if (session == null || session.target == null) return;
+        NPC npc = lookupNpc(session);
+        if (npc == null) return;
+        if (session.taskType == TaskType.CLEAR && !ClearingPicker.isAllowed(session.target,
+                levelService.specializationOf(npc), levelService.levelOf(npc))) {
+            player.sendMessage(Component.text("That Clearing target is no longer available.", NamedTextColor.RED));
+            showClearingTarget(player, npc);
+            return;
+        }
+        sessions.remove(player.getUniqueId());
 
         boolean surfaceOnly = boolValue(values, "surfaceOnly", true);
         boolean storeInChest = boolValue(values, "storeInChest", true);
@@ -414,6 +497,9 @@ public final class JobWizardHandler implements ScreenDispatchHandler, Listener {
         final int level;
         TaskType taskType;
         Target target;
+        String search = "";
+        List<Material> results = List.of();
+        int page;
         Integer depthLevels;
         Integer depthTargetY;
 

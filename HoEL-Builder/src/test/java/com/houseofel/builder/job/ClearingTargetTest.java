@@ -2,6 +2,16 @@ package com.houseofel.builder.job;
 
 import com.houseofel.builder.gui.ClearingTargetPool;
 import com.houseofel.builder.gui.Target;
+import com.houseofel.builder.gui.ClearingPicker;
+import com.houseofel.builder.gui.JobMenuLayout;
+import com.houseofel.builder.gui.TaskType;
+import com.houseofel.builder.npc.Specialization;
+import com.houseofel.common.net.GuiElement;
+import com.houseofel.common.net.OpenScreenPayload;
+import net.citizensnpcs.api.npc.NPC;
+import net.citizensnpcs.api.npc.MetadataStore;
+import java.util.ArrayList;
+import java.util.List;
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
@@ -155,6 +165,155 @@ class ClearingTargetTest {
             assertSame(Tag.MINEABLE_PICKAXE.isTagged(material) ? Target.STONE : Target.DIRT,
                     ClearJobTask.canonicalMaterialClass(block), material.name());
         }
+    }
+
+    @Test
+    void blankSearchUsesConfirmedQuickPicksInOrder() {
+        List<Material> expected = List.of(Material.DIRT, Material.STONE, Material.GRAVEL,
+                Material.SAND, Material.DEEPSLATE, Material.GRASS_BLOCK);
+        assertEquals(expected, ClearingPicker.search(""));
+        assertEquals(expected, ClearingPicker.search("   "));
+        assertEquals(expected, ClearingPicker.search(null));
+    }
+
+    @Test
+    void searchSupportsCaseWhitespaceIdsAndMultipleWordsWithoutReturningOres() {
+        assertEquals(List.of(Material.GRASS_BLOCK), ClearingPicker.search("  GrAsS   BlOcK "));
+        assertEquals(List.of(Material.GRASS_BLOCK), ClearingPicker.search("minecraft:grass_block"));
+        assertEquals(List.of(Material.DIAMOND_BLOCK), ClearingPicker.search("diamond"));
+        assertTrue(ClearingPicker.search("diamond ore").isEmpty());
+        assertTrue(ClearingPicker.search("spawner").isEmpty());
+        assertTrue(ClearingPicker.search("no_such_block").isEmpty());
+    }
+
+    @Test
+    void searchAndPagesKeepAllMatchesBeyondTenWithoutDuplicates() {
+        Set<Material> original = EnumSet.copyOf(TAGS.get("mineable/pickaxe"));
+        List<Material> copper = List.of(Material.COPPER_BLOCK, Material.CUT_COPPER, Material.EXPOSED_COPPER,
+                Material.WEATHERED_COPPER, Material.OXIDIZED_COPPER, Material.WAXED_COPPER_BLOCK,
+                Material.WAXED_CUT_COPPER, Material.EXPOSED_CUT_COPPER, Material.WEATHERED_CUT_COPPER,
+                Material.OXIDIZED_CUT_COPPER, Material.CUT_COPPER_STAIRS, Material.CUT_COPPER_SLAB,
+                Material.COPPER_GRATE);
+        TAGS.get("mineable/pickaxe").addAll(copper);
+        try {
+            List<Material> results = ClearingPicker.search("copper");
+            assertEquals(copper.size(), results.size());
+            assertEquals(Set.copyOf(copper), Set.copyOf(results));
+            List<Material> paged = new ArrayList<>();
+            for (int page = 0; page < ClearingPicker.pageCount(results); page++) {
+                paged.addAll(ClearingPicker.page(results, page));
+            }
+            assertEquals(results, paged);
+            assertEquals(ClearingPicker.page(results, 0), ClearingPicker.page(results, -1));
+            assertEquals(ClearingPicker.page(results, 2), ClearingPicker.page(results, Integer.MAX_VALUE));
+            assertTrue(ClearingPicker.page(List.of(), 99).isEmpty());
+        } finally {
+            TAGS.put("mineable/pickaxe", original);
+        }
+    }
+
+    @Test
+    void everythingAccessAndSpecificAvailabilityFollowTheConfirmedClassLevelMatrix() {
+        Target specific = Target.specificBlock(Material.STONE);
+        for (Specialization specialization : Specialization.values()) {
+            for (int level : new int[]{1, 2, 3, 8, 20}) {
+                assertTrue(ClearingPicker.isAllowed(specific, specialization, level));
+                var expected = specialization != Specialization.GROUNDWORKER ? ClearingPicker.EverythingState.HIDDEN
+                        : level < 3 ? ClearingPicker.EverythingState.LOCKED : ClearingPicker.EverythingState.AVAILABLE;
+                assertEquals(expected, ClearingPicker.everythingState(specialization, level));
+                assertEquals(expected == ClearingPicker.EverythingState.AVAILABLE,
+                        ClearingPicker.isAllowed(Target.ANY_EARTH, specialization, level));
+            }
+        }
+        assertTrue(ClearingPicker.isAllowed(specific, null, 1));
+        assertFalse(ClearingPicker.isAllowed(Target.ANY_EARTH, null, 20));
+        assertFalse(ClearingPicker.isAllowed(Target.STONE, Specialization.GROUNDWORKER, 20));
+        assertFalse(ClearingPicker.isAllowed(null, Specialization.GROUNDWORKER, 20));
+        assertEquals("Everything", Target.ANY_EARTH.label());
+    }
+
+    @Test
+    void submitValidationRejectsAPickRemovedFromServerTags() {
+        Target target = Target.specificBlock(Material.STONE);
+        TAGS.get("mineable/pickaxe").remove(Material.STONE);
+        try {
+            assertFalse(ClearingPicker.isAllowed(target, Specialization.GROUNDWORKER, 3));
+        } finally {
+            TAGS.get("mineable/pickaxe").add(Material.STONE);
+        }
+    }
+
+    private static NPC helperNpc() {
+        var data = (MetadataStore) Proxy.newProxyInstance(MetadataStore.class.getClassLoader(),
+                new Class<?>[]{MetadataStore.class}, (proxy, method, args) -> {
+                    if (method.getName().equals("get")) return "Bartholomew";
+                    throw new UnsupportedOperationException(method.getName());
+                });
+        return (NPC) Proxy.newProxyInstance(NPC.class.getClassLoader(), new Class<?>[]{NPC.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "data" -> data;
+                    case "getName" -> "Bartholomew";
+                    default -> throw new UnsupportedOperationException(method.getName());
+                });
+    }
+
+    private static List<GuiElement> children(OpenScreenPayload screen) {
+        return ((GuiElement.Panel) screen.root().getFirst()).children();
+    }
+
+    @Test
+    void modTargetLayoutHidesOrDisablesEverythingAndAlwaysOffersSpecificBlock() {
+        for (var state : ClearingPicker.EverythingState.values()) {
+            var children = children(JobMenuLayout.clearingTargetScreen(helperNpc(), state));
+            var specific = children.stream().filter(e -> e.id().equals("btn_specific"))
+                    .map(GuiElement.Button.class::cast).findFirst().orElseThrow();
+            assertTrue(specific.enabled());
+            var everything = children.stream().filter(e -> e.id().equals("btn_everything"))
+                    .map(GuiElement.Button.class::cast).findFirst();
+            assertEquals(state != ClearingPicker.EverythingState.HIDDEN, everything.isPresent());
+            everything.ifPresent(button -> {
+                assertEquals(state == ClearingPicker.EverythingState.AVAILABLE, button.enabled());
+                assertEquals("Everything", button.text());
+                assertEquals("houseofel:gui/button_disabled", button.textureDisabled());
+            });
+        }
+    }
+
+    @Test
+    void temporaryModPickerFitsItsPanelAndSerializesWithTheExistingClientSchema() {
+        var results = new ArrayList<>(ClearingPicker.search(""));
+        results.add(Material.HOPPER);
+        for (int page = 0; page < ClearingPicker.pageCount(results); page++) {
+            var screen = JobMenuLayout.clearingPickerScreen(helperNpc(), "block", results, page);
+            var decoded = OpenScreenPayload.fromBytes(screen.toBytes());
+            assertEquals(JobMenuLayout.CLEARING_PICKER, decoded.screenId());
+            var panel = (GuiElement.Panel) decoded.root().getFirst();
+            var children = panel.children();
+            var buttons = children.stream().filter(GuiElement.Button.class::isInstance)
+                    .map(GuiElement.Button.class::cast).toList();
+            assertEquals(ClearingPicker.page(results, page).size(), buttons.stream()
+                    .filter(button -> button.action().startsWith("pick:")).count());
+            for (var button : buttons) {
+                assertTrue(button.offset()[1] >= 0);
+                assertTrue(button.offset()[1] + button.size()[1] <= panel.size()[1], button.id());
+                assertTrue(Math.abs(button.offset()[0]) + button.size()[0] / 2 <= panel.size()[0] / 2, button.id());
+            }
+            assertEquals(page > 0, buttons.stream().filter(b -> b.action().equals("previous")).findFirst().orElseThrow().enabled());
+            assertEquals(page == 0, buttons.stream().filter(b -> b.action().equals("next")).findFirst().orElseThrow().enabled());
+        }
+    }
+
+    @Test
+    void modConfirmationShowsTheSelectedBlockAndLegacyTargetMenuStillHasFourChoices() {
+        var target = Target.specificBlock(Material.GRASS_BLOCK);
+        var confirm = children(JobMenuLayout.confirmScreen(helperNpc(), TaskType.CLEAR, target));
+        assertTrue(confirm.stream().anyMatch(element -> element instanceof GuiElement.Label label
+                && label.id().equals("selected_block") && label.text().equals("Grass Block")));
+        var legacy = children(JobMenuLayout.targetScreen(helperNpc(),
+                List.of(Target.STONE, Target.DIRT, Target.OAK_LOG, Target.WHEAT)));
+        assertEquals(List.of("Stone", "Dirt", "Oak Log", "Wheat"), legacy.stream()
+                .filter(GuiElement.Button.class::isInstance).map(GuiElement.Button.class::cast)
+                .map(GuiElement.Button::text).toList());
     }
 
     @TempDir Path directory;

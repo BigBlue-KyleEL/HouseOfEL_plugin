@@ -26,6 +26,8 @@ import net.kyori.adventure.text.event.ClickCallback;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.format.TextDecoration;
 import org.bukkit.Bukkit;
+import org.bukkit.Material;
+import org.bukkit.inventory.ItemStack;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.Plugin;
 
@@ -236,7 +238,85 @@ public final class JavaJobDialog {
         return HelperTitleFormatter.dispatchTitleOf(npc, specialization, deathRecordStore, choiceStore);
     }
 
+    private void showClearingTargets(Player player, NPC npc) {
+        List<ActionButton> buttons = new ArrayList<>();
+        buttons.add(clearingButton(player, "Specific Block", () -> showClearingPicker(player, npc, "")));
+        ClearingPicker.EverythingState state = ClearingPicker.everythingState(
+                levelService.specializationOf(npc), levelService.levelOf(npc));
+        if (state != ClearingPicker.EverythingState.HIDDEN) {
+            buttons.add(clearingButton(player, state == ClearingPicker.EverythingState.AVAILABLE
+                    ? "Everything" : "Everything (Unlocks at L3)", () -> {
+                if (validateClearingPick(player, npc, Target.ANY_EARTH)) {
+                    showConfirmStep(player, npc, TaskType.CLEAR, Target.ANY_EARTH, null, null);
+                }
+            }));
+        }
+        player.showDialog(Dialog.create(factory -> factory.empty()
+                .base(DialogBase.builder(Component.text(BuilderNpcService.baseNameOf(npc) + " — Clearing")).build())
+                .type(DialogType.multiAction(buttons).columns(1)
+                        .exitAction(ActionButton.create(Component.text("Cancel"), null, 150, null)).build())));
+    }
+
+    /** The native multi-action dialog scrolls, so all matching buttons can be sent. */
+    private void showClearingPicker(Player player, NPC npc, String query) {
+        String search = ClearingPicker.query(query);
+        List<Material> results = ClearingPicker.search(search);
+        List<ActionButton> buttons = new ArrayList<>();
+        buttons.add(ActionButton.create(Component.text("Search"), null, 250,
+                DialogAction.customClick((view, audience) -> {
+                    if (audience instanceof Player p && p.getUniqueId().equals(player.getUniqueId())) {
+                        String submitted = view.getText("search");
+                        Bukkit.getScheduler().runTask(plugin, () -> {
+                            if (p.isOnline()) showClearingPicker(p, npc, submitted);
+                        });
+                    }
+                }, ClickCallback.Options.builder().build())));
+        for (Material material : results) {
+            buttons.add(clearingButton(player, Target.blockLabel(material), () -> {
+                try {
+                    Target target = Target.specificBlock(material);
+                    if (validateClearingPick(player, npc, target)) {
+                        showConfirmStep(player, npc, TaskType.CLEAR, target, null, null);
+                    }
+                } catch (IllegalArgumentException invalid) {
+                    player.sendMessage(Component.text("That block is no longer available for Clearing.", NamedTextColor.RED));
+                    showClearingPicker(player, npc, search);
+                }
+            }));
+        }
+        String status = results.isEmpty() ? "No matching blocks. Try another name."
+                : (search.isBlank() ? "Common picks" : results.size() + " matching blocks") + " — choose one block.";
+        player.showDialog(Dialog.create(factory -> factory.empty()
+                .base(DialogBase.builder(Component.text(BuilderNpcService.baseNameOf(npc) + " — Specific Block"))
+                        .body(List.of(DialogBody.plainMessage(Component.text(status))))
+                        .inputs(List.of(DialogInput.text("search", Component.text("Block name"))
+                                .initial(search).maxLength(128).width(250).build())).build())
+                .type(DialogType.multiAction(buttons).columns(1)
+                        .exitAction(clearingButton(player, "Back", () -> showClearingTargets(player, npc))).build())));
+    }
+
+    private ActionButton clearingButton(Player player, String label, Runnable action) {
+        return ActionButton.create(Component.text(label), null, 250,
+                DialogAction.customClick((view, audience) -> {
+                    if (audience instanceof Player p && p.getUniqueId().equals(player.getUniqueId())) {
+                        Bukkit.getScheduler().runTask(plugin, () -> { if (p.isOnline()) action.run(); });
+                    }
+                }, ClickCallback.Options.builder().build()));
+    }
+
+    private boolean validateClearingPick(Player player, NPC npc, Target target) {
+        if (ClearingPicker.isAllowed(target, levelService.specializationOf(npc), levelService.levelOf(npc))) return true;
+        player.sendMessage(Component.text(target == Target.ANY_EARTH
+                ? "Everything unlocks at Groundworker L3." : "That Clearing target is no longer available.", NamedTextColor.YELLOW));
+        showClearingTargets(player, npc);
+        return false;
+    }
+
     private void showTargetStep(Player player, NPC npc, TaskType taskType, Specialization specialization, int level) {
+        if (taskType == TaskType.CLEAR) {
+            showClearingTargets(player, npc);
+            return;
+        }
         List<ActionButton> buttons = new ArrayList<>();
         for (Target target : Target.values()) {
             // "Anything" (Groundworker's level-3 verb, "Clears Anything") only makes sense
@@ -458,11 +538,21 @@ public final class JavaJobDialog {
         return null;
     }
 
+    private static List<DialogBody> selectedTargetBody(Target target) {
+        if (!target.isSpecificBlock()) return List.of();
+        var description = DialogBody.plainMessage(Component.text(target.label()));
+        // Some mineable blocks have no inventory item (for example piston heads).
+        if (!target.specificMaterial().isItem()) return List.of(description);
+        return List.of(DialogBody.item(new ItemStack(target.specificMaterial()), description, false, true, 16, 16));
+    }
+
     private void showConfirmStep(Player player, NPC npc, TaskType taskType, Target target,
                                   Integer requestedLevels, Integer requestedTargetY) {
+        if (taskType == TaskType.CLEAR && !validateClearingPick(player, npc, target)) return;
         player.showDialog(Dialog.create(factory -> factory.empty()
                 .base(DialogBase.builder(Component.text(
                                 BuilderNpcService.baseNameOf(npc) + " — " + taskType.label() + " " + target.label()))
+                        .body(selectedTargetBody(target))
                         .inputs(List.of(
                                 DialogInput.bool("surfaceOnly", Component.text("Surface Only")).initial(true).build(),
                                 DialogInput.bool("storeInChest", Component.text("Store in Chest")).initial(true).build()
@@ -487,8 +577,11 @@ public final class JavaJobDialog {
 
         // beginJob() hands out an item and drives the region-selection flow — run it on
         // the main thread like every other dialog-triggered Bukkit call here.
-        Bukkit.getScheduler().runTask(plugin, () ->
-                regionService.beginJob(player, npc, taskType, target, storeInChest, surfaceOnly,
-                        requestedLevels, requestedTargetY));
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            if (!player.isOnline()) return;
+            if (taskType == TaskType.CLEAR && !validateClearingPick(player, npc, target)) return;
+            regionService.beginJob(player, npc, taskType, target, storeInChest, surfaceOnly,
+                    requestedLevels, requestedTargetY);
+        });
     }
 }
