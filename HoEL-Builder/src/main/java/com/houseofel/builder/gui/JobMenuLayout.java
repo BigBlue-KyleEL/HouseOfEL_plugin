@@ -114,7 +114,7 @@ public final class JobMenuLayout {
         children.add(label("results_status", 76, status, "#AAAAAA"));
         int y = 92;
         for (org.bukkit.Material material : ClearingPicker.page(results, safePage)) {
-            children.add(sizedButton("pick_" + material.name(), 0, y, 350,
+            children.add(sizedButton("pick_" + material.name(), 0, y, 170,
                     "pick:" + material.name(), Target.blockLabel(material), true));
             y += 24;
         }
