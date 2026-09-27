@@ -441,7 +441,12 @@ public class HouseOfElScreen extends Screen {
             } else {
                 drawBorderedBox(g, x, ry, w, 20, hover ? 0xFF505050 : 0xFF303030, 0xFF808080);
             }
-            renderItemIcon(g, option.itemId(), x + 7, ry + 2);
+            var iconPose = g.pose();
+            iconPose.pushMatrix();
+            iconPose.translate(x + 12, ry + 4);
+            iconPose.scale(0.75f, 0.75f);
+            renderItemIcon(g, option.itemId(), 0, 0);
+            iconPose.popMatrix();
             String label = option.label();
             int available = w - 38;
             if (this.font.width(label) > available) {
