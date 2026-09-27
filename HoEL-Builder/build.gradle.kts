@@ -58,3 +58,18 @@ tasks.shadowJar {
 tasks.build {
     dependsOn(tasks.shadowJar)
 }
+
+// Core target/persistence regression tests run against the same pinned API as the plugin.
+configurations.testImplementation {
+    extendsFrom(configurations.compileOnly.get())
+}
+
+dependencies {
+    testImplementation(platform("org.junit:junit-bom:5.11.4"))
+    testImplementation("org.junit.jupiter:junit-jupiter")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+}
+
+tasks.test {
+    useJUnitPlatform()
+}

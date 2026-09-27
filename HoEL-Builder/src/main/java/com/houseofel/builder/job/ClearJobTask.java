@@ -503,6 +503,14 @@ public final class ClearJobTask implements JobTask {
         if (world == null || npcEntity == null) {
             return null;
         }
+        Target target;
+        try {
+            target = Target.fromSaved(state.target, state.targetMaterial);
+        } catch (IllegalArgumentException e) {
+            plugin.getLogger().warning("Couldn't resume job for NPC #" + state.npcId
+                    + " — unrecognised target: " + e.getMessage());
+            return null;
+        }
         // Bulkhead itself doesn't need to survive a restart — resuming at Phase.SEEKING
         // and re-detecting fresh is fine, same as every other mid-action phase. But a
         // plug left over from a restart mid-wait would otherwise be a permanent stray
@@ -519,14 +527,6 @@ public final class ClearJobTask implements JobTask {
                 plugin.getLogger().info("[groundworker] Bulkhead: cleared stray plug at resume for NPC #"
                         + state.npcId + " at " + plug.getX() + "," + plug.getY() + "," + plug.getZ());
             }
-        }
-        Target target;
-        try {
-            target = Target.valueOf(state.target);
-        } catch (IllegalArgumentException e) {
-            plugin.getLogger().warning("Couldn't resume job for NPC #" + state.npcId
-                    + " — unrecognised target: " + e.getMessage());
-            return null;
         }
         // Purely a cosmetic placeholder for the few ticks before the resumed job reaches
         // its first block — resume() always restarts at Phase.SEEKING (below), so
@@ -796,6 +796,7 @@ public final class ClearJobTask implements JobTask {
         state.minZ = savedMinZ;
         state.maxZ = savedMaxZ;
         state.target = target.name();
+        state.targetMaterial = target.isSpecificBlock() ? target.specificMaterial().name() : null;
         state.surfaceOnly = surfaceOnly;
         state.restoresTopsoil = restoresTopsoil;
         state.topsoilOnly = topsoilOnly;
@@ -1314,13 +1315,15 @@ public final class ClearJobTask implements JobTask {
 
         boolean wasInfested = Target.isInfested(pendingBlock.getType());
         collectDrops(pendingBlock);
+        // Fingerprint the original material, before clearing turns it into AIR.
+        int creditUnits = creditUnitsFor(pendingBlock);
         pendingBlock.setType(Material.AIR);
         if (wasInfested) {
             spawnSurpriseSilverfish(pendingBlock.getLocation());
         }
         clearedCells++;
         clearedThisPass++;
-        awardGroundworkerProgress(creditUnitsFor(pendingBlock));
+        awardGroundworkerProgress(creditUnits);
 
         if (canBreachLava()) {
             List<Block> waterBreach = detectWaterBreach(pendingBlock);
@@ -1763,7 +1766,7 @@ public final class ClearJobTask implements JobTask {
      * job engine doesn't have) — those Helpers earn no Toil until a later item wires them.
      */
     private void awardGroundworkerProgress(int creditUnits) {
-        if (target != Target.STONE && target != Target.DIRT && target != Target.ANY_EARTH) {
+        if (!target.earnsGroundworkerProgress()) {
             return;
         }
         if (levelService.specializationOf(npc) != Specialization.GROUNDWORKER) {

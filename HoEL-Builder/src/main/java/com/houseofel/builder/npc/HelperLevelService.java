@@ -453,10 +453,9 @@ public final class HelperLevelService {
      * {@link Specialization} value yet, and isn't reachable through Clearing at all.
      */
     private static TaskType matchingTaskType(Target target) {
-        return switch (target) {
-            case STONE, DIRT, ANY_EARTH -> TaskType.CLEAR;
-            case OAK_LOG -> TaskType.LUMBERJACK;
-            case WHEAT -> TaskType.FARM;
-        };
+        if (target.earnsGroundworkerProgress()) return TaskType.CLEAR;
+        if (target == Target.OAK_LOG) return TaskType.LUMBERJACK;
+        if (target == Target.WHEAT) return TaskType.FARM;
+        throw new IllegalArgumentException("Unsupported target: " + target);
     }
 }

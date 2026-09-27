@@ -27,6 +27,8 @@ final class JobState {
     int minZ;
     int maxZ;
     String target;
+    /** Present only for SPECIFIC_BLOCK; legacy target names need no material. */
+    String targetMaterial;
     boolean surfaceOnly;
     /** Landscaper (Groundworker L8 option B): this Clear job also restores topsoil when it finishes. */
     boolean restoresTopsoil;

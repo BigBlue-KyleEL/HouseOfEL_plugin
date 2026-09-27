@@ -46,6 +46,7 @@ final class JobStateStore {
             yaml.set("minY", state.minY);
             yaml.set("maxY", state.maxY);
             yaml.set("target", state.target);
+            yaml.set("targetMaterial", state.targetMaterial);
             yaml.set("surfaceOnly", state.surfaceOnly);
             yaml.set("restoresTopsoil", state.restoresTopsoil);
             yaml.set("topsoilOnly", state.topsoilOnly);
@@ -145,6 +146,7 @@ final class JobStateStore {
                 state.minY = yaml.getInt("minY");
                 state.maxY = yaml.getInt("maxY");
                 state.target = yaml.getString("target");
+                state.targetMaterial = yaml.getString("targetMaterial");
                 state.surfaceOnly = yaml.getBoolean("surfaceOnly");
                 state.restoresTopsoil = yaml.getBoolean("restoresTopsoil");
                 state.topsoilOnly = yaml.getBoolean("topsoilOnly");
