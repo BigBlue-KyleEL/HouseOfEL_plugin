@@ -21,6 +21,7 @@ import org.bukkit.entity.Player;
 import org.bukkit.plugin.Plugin;
 import org.geysermc.cumulus.form.CustomForm;
 import org.geysermc.cumulus.form.SimpleForm;
+import org.geysermc.cumulus.util.FormImage;
 import org.geysermc.floodgate.api.FloodgateApi;
 import org.geysermc.floodgate.api.player.FloodgatePlayer;
 
@@ -153,12 +154,8 @@ public final class BedrockJobForm {
     private void showClearingResults(Player player, NPC npc, String query) {
         String search = ClearingPicker.query(query);
         java.util.List<Material> results = ClearingPicker.search(search);
-        String status = results.isEmpty() ? "No matching blocks. Try another name."
-                : search.isBlank() ? "Common picks — choose one block." : results.size() + " matching blocks — choose one.";
-        SimpleForm.Builder form = SimpleForm.builder().title(BuilderNpcService.baseNameOf(npc) + " — Specific Block")
-                .content(status).button("Search");
-        for (Material material : results) form.button(Target.blockLabel(material));
-        form.button("Back").button("Cancel");
+        SimpleForm.Builder form = clearingResultsForm(
+                BuilderNpcService.baseNameOf(npc) + " \u2014 Specific Block", search, results);
         form.validResultHandler(response -> onMain(player, () -> {
             int index = response.clickedButtonId();
             if (index == 0) {
@@ -179,6 +176,21 @@ public final class BedrockJobForm {
         }));
         form.closedOrInvalidResultHandler(() -> onClosed(player));
         send(player, form.build());
+    }
+
+    /** Presentation only: image availability must not change button indices or selection validation. */
+    static SimpleForm.Builder clearingResultsForm(String title, String search, java.util.List<Material> results) {
+        String status = results.isEmpty() ? "No matching blocks. Try another name."
+                : search.isBlank() ? "Common picks — choose one block." : results.size() + " matching blocks — choose one.";
+        SimpleForm.Builder form = SimpleForm.builder().title(title)
+                .content(status).button("Search");
+        for (Material material : results) {
+            String path = BedrockBlockTextures.pathFor(material);
+            if (path == null) form.button(Target.blockLabel(material));
+            else form.button(Target.blockLabel(material), FormImage.Type.PATH, path);
+        }
+        form.button("Back").button("Cancel");
+        return form;
     }
 
     private boolean validateClearingPick(Player player, NPC npc, Target target) {
