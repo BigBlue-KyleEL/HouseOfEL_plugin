@@ -37,6 +37,7 @@ import org.bukkit.entity.Player;
 import org.bukkit.entity.Silverfish;
 import org.bukkit.entity.TextDisplay;
 import org.bukkit.event.player.PlayerTeleportEvent;
+import org.bukkit.inventory.BlockInventoryHolder;
 import org.bukkit.inventory.EntityEquipment;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
@@ -1792,6 +1793,14 @@ public final class ClearJobTask implements JobTask {
 
     private boolean isClearable(Block block) {
         if (block == null || !target.matches(block.getType())) {
+            return false;
+        }
+        // Material-count storage cannot preserve inventories or item metadata. Check the
+        // live state on every eligibility pass, including immediately before digging.
+        // BlockInventoryHolder also covers decorated pots and chiseled bookshelves.
+        if (block.getState() instanceof BlockInventoryHolder) {
+            logger.fine(() -> "[clearing] Skipped container " + block.getType()
+                    + " at " + block.getX() + "," + block.getY() + "," + block.getZ());
             return false;
         }
         // Basic hazard-avoidance pathing (warning-only Nether/End dispatch still lets the

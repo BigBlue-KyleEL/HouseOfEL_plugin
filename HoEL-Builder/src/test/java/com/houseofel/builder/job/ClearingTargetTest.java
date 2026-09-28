@@ -342,6 +342,95 @@ class ClearingTargetTest {
                 .map(GuiElement.Button::text).toList());
     }
 
+    private ClearJobTask eligibilityTask(Target target) {
+        Plugin plugin = (Plugin) Proxy.newProxyInstance(Plugin.class.getClassLoader(), new Class<?>[]{Plugin.class},
+                (proxy, method, args) -> {
+                    if (method.getName().equals("getLogger")) return Logger.getLogger("ContainerSkipTest");
+                    throw new AssertionError(method.getName());
+                });
+        var player = (org.bukkit.entity.Player) Proxy.newProxyInstance(org.bukkit.entity.Player.class.getClassLoader(),
+                new Class<?>[]{org.bukkit.entity.Player.class}, (proxy, method, args) -> {
+                    if (method.getName().equals("getUniqueId")) return UUID.randomUUID();
+                    throw new AssertionError(method.getName());
+                });
+        return new ClearJobTask(plugin, null, null, null, null, player, null, null, null, null, null,
+                target, Material.IRON_PICKAXE, 0, 0, 0, 0, 0, 0, 1, 1, 1,
+                null, false, false, null, false, false);
+    }
+
+    private static Object stateOf(Class<?> type) {
+        return Proxy.newProxyInstance(type.getClassLoader(), new Class<?>[]{type}, (proxy, method, args) -> {
+            // The skip must never depend on empty/full inventory or touch its contents.
+            throw new AssertionError("Eligibility must not read/mutate inventory: " + method.getName());
+        });
+    }
+
+    private static Block eligibilityBlock(Material material, java.util.function.Supplier<Object> state) {
+        return (Block) Proxy.newProxyInstance(Block.class.getClassLoader(), new Class<?>[]{Block.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "getType" -> material;
+                    case "getState" -> state.get();
+                    case "getRelative" -> eligibilityBlock(Material.AIR, () -> null);
+                    case "getX", "getY", "getZ" -> 0;
+                    default -> throw new AssertionError("Unexpected block access: " + method.getName());
+                });
+    }
+
+    private static boolean clearable(ClearJobTask task, Block block) throws Exception {
+        var method = ClearJobTask.class.getDeclaredMethod("isClearable", Block.class);
+        method.setAccessible(true);
+        return (boolean) method.invoke(task, block);
+    }
+
+    @Test
+    void clearingSkipsInventoryBlocksWithoutReadingContentsAndKeepsThemPickable() throws Exception {
+        Map<Material, Class<?>> containers = Map.ofEntries(
+                Map.entry(Material.FURNACE, org.bukkit.block.Furnace.class),
+                Map.entry(Material.HOPPER, org.bukkit.block.Hopper.class),
+                Map.entry(Material.SHULKER_BOX, org.bukkit.block.ShulkerBox.class),
+                Map.entry(Material.BARREL, org.bukkit.block.Barrel.class),
+                Map.entry(Material.DISPENSER, org.bukkit.block.Dispenser.class),
+                Map.entry(Material.DROPPER, org.bukkit.block.Dropper.class),
+                Map.entry(Material.BREWING_STAND, org.bukkit.block.BrewingStand.class),
+                Map.entry(Material.DECORATED_POT, org.bukkit.block.DecoratedPot.class),
+                Map.entry(Material.CHISELED_BOOKSHELF, org.bukkit.block.ChiseledBookshelf.class),
+                Map.entry(Material.CRAFTER, org.bukkit.block.Crafter.class));
+        Set<Material> original = EnumSet.copyOf(TAGS.get("mineable/pickaxe"));
+        // Synthetic tag membership tests the runtime guard independently of pool membership.
+        TAGS.get("mineable/pickaxe").addAll(containers.keySet());
+        try {
+            for (var entry : containers.entrySet()) {
+                var state = stateOf(entry.getValue());
+                Block block = eligibilityBlock(entry.getKey(), () -> state);
+                assertTrue(ClearingTargetPool.allowedMaterials().contains(entry.getKey()));
+                assertFalse(clearable(eligibilityTask(Target.specificBlock(entry.getKey())), block), entry.getKey().name());
+                assertFalse(clearable(eligibilityTask(Target.ANY_EARTH), block), entry.getKey().name());
+            }
+        } finally {
+            TAGS.put("mineable/pickaxe", original);
+        }
+    }
+
+    @Test
+    void clearingStillAcceptsOrdinaryMatchingBlocks() throws Exception {
+        Object state = stateOf(org.bukkit.block.BlockState.class);
+        for (Material material : List.of(Material.STONE, Material.DIRT, Material.GRASS_BLOCK)) {
+            assertTrue(clearable(eligibilityTask(Target.specificBlock(material)), eligibilityBlock(material, () -> state)));
+            assertTrue(clearable(eligibilityTask(Target.ANY_EARTH), eligibilityBlock(material, () -> state)));
+        }
+        assertFalse(clearable(eligibilityTask(Target.specificBlock(Material.STONE)), eligibilityBlock(Material.DIRT, () -> state)));
+    }
+
+    @Test
+    void eligibilityRechecksLiveInventoryStateInsteadOfCachingTheFirstCheck() throws Exception {
+        var state = new java.util.concurrent.atomic.AtomicReference<>(stateOf(org.bukkit.block.BlockState.class));
+        Block block = eligibilityBlock(Material.FURNACE, state::get);
+        var task = eligibilityTask(Target.specificBlock(Material.FURNACE));
+        assertTrue(clearable(task, block));
+        state.set(stateOf(org.bukkit.block.Furnace.class));
+        assertFalse(clearable(task, block));
+    }
+
     @TempDir Path directory;
 
     private JobStateStore store() {
