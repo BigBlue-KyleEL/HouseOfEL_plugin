@@ -1,6 +1,13 @@
 package com.houseofel.builder.job;
 
 import com.houseofel.builder.gui.TaskType;
+import com.houseofel.builder.antigrind.FreshLedger;
+import com.houseofel.builder.antigrind.RedundancyTracker;
+import com.houseofel.builder.npc.Specialization;
+import com.houseofel.builder.toil.TicketKind;
+import org.bukkit.event.block.SpongeAbsorbEvent;
+import org.bukkit.block.BlockFace;
+import org.bukkit.block.data.type.Door;
 import com.houseofel.builder.npc.BuilderNpcService;
 import com.houseofel.builder.npc.HelperLevelService;
 import com.houseofel.builder.region.RegionOutline;
@@ -40,20 +47,12 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.logging.Logger;
 
-/**
- * Builds a sealed dam wall around a marked underwater region, drains the interior,
- * and maintains it dry until the player cancels. On cancel, the NPC strikes (removes)
- * the dam and returns blocks to the chest.
- *
- * <p>Phases: BUILDING (place dam walls) → DRAINING (sponge the interior) →
- * MAINTAINING (periodic scan, fix breaches) → STRIKING (remove dam on cancel).
- *
- * <p>Dam blocks come from the station chest ({@link JobStorage#withdraw}) and are
- * returned on strike ({@link JobStorage#deposit}).
+/** Builds and drains a sealed box, then frees the Helper and creates a seven-world-day
+ * region watch. Only unfinished cancellation strikes/refunds placed cobblestone.
  */
 public final class CofferdamJobTask implements JobTask {
 
-    enum CofferdamPhase { BUILDING, DRAINING, MAINTAINING, STRIKING }
+    enum CofferdamPhase { BUILDING, DRAINING, EXITING, STRIKING }
     private enum WalkState { SEEKING, WALKING, ACTING }
 
     static final Material DAM_MATERIAL = Material.COBBLESTONE;
@@ -69,7 +68,6 @@ public final class CofferdamJobTask implements JobTask {
     private static final int WALK_TIMEOUT_TICKS = 20 * 30;
     private static final int PATH_GRACE_TICKS = 20;
     private static final int PLACE_DELAY_TICKS = 3;
-    private static final int MAINTENANCE_SCAN_TICKS = 20 * 20;
     private static final Material BULKHEAD_PLUG_MATERIAL = Material.COBBLESTONE;
     private static final int BULKHEAD_SETTLE_TICKS = 60;
     private static final int BULKHEAD_SPONGE_SPACING = 5;
@@ -81,6 +79,13 @@ public final class CofferdamJobTask implements JobTask {
     private final Logger logger;
     private final JobManager jobManager;
     private final HelperLevelService levelService;
+    private final RedundancyTracker redundancyTracker;
+    private final FreshLedger freshLedger;
+    private final JobState entranceState = new JobState();
+    private final java.util.Map<Block,Integer> spongeCredits = new java.util.HashMap<>();
+    private Block activeSponge;
+    private int exitTicks;
+    private boolean ended;
     private final UUID playerId;
     private final NPC npc;
     private final Entity npcEntity;
@@ -103,7 +108,6 @@ public final class CofferdamJobTask implements JobTask {
     private int noProgressTicks;
     private double closestApproachSquared;
     private int placeDelay;
-    private int maintenanceTicks;
     private int outlineTicks;
     private int strikeCursor;
     private boolean announcedHalf;
@@ -118,17 +122,17 @@ public final class CofferdamJobTask implements JobTask {
     private final Set<Long> ticketedChunks = new HashSet<>();
     private final long startedAtMillis = System.currentTimeMillis();
 
-    CofferdamJobTask(Plugin plugin, JobManager jobManager, HelperLevelService levelService,
+    CofferdamJobTask(Plugin plugin, JobManager jobManager, HelperLevelService levelService, RedundancyTracker redundancyTracker, FreshLedger freshLedger,
                      UUID playerId, NPC npc, Entity npcEntity, EntityEquipment equipment,
                      TextDisplay label, World world,
                      int minX, int maxX, int minY, int maxY, int minZ, int maxZ,
                      RegionOutline outline, JobStorage storage) {
-        this(plugin, jobManager, levelService, playerId, npc, npcEntity, equipment, label,
+        this(plugin, jobManager, levelService, redundancyTracker, freshLedger, playerId, npc, npcEntity, equipment, label,
                 world, minX, maxX, minY, maxY, minZ, maxZ, outline, storage,
                 CofferdamPhase.BUILDING, 0, new ArrayList<>(), 0);
     }
 
-    private CofferdamJobTask(Plugin plugin, JobManager jobManager, HelperLevelService levelService,
+    private CofferdamJobTask(Plugin plugin, JobManager jobManager, HelperLevelService levelService, RedundancyTracker redundancyTracker, FreshLedger freshLedger,
                               UUID playerId, NPC npc, Entity npcEntity, EntityEquipment equipment,
                               TextDisplay label, World world,
                               int minX, int maxX, int minY, int maxY, int minZ, int maxZ,
@@ -139,11 +143,14 @@ public final class CofferdamJobTask implements JobTask {
         this.logger = plugin.getLogger();
         this.jobManager = jobManager;
         this.levelService = levelService;
+        this.redundancyTracker = redundancyTracker;
+        this.freshLedger = freshLedger;
         this.playerId = playerId;
         this.npc = npc;
         this.npcEntity = npcEntity;
         this.equipment = equipment;
         this.label = label;
+        label.setPersistent(false);
         this.world = world;
         this.minX = minX;
         this.maxX = maxX;
@@ -153,6 +160,10 @@ public final class CofferdamJobTask implements JobTask {
         this.maxZ = maxZ;
         this.outline = outline;
         this.storage = storage;
+        entranceState.minX=minX; entranceState.maxX=maxX;
+        entranceState.minY=minY; entranceState.maxY=maxY;
+        entranceState.minZ=minZ; entranceState.maxZ=maxZ;
+        entranceState.cofferdamId=UUID.randomUUID().toString();
         this.cofferdamPhase = cofferdamPhase;
         this.buildCursor = buildCursor;
         this.damBlocks = damBlocks;
@@ -163,7 +174,7 @@ public final class CofferdamJobTask implements JobTask {
     }
 
     static CofferdamJobTask resume(Plugin plugin, JobManager jobManager,
-                                    HelperLevelService levelService, JobState state, NPC npc) {
+                                    HelperLevelService levelService, RedundancyTracker redundancyTracker, FreshLedger freshLedger, JobState state, NPC npc) {
         World world = Bukkit.getWorld(state.worldName);
         Entity npcEntity = npc.getEntity();
         if (world == null || npcEntity == null) {
@@ -197,10 +208,20 @@ public final class CofferdamJobTask implements JobTask {
             });
         }
 
-        return new CofferdamJobTask(plugin, jobManager, levelService, state.playerId,
+        CofferdamJobTask task = new CofferdamJobTask(plugin, jobManager, levelService, redundancyTracker, freshLedger, state.playerId,
                 npc, npcEntity, equipment, label, world,
                 state.minX, state.maxX, state.minY, state.maxY, state.minZ, state.maxZ,
                 outline, storage, phase, state.buildCursor, damBlocks, state.strikeCursor);
+        if (state.cofferdamId!=null) task.entranceState.cofferdamId=state.cofferdamId;
+        task.entranceState.cofferdamFacing=state.cofferdamFacing;
+        task.entranceState.cofferdamDoor=state.cofferdamDoor;
+        for (String encoded:state.bulkheadPlugs) {
+            Block block=JobStorage.decodeBlock(world,encoded);
+            if (block.getType()==Material.SPONGE || block.getType()==Material.WET_SPONGE
+                    || block.getType()==BULKHEAD_PLUG_MATERIAL) task.bulkheadPlugs.add(block);
+        }
+        task.clearBulkheadPlugs();
+        return task;
     }
 
     private static void restoreStorage(JobStorage storage, JobState state, World world) {
@@ -233,9 +254,6 @@ public final class CofferdamJobTask implements JobTask {
 
     @Override
     public long estimatedRemainingMillis() {
-        if (cofferdamPhase == CofferdamPhase.MAINTAINING) {
-            return Long.MAX_VALUE;
-        }
         if (buildOrder.isEmpty() || buildCursor <= 0) {
             return Long.MAX_VALUE;
         }
@@ -259,6 +277,8 @@ public final class CofferdamJobTask implements JobTask {
                     0, false, false));
         }
         refreshChunkTickets();
+        if (waterIntrusionListener==null && (cofferdamPhase==CofferdamPhase.DRAINING
+                || cofferdamPhase==CofferdamPhase.EXITING)) registerWaterIntrusionListener();
         task = Bukkit.getScheduler().runTaskTimer(plugin, this::tick, 0L, 1L);
     }
 
@@ -280,20 +300,44 @@ public final class CofferdamJobTask implements JobTask {
         }
     }
 
+    void configureEntrance(String facing, Material door) {
+        entranceState.cofferdamFacing=facing;
+        entranceState.cofferdamDoor=door.name();
+    }
+
     @Override
     public void cancelJob() {
-        if (cofferdamPhase == CofferdamPhase.MAINTAINING
-                || cofferdamPhase == CofferdamPhase.DRAINING) {
-            clearBulkheadPlugs();
-            bulkheadWaveAnchors.clear();
-            unregisterWaterIntrusionListener();
+        if (cofferdamPhase==CofferdamPhase.STRIKING) return;
+        flushSpongeCredit();
+        clearBulkheadPlugs();
+        bulkheadWaveAnchors.clear();
+        unregisterWaterIntrusionListener();
+        removeEntrance();
+        cofferdamPhase=CofferdamPhase.STRIKING;
+        strikeCursor=damBlocks.size()-1;
+        walkState=WalkState.SEEKING;
+        npc.getNavigator().cancelNavigation();
+        if (paused) start();
+    }
+
+    private void removeEntrance() {
+        if (cofferdamPhase==CofferdamPhase.BUILDING) return;
+        if (!CofferdamGeometry.hasEntrance(entranceState)) return;
+        int[] p=CofferdamGeometry.door(entranceState);
+        BlockFace face=BlockFace.valueOf(entranceState.cofferdamFacing);
+        for (int dy=0;dy<2;dy++) {
+            Block b=world.getBlockAt(p[0],p[1]+dy,p[2]);
+            if (b.getType()==Material.valueOf(entranceState.cofferdamDoor)) b.setType(Material.AIR,false);
         }
-        finish(BuilderNpcService.baseNameOf(npc)
-                + ": All done — dam walls stay in place. " + damBlocks.size() + " block(s) used.");
+        Block lantern=world.getBlockAt(p[0]+face.getModX(),p[1]+2,p[2]+face.getModZ());
+        Block wall=lantern.getRelative(BlockFace.UP);
+        if (lantern.getType()==Material.LANTERN) lantern.setType(Material.AIR,false);
+        if (wall.getType()==Material.COBBLESTONE_WALL) wall.setType(Material.AIR,false);
     }
 
     @Override
     public JobState toJobState() {
+        flushSpongeCredit();
         JobState state = new JobState();
         state.jobType = JobType.COFFERDAM;
         state.npcId = npc.getId();
@@ -307,6 +351,11 @@ public final class CofferdamJobTask implements JobTask {
         state.maxZ = maxZ;
         state.storeInChest = true;
         state.cofferdamPhase = cofferdamPhase.name();
+        state.cofferdamId=entranceState.cofferdamId;
+        state.cofferdamFacing=entranceState.cofferdamFacing;
+        state.cofferdamDoor=entranceState.cofferdamDoor;
+        state.cofferdamHelperUuid=npc.getUniqueId().toString();
+        for (Block plug:bulkheadPlugs) state.bulkheadPlugs.add(JobStorage.encodeBlock(plug));
         state.buildCursor = buildCursor;
         state.strikeCursor = strikeCursor;
         state.damBlockPositions = new ArrayList<>();
@@ -337,6 +386,7 @@ public final class CofferdamJobTask implements JobTask {
     // ── Tick loop ───────────────────────────────────────────────────────────
 
     private void tick() {
+        flushSpongeCredit();
         if (!npcEntity.isValid()) {
             finish(BuilderNpcService.baseNameOf(npc)
                     + " disappeared mid-job — cofferdam stopped early.");
@@ -349,11 +399,12 @@ public final class CofferdamJobTask implements JobTask {
             switch (cofferdamPhase) {
                 case BUILDING -> tickBuilding();
                 case DRAINING -> tickDraining();
-                case MAINTAINING -> tickMaintaining();
+                case EXITING -> tickExiting();
                 case STRIKING -> tickStriking();
             }
         }
 
+        if (ended) return;
         if (walkState == WalkState.WALKING && outlineTicks % WALK_CUE_PERIOD == 0) {
             world.spawnParticle(Particle.CLOUD, npcEntity.getLocation().add(0, 0.1, 0),
                     2, 0.15, 0.05, 0.15, 0.01);
@@ -383,7 +434,8 @@ public final class CofferdamJobTask implements JobTask {
         while (buildCursor < buildOrder.size()) {
             int[] pos = buildOrder.get(buildCursor);
             Block block = world.getBlockAt(pos[0], pos[1], pos[2]);
-            if (!block.getType().isSolid()) {
+            if (!CofferdamGeometry.isDoor(entranceState,pos[0],pos[1],pos[2])
+                    && !block.getType().isOccluding()) {
                 targetX = pos[0];
                 targetY = pos[1];
                 targetZ = pos[2];
@@ -436,7 +488,7 @@ public final class CofferdamJobTask implements JobTask {
 
     private void placeDamBlock() {
         Block block = world.getBlockAt(targetX, targetY, targetZ);
-        if (block.getType().isSolid()) {
+        if (block.getType().isOccluding() || CofferdamGeometry.isDoor(entranceState,targetX,targetY,targetZ)) {
             buildCursor++;
             walkState = WalkState.SEEKING;
             return;
@@ -473,6 +525,8 @@ public final class CofferdamJobTask implements JobTask {
     }
 
     private void onBuildingComplete() {
+        CofferdamGeometry.entrance(world,entranceState);
+        if (waterIntrusionListener==null) registerWaterIntrusionListener();
         messagePlayer(Component.text(
                 BuilderNpcService.baseNameOf(npc)
                         + ": Dam walls are sealed. Draining the interior now.",
@@ -490,7 +544,11 @@ public final class CofferdamJobTask implements JobTask {
 
             Block anchor = bulkheadWaveAnchors.get(bulkheadWaveIndex);
             if (!anchor.getType().isSolid()) {
+                int anchorCredit=CofferdamWork.wet(anchor)?creditUnitsFor(anchor):0;
+                activeSponge=anchor;
                 anchor.setType(Material.SPONGE);
+                activeSponge=null;
+                awardProgress(anchorCredit);
                 bulkheadPlugs.add(anchor);
                 world.spawnParticle(Particle.SPLASH, anchor.getLocation().add(0.5, 0.5, 0.5),
                         12, 0.3, 0.3, 0.3, 0.05);
@@ -528,16 +586,10 @@ public final class CofferdamJobTask implements JobTask {
                     + "interior range x[" + (minX + 1) + ".." + (maxX - 1)
                     + "] y[" + (minY + 1) + ".." + (maxY - 1)
                     + "] z[" + (minZ + 1) + ".." + (maxZ - 1) + "]");
-            cofferdamPhase = CofferdamPhase.MAINTAINING;
-            maintenanceTicks = 0;
-            messagePlayer(Component.text(
-                    BuilderNpcService.baseNameOf(npc)
-                            + ": The area is dry. I'll keep it that way — cancel the job when "
-                            + "you're done working inside.",
-                    NamedTextColor.GREEN));
-            logger.info(BuilderNpcService.baseNameOf(npc)
-                    + "'s cofferdam entered maintenance [damBlocks=" + damBlocks.size()
-                    + ", drainPasses=" + drainPassCount + "]");
+            flushSpongeCredit();
+            cofferdamPhase = CofferdamPhase.EXITING;
+            exitTicks=0;
+            npc.getNavigator().cancelNavigation();
             return;
         }
 
@@ -571,10 +623,6 @@ public final class CofferdamJobTask implements JobTask {
                     totalScanned++;
                     Block block = world.getBlockAt(x, y, z);
                     Material type = block.getType();
-                    if (type == Material.SPONGE || type == Material.WET_SPONGE) {
-                        block.setType(Material.AIR);
-                        continue;
-                    }
                     if (type != Material.WATER) continue;
                     waterCount++;
                     boolean farEnough = true;
@@ -626,7 +674,8 @@ public final class CofferdamJobTask implements JobTask {
 
     private void clearBulkheadPlugs() {
         for (Block plug : bulkheadPlugs) {
-            plug.setType(Material.AIR);
+            if (plug.getType()==Material.SPONGE || plug.getType()==Material.WET_SPONGE
+                    || plug.getType()==BULKHEAD_PLUG_MATERIAL) plug.setType(Material.AIR);
         }
         bulkheadPlugs.clear();
     }
@@ -645,12 +694,16 @@ public final class CofferdamJobTask implements JobTask {
                     if (type == Material.WATER || type == Material.SEAGRASS
                             || type == Material.TALL_SEAGRASS || type == Material.KELP
                             || type == Material.KELP_PLANT) {
+                        int credit=creditUnitsFor(block);
                         block.setType(Material.AIR, false);
+                        awardProgress(credit);
                         removed++;
                     } else if (block.getBlockData() instanceof Waterlogged wl
                             && wl.isWaterlogged()) {
+                        int credit=creditUnitsFor(block);
                         wl.setWaterlogged(false);
                         block.setBlockData(wl, false);
+                        awardProgress(credit);
                         removed++;
                     }
                 }
@@ -665,6 +718,15 @@ public final class CofferdamJobTask implements JobTask {
 
     private void registerWaterIntrusionListener() {
         waterIntrusionListener = new Listener() {
+            @EventHandler(priority=EventPriority.MONITOR,ignoreCancelled=true)
+            public void onAbsorb(SpongeAbsorbEvent event) {
+                if (activeSponge==null || !event.getBlock().equals(activeSponge)) return;
+                for (var state:event.getBlocks()) {
+                    Block b=state.getBlock();
+                    if (CofferdamGeometry.interior(entranceState,b.getX(),b.getY(),b.getZ())
+                            && CofferdamWork.wet(b)) spongeCredits.computeIfAbsent(b,CofferdamJobTask.this::creditUnitsFor);
+                }
+            }
             @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
             public void onBlockFromTo(BlockFromToEvent event) {
                 Block to = event.getToBlock();
@@ -690,59 +752,87 @@ public final class CofferdamJobTask implements JobTask {
         }
     }
 
-    // ── MAINTAINING phase ──────────────────────────────────────────────────
+    // Work credit and completion.
 
-    private void tickMaintaining() {
-        if (waterIntrusionListener == null) {
-            registerWaterIntrusionListener();
-        }
-        maintenanceTicks++;
-        if (maintenanceTicks < MAINTENANCE_SCAN_TICKS) {
-            return;
-        }
-        maintenanceTicks = 0;
-
-        int repaired = 0;
-        for (int[] pos : damBlocks) {
-            Block block = world.getBlockAt(pos[0], pos[1], pos[2]);
-            if (!block.getType().isSolid()) {
-                int withdrawn = storage.withdraw(DAM_MATERIAL, 1);
-                if (withdrawn > 0) {
-                    block.setType(DAM_MATERIAL);
-                    repaired++;
-                }
-            }
-        }
-
-        int drained = 0;
-        for (int x = minX + 1; x < maxX; x++) {
-            for (int z = minZ + 1; z < maxZ; z++) {
-                for (int y = maxY - 1; y > minY; y--) {
-                    Block block = world.getBlockAt(x, y, z);
-                    Material type = block.getType();
-                    if (type == Material.WATER || type == Material.SEAGRASS
-                            || type == Material.TALL_SEAGRASS || type == Material.KELP
-                            || type == Material.KELP_PLANT) {
-                        block.setType(Material.AIR, false);
-                        drained++;
-                    } else if (block.getBlockData() instanceof Waterlogged wl
-                            && wl.isWaterlogged()) {
-                        wl.setWaterlogged(false);
-                        block.setBlockData(wl, false);
-                        drained++;
-                    }
-                }
-            }
-        }
-
-        if (repaired > 0 || drained > 0) {
-            logger.info(BuilderNpcService.baseNameOf(npc)
-                    + "'s cofferdam maintenance: repaired " + repaired + " dam blocks, drained "
-                    + drained + " water blocks");
-        }
+    private int creditUnitsFor(Block block) {
+        return CofferdamWork.credit(block,npc.getUniqueId(),redundancyTracker,freshLedger);
     }
 
-    // ── STRIKING phase ─────────────────────────────────────────────────────
+    private void awardProgress(int units) {
+        if (units<=0 || levelService.specializationOf(npc)!=Specialization.GROUNDWORKER) return;
+        for (var result:levelService.awardProgress(npc,TicketKind.GROUNDWORKER_CLEAR_512,512*4,units))
+            for (String line:result.announcementLines()) messagePlayer(Component.text(line,NamedTextColor.GREEN));
+    }
+
+    private void flushSpongeCredit() {
+        for (var entry:spongeCredits.entrySet())
+            if (!CofferdamWork.wet(entry.getKey())) awardProgress(entry.getValue());
+        spongeCredits.clear();
+    }
+
+    private void tickExiting() {
+        Location current=npcEntity.getLocation();
+        if (!CofferdamGeometry.interior(entranceState,current.getBlockX(),current.getBlockY(),current.getBlockZ())
+                && !world.getBlockAt(current).getType().isSolid()
+                && !world.getBlockAt(current).getRelative(BlockFace.UP).getType().isSolid()
+                && world.getBlockAt(current).getType()!=Material.LAVA) {
+            completeDam(); return;
+        }
+        if (exitTicks++==0 && CofferdamGeometry.hasEntrance(entranceState)) {
+            int[] p=CofferdamGeometry.door(entranceState);
+            BlockFace face=BlockFace.valueOf(entranceState.cofferdamFacing);
+            for (int dy=0;dy<2;dy++) {
+                Block b=world.getBlockAt(p[0],p[1]+dy,p[2]);
+                if (b.getBlockData() instanceof Door door) { door.setOpen(true); b.setBlockData(door,false); }
+            }
+            npc.getNavigator().setTarget(new Location(world,p[0]+face.getModX()+0.5,p[1],p[2]+face.getModZ()+0.5));
+        }
+        if (exitTicks<100) return;
+        Location safe=findSafeExit();
+        if (safe!=null && npcEntity.teleport(safe)) completeDam();
+        else if (exitTicks%200==0) messagePlayer(Component.text(
+                "The dam is dry, but I need a safe landing outside to leave it.",NamedTextColor.YELLOW));
+    }
+
+    private Location findSafeExit() {
+        for (Block chest:storage.chests()) {
+            for (BlockFace face:new BlockFace[]{BlockFace.NORTH,BlockFace.EAST,BlockFace.SOUTH,BlockFace.WEST,BlockFace.UP}) {
+                Block feet=chest.getRelative(face);
+                if (safeExit(feet)) return feet.getLocation().add(0.5,0,0.5);
+            }
+        }
+        for (int x=minX-2;x<=maxX+2;x++) for (int z=minZ-2;z<=maxZ+2;z++) {
+            Block feet=world.getBlockAt(x,maxY+1,z);
+            if (safeExit(feet)) return feet.getLocation().add(0.5,0,0.5);
+        }
+        // A fully submerged dam may have no dry landing nearby. Use a verified safe
+        // world-spawn landing rather than trapping the Helper in an endless exit job.
+        Location spawn=world.getSpawnLocation();
+        for (int radius=0;radius<=16;radius++) {
+            for (int dx=-radius;dx<=radius;dx++) for (int dz=-radius;dz<=radius;dz++) {
+                if (Math.max(Math.abs(dx),Math.abs(dz))!=radius) continue;
+                Block feet=world.getHighestBlockAt(spawn.getBlockX()+dx,spawn.getBlockZ()+dz).getRelative(BlockFace.UP);
+                if (safeExit(feet)) return feet.getLocation().add(0.5,0,0.5);
+            }
+        }
+        return null;
+    }
+    private boolean safeExit(Block feet) {
+        return !CofferdamGeometry.interior(entranceState,feet.getX(),feet.getY(),feet.getZ())
+                && feet.getType()==Material.AIR && feet.getRelative(BlockFace.UP).getType()==Material.AIR
+                && feet.getRelative(BlockFace.DOWN).getType().isSolid();
+    }
+    private void completeDam() {
+        if (CofferdamGeometry.hasEntrance(entranceState)) {
+            int[] p=CofferdamGeometry.door(entranceState);
+            for (int dy=0;dy<2;dy++) {
+                Block block=world.getBlockAt(p[0],p[1]+dy,p[2]);
+                if (block.getBlockData() instanceof Door door) { door.setOpen(false); block.setBlockData(door,false); }
+            }
+        }
+        jobManager.watchCofferdam(toJobState());
+        finish(BuilderNpcService.baseNameOf(npc)+": The dam is dry. I'm free for another job; its seven-day watch has begun.");
+    }
 
     private void tickStriking() {
         switch (walkState) {
@@ -753,6 +843,7 @@ public final class CofferdamJobTask implements JobTask {
     }
 
     private void seekNextStrikePosition() {
+        strikeCursor=Math.min(strikeCursor,damBlocks.size()-1);
         if (strikeCursor < 0) {
             onStrikeComplete();
             return;
@@ -840,7 +931,7 @@ public final class CofferdamJobTask implements JobTask {
                     text = "Draining...";
                 }
             }
-            case MAINTAINING -> text = "Maintaining";
+            case EXITING -> text = "Leaving dam";
             case STRIKING -> {
                 int total = damBlocks.size();
                 int removed = total - strikeCursor - 1;
@@ -867,6 +958,8 @@ public final class CofferdamJobTask implements JobTask {
     }
 
     private void teardown() {
+        ended=true;
+        flushSpongeCredit();
         if (task != null) {
             task.cancel();
             task = null;
@@ -925,6 +1018,12 @@ public final class CofferdamJobTask implements JobTask {
     private void refreshChunkTickets() {
         Set<Long> desired = new HashSet<>();
         desired.add(chunkKey(npcEntity.getLocation()));
+        if (CofferdamGeometry.hasEntrance(entranceState)) {
+            int[] p=CofferdamGeometry.door(entranceState);
+            BlockFace face=BlockFace.valueOf(entranceState.cofferdamFacing);
+            desired.add(chunkKey(p[0]>>4,p[2]>>4));
+            desired.add(chunkKey((p[0]+face.getModX())>>4,(p[2]+face.getModZ())>>4));
+        }
         if (walkState == WalkState.WALKING || walkState == WalkState.ACTING) {
             desired.add(chunkKey(targetX >> 4, targetZ >> 4));
         }

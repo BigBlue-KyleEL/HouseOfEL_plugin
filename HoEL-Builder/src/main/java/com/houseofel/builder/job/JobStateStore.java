@@ -23,6 +23,14 @@ final class JobStateStore {
 
     void save(JobState state) {
         jobsFolder.mkdirs();
+        try {
+            encode(state).save(fileFor(state.npcId));
+        } catch (IOException e) {
+            logger.warning("Couldn't save job state for NPC #" + state.npcId + ": " + e.getMessage());
+        }
+    }
+
+    static YamlConfiguration encode(JobState state) {
         YamlConfiguration yaml = new YamlConfiguration();
         yaml.set("jobType", state.jobType.name());
         yaml.set("npcId", state.npcId);
@@ -75,6 +83,10 @@ final class JobStateStore {
             yaml.set("minY", state.minY);
             yaml.set("maxY", state.maxY);
             yaml.set("cofferdamPhase", state.cofferdamPhase);
+            yaml.set("cofferdamId", state.cofferdamId);
+            yaml.set("cofferdamFacing", state.cofferdamFacing);
+            yaml.set("cofferdamDoor", state.cofferdamDoor);
+            yaml.set("cofferdamHelperUuid", state.cofferdamHelperUuid);
             yaml.set("buildCursor", state.buildCursor);
             yaml.set("strikeCursor", state.strikeCursor);
             yaml.set("damBlockPositions", state.damBlockPositions);
@@ -89,11 +101,7 @@ final class JobStateStore {
         yaml.set("rowSign", state.rowSign);
         yaml.set("columnSign", state.columnSign);
 
-        try {
-            yaml.save(fileFor(state.npcId));
-        } catch (IOException e) {
-            logger.warning("Couldn't save job state for NPC #" + state.npcId + ": " + e.getMessage());
-        }
+        return yaml;
     }
 
     void delete(int npcId) {
@@ -118,6 +126,14 @@ final class JobStateStore {
     private JobState load(File file) {
         YamlConfiguration yaml = YamlConfiguration.loadConfiguration(file);
         try {
+            return decode(yaml);
+        } catch (RuntimeException e) {
+            logger.warning("Couldn't parse job state file " + file.getName() + ": " + e.getMessage());
+            return null;
+        }
+    }
+
+    static JobState decode(YamlConfiguration yaml) {
             JobState state = new JobState();
             // Defaults to CLEAR (JobType's own field default) when the key is missing —
             // every file written before this field existed has no jobType key at all.
@@ -175,6 +191,10 @@ final class JobStateStore {
                 state.minY = yaml.getInt("minY");
                 state.maxY = yaml.getInt("maxY");
                 state.cofferdamPhase = yaml.getString("cofferdamPhase");
+                state.cofferdamId = yaml.getString("cofferdamId");
+                state.cofferdamFacing = yaml.getString("cofferdamFacing");
+                state.cofferdamDoor = yaml.getString("cofferdamDoor");
+                state.cofferdamHelperUuid = yaml.getString("cofferdamHelperUuid");
                 state.buildCursor = yaml.getInt("buildCursor");
                 state.strikeCursor = yaml.getInt("strikeCursor");
                 state.damBlockPositions = yaml.getStringList("damBlockPositions");
@@ -189,10 +209,6 @@ final class JobStateStore {
             state.rowSign = yaml.getInt("rowSign");
             state.columnSign = yaml.getInt("columnSign");
             return state;
-        } catch (RuntimeException e) {
-            logger.warning("Couldn't parse job state file " + file.getName() + ": " + e.getMessage());
-            return null;
-        }
     }
 
     private File fileFor(int npcId) {

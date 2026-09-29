@@ -426,19 +426,38 @@ public final class JobExecutionService {
 
         World world = pointA.getWorld();
 
-        int minX = Math.min(pointA.getBlockX(), pointB.getBlockX());
-        int minY = Math.min(pointA.getBlockY(), pointB.getBlockY());
-        int minZ = Math.min(pointA.getBlockZ(), pointB.getBlockZ());
-        int maxX = Math.max(pointA.getBlockX(), pointB.getBlockX());
-        int maxY = Math.max(pointA.getBlockY(), pointB.getBlockY());
-        int maxZ = Math.max(pointA.getBlockZ(), pointB.getBlockZ());
+        int minX = Math.min(pointA.getBlockX(), pointB.getBlockX()) - 1;
+        int minY = Math.min(pointA.getBlockY(), pointB.getBlockY()) - 1;
+        int minZ = Math.min(pointA.getBlockZ(), pointB.getBlockZ()) - 1;
+        int maxX = Math.max(pointA.getBlockX(), pointB.getBlockX()) + 1;
+        int maxY = Math.max(pointA.getBlockY(), pointB.getBlockY()) + 1;
+        int maxZ = Math.max(pointA.getBlockZ(), pointB.getBlockZ()) + 1;
 
+        if (maxY-minY-1 < 2) {
+            player.sendMessage(Component.text("Select at least two blocks of usable interior height.",NamedTextColor.RED));
+            return null;
+        }
+        if (minY < world.getMinHeight() || Math.max(maxY,minY+4) >= world.getMaxHeight()) {
+            player.sendMessage(Component.text("The dam shell and entrance marker would exceed world height limits.",NamedTextColor.RED));
+            return null;
+        }
+        if (!world.getWorldBorder().isInside(new Location(world,minX-1,minY,minZ-1))
+                || !world.getWorldBorder().isInside(new Location(world,maxX+2,maxY,maxZ+2))) {
+            player.sendMessage(Component.text("The dam shell or entrance marker would cross the world border.",NamedTextColor.RED));
+            return null;
+        }
+        String facing=CofferdamGeometry.facing(player.getLocation().getX(),player.getLocation().getZ(),minX,maxX,minZ,maxZ);
+        Material door=CofferdamGeometry.chooseDoor(world,new Location(world,(minX+maxX)/2.0,minY+1,(minZ+maxZ)/2.0));
+        if (door==null) {
+            player.sendMessage(Component.text("No wooded biome was found within 8192 blocks for the dam door.",NamedTextColor.RED));
+            return null;
+        }
         boolean hasWater = false;
         outer:
-        for (int x = minX; x <= maxX; x++) {
-            for (int z = minZ; z <= maxZ; z++) {
-                for (int y = minY; y <= maxY; y++) {
-                    if (world.getBlockAt(x, y, z).getType() == Material.WATER) {
+        for (int x = minX+1; x < maxX; x++) {
+            for (int z = minZ+1; z < maxZ; z++) {
+                for (int y = minY+1; y < maxY; y++) {
+                    if (CofferdamWork.wet(world.getBlockAt(x, y, z))) {
                         hasWater = true;
                         break outer;
                     }
@@ -473,7 +492,7 @@ public final class JobExecutionService {
                         + ": Got it, I'll use that one at " + c + ".",
                         NamedTextColor.GREEN));
                 finishCofferdamDispatch(player, npc, storage, world,
-                        minX, maxX, minY, maxY, minZ, maxZ, wallBlocks);
+                        minX, maxX, minY, maxY, minZ, maxZ, wallBlocks, facing, door);
             };
         }
 
@@ -484,13 +503,13 @@ public final class JobExecutionService {
         logger.info("Storage chest placed at " + coords + " for " + player.getName() + "'s cofferdam");
 
         finishCofferdamDispatch(player, npc, storage, world,
-                minX, maxX, minY, maxY, minZ, maxZ, wallBlocks);
+                minX, maxX, minY, maxY, minZ, maxZ, wallBlocks, facing, door);
         return null;
     }
 
     private void finishCofferdamDispatch(Player player, NPC npc, JobStorage storage, World world,
                                           int minX, int maxX, int minY, int maxY, int minZ, int maxZ,
-                                          int wallBlocks) {
+                                          int wallBlocks, String facing, Material door) {
         Entity npcEntity = npc.getEntity();
         if (npcEntity == null) return;
 
@@ -506,9 +525,10 @@ public final class JobExecutionService {
 
         RegionOutline outline = new RegionOutline(world, minX, minY, minZ, maxX, maxY, maxZ);
 
-        CofferdamJobTask task = new CofferdamJobTask(plugin, jobManager, levelService,
+        CofferdamJobTask task = new CofferdamJobTask(plugin, jobManager, levelService, redundancyTracker, freshLedger,
                 player.getUniqueId(), npc, npcEntity, equipment, label, world,
                 minX, maxX, minY, maxY, minZ, maxZ, outline, storage);
+        task.configureEntrance(facing,door);
         jobManager.register(task);
         task.start();
     }

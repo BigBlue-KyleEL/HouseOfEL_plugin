@@ -57,6 +57,10 @@ final class JobState {
 
     // Cofferdam-only (Groundworker L16 option A).
     String cofferdamPhase;
+    String cofferdamId;
+    String cofferdamFacing;
+    String cofferdamDoor;
+    String cofferdamHelperUuid;
     int buildCursor;
     int strikeCursor;
     List<String> damBlockPositions = new ArrayList<>();

@@ -50,6 +50,7 @@ public final class JobManager {
     private final HelperLevelService levelService;
     private final RedundancyTracker redundancyTracker;
     private final FreshLedger freshLedger;
+    private final CofferdamWatchService cofferdamWatches;
     private final Map<Integer, JobTask> jobs = new ConcurrentHashMap<>();
     /**
      * How many jobs currently want each chunk kept loaded. Paper's own chunk-ticket API
@@ -70,6 +71,7 @@ public final class JobManager {
         this.levelService = levelService;
         this.redundancyTracker = redundancyTracker;
         this.freshLedger = freshLedger;
+        this.cofferdamWatches = new CofferdamWatchService(plugin, this, levelService, redundancyTracker, freshLedger);
     }
 
     /** Queues a message for a player who's currently offline — delivered the next time they log in. */
@@ -94,6 +96,8 @@ public final class JobManager {
         jobs.remove(npcId);
         store.delete(npcId);
     }
+
+    void watchCofferdam(JobState state) { cofferdamWatches.add(state); }
 
     /** A job wants this chunk kept loaded — only actually tickets it if nobody already has. */
     void requestChunk(World world, int chunkX, int chunkZ) {
@@ -197,6 +201,7 @@ public final class JobManager {
 
     /** Snapshots every tracked job (running or paused) to disk — the restart safety net. */
     public void saveAllOnDisable() {
+        cofferdamWatches.saveAll();
         for (JobTask task : jobs.values()) {
             store.save(task.toJobState());
         }
@@ -211,15 +216,35 @@ public final class JobManager {
      * persisted {@link JobType} to call the right concrete one.
      */
     public void resumeAllOnEnable() {
+        cofferdamWatches.start();
         int resumed = 0;
         int deferred = 0;
         for (JobState state : store.loadAll()) {
             NPC npc = CitizensAPI.getNPCRegistry().getById(state.npcId);
+            if (state.jobType == JobType.COFFERDAM && ("MAINTAINING".equals(state.cofferdamPhase)
+                    || cofferdamWatches.contains(state.cofferdamId))) {
+                if (npc != null) {
+                    state.cofferdamHelperUuid = npc.getUniqueId().toString();
+                    npc.getNavigator().cancelNavigation();
+                    if (npc.getEntity() instanceof org.bukkit.entity.LivingEntity living) {
+                        living.removePotionEffect(org.bukkit.potion.PotionEffectType.WATER_BREATHING);
+                        if (living.getEquipment()!=null) living.getEquipment().setItemInMainHand(null);
+                        for (var entity:living.getNearbyEntities(0.75,3,0.75)) {
+                            if (entity instanceof org.bukkit.entity.TextDisplay display
+                                    && display.text().equals(Component.text("Maintaining",NamedTextColor.YELLOW))) display.remove();
+                        }
+                    }
+                }
+                cofferdamWatches.add(state);
+                store.delete(state.npcId);
+                logger.info("Migrated completed Cofferdam for NPC #" + state.npcId + " to a region watch.");
+                continue;
+            }
             JobTask task = npc == null ? null : switch (state.jobType) {
                 case CLEAR -> ClearJobTask.resume(plugin, this, levelService, redundancyTracker, freshLedger, state, npc);
                 case QUARRY -> QuarrymanJobTask.resume(plugin, this, levelService, redundancyTracker, freshLedger, state, npc);
                 case LANDSCAPE -> LandscaperJobTask.resume(plugin, this, levelService, redundancyTracker, freshLedger, state, npc);
-                case COFFERDAM -> CofferdamJobTask.resume(plugin, this, levelService, state, npc);
+                case COFFERDAM -> CofferdamJobTask.resume(plugin, this, levelService, redundancyTracker, freshLedger, state, npc);
                 case SHAFT_MINER -> ShaftMinerJobTask.resume(plugin, this, levelService, redundancyTracker, freshLedger, state, npc);
             };
             if (task == null) {
