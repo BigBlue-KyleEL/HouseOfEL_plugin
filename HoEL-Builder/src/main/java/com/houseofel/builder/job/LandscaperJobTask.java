@@ -1,6 +1,12 @@
 package com.houseofel.builder.job;
 
 import com.houseofel.builder.gui.TaskType;
+import com.houseofel.builder.antigrind.FreshLedger;
+import com.houseofel.builder.antigrind.RedundancyTracker;
+import com.houseofel.builder.antigrind.TaskFingerprint;
+import com.houseofel.builder.npc.Specialization;
+import com.houseofel.builder.toil.TicketKind;
+import com.houseofel.builder.npc.TicketAwardResult;
 import com.houseofel.builder.npc.BuilderNpcService;
 import com.houseofel.builder.npc.HelperLevelService;
 import com.houseofel.builder.region.RegionOutline;
@@ -64,6 +70,8 @@ public final class LandscaperJobTask implements JobTask {
     private final Logger logger;
     private final JobManager jobManager;
     private final HelperLevelService levelService;
+    private final RedundancyTracker redundancyTracker;
+    private final FreshLedger freshLedger;
     private final UUID playerId;
     private final NPC npc;
     private final Entity npcEntity;
@@ -110,17 +118,19 @@ public final class LandscaperJobTask implements JobTask {
 
     /** Fresh job, just dispatched. */
     LandscaperJobTask(Plugin plugin, JobManager jobManager, HelperLevelService levelService,
+                       RedundancyTracker redundancyTracker, FreshLedger freshLedger,
                        Player player, NPC npc, Entity npcEntity, EntityEquipment equipment,
                        TextDisplay label, World world, LandscapeMode mode, LandscapeBiome landscapeBiome,
                        int minX, int maxX, int minY, int maxY, int minZ, int maxZ,
                        int spanX, int spanZ, RegionOutline outline,
                        int gradientAX, int gradientAZ) {
-        this(plugin, jobManager, levelService, player.getUniqueId(), npc, npcEntity, equipment,
+        this(plugin, jobManager, levelService, redundancyTracker, freshLedger, player.getUniqueId(), npc, npcEntity, equipment,
                 label, world, mode, landscapeBiome, minX, maxX, minY, maxY, minZ, maxZ, spanX, spanZ, outline,
                 Phase.SEEKING, 0, 0, -1, gradientAX, gradientAZ);
     }
 
     private LandscaperJobTask(Plugin plugin, JobManager jobManager, HelperLevelService levelService,
+                       RedundancyTracker redundancyTracker, FreshLedger freshLedger,
                                UUID playerId, NPC npc, Entity npcEntity, EntityEquipment equipment,
                                TextDisplay label, World world, LandscapeMode mode, LandscapeBiome landscapeBiome,
                                int minX, int maxX, int minY, int maxY, int minZ, int maxZ,
@@ -131,6 +141,8 @@ public final class LandscaperJobTask implements JobTask {
         this.logger = plugin.getLogger();
         this.jobManager = jobManager;
         this.levelService = levelService;
+        this.redundancyTracker = redundancyTracker;
+        this.freshLedger = freshLedger;
         this.playerId = playerId;
         this.npc = npc;
         this.npcEntity = npcEntity;
@@ -160,6 +172,7 @@ public final class LandscaperJobTask implements JobTask {
     }
 
     static LandscaperJobTask resume(Plugin plugin, JobManager jobManager, HelperLevelService levelService,
+                       RedundancyTracker redundancyTracker, FreshLedger freshLedger,
                                      JobState state, NPC npc) {
         World world = Bukkit.getWorld(state.worldName);
         Entity npcEntity = npc.getEntity();
@@ -188,7 +201,7 @@ public final class LandscaperJobTask implements JobTask {
         RegionOutline outline = new RegionOutline(world, state.minX, state.minY, state.minZ,
                 state.maxX, state.maxY, state.maxZ);
 
-        LandscaperJobTask task = new LandscaperJobTask(plugin, jobManager, levelService, state.playerId, npc,
+        LandscaperJobTask task = new LandscaperJobTask(plugin, jobManager, levelService, redundancyTracker, freshLedger, state.playerId, npc,
                 npcEntity, equipment, label, world, mode, biome, state.minX, state.maxX, state.minY,
                 state.maxY, state.minZ, state.maxZ, spanX, spanZ, outline,
                 Phase.SEEKING, state.landscapeColumn, state.landscapePlaced, state.landscapeTreeCursor,
@@ -553,7 +566,7 @@ public final class LandscaperJobTask implements JobTask {
             } else if (placingY == columnTargetHeight + 1) {
                 Material deco = decorationForBiome(targetColumnX, targetColumnZ);
                 if (deco != null && block.getType() != deco) {
-                    block.setType(deco);
+                    changeBlock(block, deco);
                     totalPlaced++;
                     placeDelay = PLACE_DELAY_TICKS;
                 } else if (deco == null && block.getType().isSolid()) {
@@ -571,7 +584,7 @@ public final class LandscaperJobTask implements JobTask {
     }
 
     private void placeBlock(Block block, Material material) {
-        block.setType(material);
+        changeBlock(block, material);
         totalPlaced++;
         placeDelay = PLACE_DELAY_TICKS;
         world.playSound(block.getLocation(), Sound.BLOCK_ROOTED_DIRT_PLACE, 0.7f, 1.0f);
@@ -598,10 +611,40 @@ public final class LandscaperJobTask implements JobTask {
     private void clearBlock(Block block) {
         world.spawnParticle(Particle.BLOCK, block.getLocation().add(0.5, 0.5, 0.5),
                 6, 0.25, 0.25, 0.25, block.getBlockData());
-        block.setType(Material.AIR);
+        changeBlock(block, Material.AIR);
         totalPlaced++;
         placeDelay = PLACE_DELAY_TICKS;
         world.playSound(block.getLocation(), Sound.BLOCK_ROOTED_DIRT_BREAK, 0.7f, 1.0f);
+    }
+
+    /** One approved unit per actual material change, including clearing and tree/decor work.
+     * Fingerprint the original block before mutation, as Clearing and Quarryman do.
+     * Progress belongs to the Helper's existing persisted 512-block ticket, not this job.
+     */
+    private void changeBlock(Block block, Material material) {
+        if (block.getType() == material) return;
+        int creditUnits = creditUnitsFor(block);
+        block.setType(material);
+        if (creditUnits <= 0 || levelService.specializationOf(npc) != Specialization.GROUNDWORKER) return;
+        for (TicketAwardResult result : levelService.awardProgress(
+                npc, TicketKind.GROUNDWORKER_CLEAR_512, 512 * 4, creditUnits)) {
+            for (String line : result.announcementLines()) {
+                messagePlayer(Component.text(line, NamedTextColor.GREEN));
+            }
+        }
+    }
+
+    private int creditUnitsFor(Block block) {
+        long now = System.currentTimeMillis();
+        TaskFingerprint fingerprint = new TaskFingerprint(TaskType.LANDSCAPE, world.getName(),
+                block.getX(), block.getY(), block.getZ(), ClearJobTask.canonicalMaterialClass(block));
+        RedundancyTracker.CreditTier tier = redundancyTracker.check(npc.getUniqueId(), fingerprint, now);
+        if (freshLedger.isFresh(block, now)) return 0;
+        return switch (tier) {
+            case ZERO -> 0;
+            case REDUCED -> 1;
+            case FULL -> 4;
+        };
     }
 
     private void announceMilestones() {
@@ -995,7 +1038,7 @@ public final class LandscaperJobTask implements JobTask {
         for (int dy = 1; dy <= trunkHeight; dy++) {
             Block block = world.getBlockAt(x, groundY + dy, z);
             if (!block.getType().isSolid()) {
-                block.setType(logMat);
+                changeBlock(block, logMat);
                 totalPlaced++;
             }
         }
@@ -1011,7 +1054,7 @@ public final class LandscaperJobTask implements JobTask {
                             && blockVariation(lx, ly, lz, 0.3)) continue;
                     Block leaf = world.getBlockAt(lx, ly, lz);
                     if (!leaf.getType().isSolid()) {
-                        leaf.setType(leafMat);
+                        changeBlock(leaf, leafMat);
                         totalPlaced++;
                     }
                 }

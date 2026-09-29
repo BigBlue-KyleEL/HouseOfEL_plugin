@@ -246,7 +246,7 @@ public final class JobExecutionService {
 
         RegionOutline outline = new RegionOutline(world, minX, minY, minZ, maxX, maxY, maxZ);
 
-        LandscaperJobTask task = new LandscaperJobTask(plugin, jobManager, levelService,
+        LandscaperJobTask task = new LandscaperJobTask(plugin, jobManager, levelService, redundancyTracker, freshLedger,
                 player, npc, npcEntity, equipment, label, world, mode, landscapeBiome,
                 minX, maxX, minY, maxY, minZ, maxZ, spanX, spanZ, outline,
                 pointA.getBlockX(), pointA.getBlockZ());

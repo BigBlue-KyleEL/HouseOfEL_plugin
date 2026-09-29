@@ -218,7 +218,7 @@ public final class JobManager {
             JobTask task = npc == null ? null : switch (state.jobType) {
                 case CLEAR -> ClearJobTask.resume(plugin, this, levelService, redundancyTracker, freshLedger, state, npc);
                 case QUARRY -> QuarrymanJobTask.resume(plugin, this, levelService, redundancyTracker, freshLedger, state, npc);
-                case LANDSCAPE -> LandscaperJobTask.resume(plugin, this, levelService, state, npc);
+                case LANDSCAPE -> LandscaperJobTask.resume(plugin, this, levelService, redundancyTracker, freshLedger, state, npc);
                 case COFFERDAM -> CofferdamJobTask.resume(plugin, this, levelService, state, npc);
                 case SHAFT_MINER -> ShaftMinerJobTask.resume(plugin, this, levelService, redundancyTracker, freshLedger, state, npc);
             };
