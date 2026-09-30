@@ -86,6 +86,9 @@ final class JobStateStore {
             yaml.set("cofferdamId", state.cofferdamId);
             yaml.set("cofferdamFacing", state.cofferdamFacing);
             yaml.set("cofferdamDoor", state.cofferdamDoor);
+            yaml.set("cofferdamDoorX", state.cofferdamDoorX);
+            yaml.set("cofferdamDoorY", state.cofferdamDoorY);
+            yaml.set("cofferdamDoorZ", state.cofferdamDoorZ);
             yaml.set("cofferdamHasCeiling", state.cofferdamHasCeiling);
             yaml.set("cofferdamHelperUuid", state.cofferdamHelperUuid);
             yaml.set("buildCursor", state.buildCursor);
@@ -195,6 +198,9 @@ final class JobStateStore {
                 state.cofferdamId = yaml.getString("cofferdamId");
                 state.cofferdamFacing = yaml.getString("cofferdamFacing");
                 state.cofferdamDoor = yaml.getString("cofferdamDoor");
+                state.cofferdamDoorX = yaml.contains("cofferdamDoorX") ? yaml.getInt("cofferdamDoorX") : null;
+                state.cofferdamDoorY = yaml.contains("cofferdamDoorY") ? yaml.getInt("cofferdamDoorY") : null;
+                state.cofferdamDoorZ = yaml.contains("cofferdamDoorZ") ? yaml.getInt("cofferdamDoorZ") : null;
                 state.cofferdamHasCeiling = yaml.getBoolean("cofferdamHasCeiling", true);
                 state.cofferdamHelperUuid = yaml.getString("cofferdamHelperUuid");
                 state.buildCursor = yaml.getInt("buildCursor");

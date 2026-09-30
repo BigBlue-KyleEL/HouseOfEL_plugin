@@ -215,6 +215,9 @@ public final class CofferdamJobTask implements JobTask {
         if (state.cofferdamId!=null) task.entranceState.cofferdamId=state.cofferdamId;
         task.entranceState.cofferdamFacing=state.cofferdamFacing;
         task.entranceState.cofferdamDoor=state.cofferdamDoor;
+        task.entranceState.cofferdamDoorX=state.cofferdamDoorX;
+        task.entranceState.cofferdamDoorY=state.cofferdamDoorY;
+        task.entranceState.cofferdamDoorZ=state.cofferdamDoorZ;
         task.configureCeiling(state.cofferdamHasCeiling);
         for (String encoded:state.bulkheadPlugs) {
             Block block=JobStorage.decodeBlock(world,encoded);
@@ -307,9 +310,12 @@ public final class CofferdamJobTask implements JobTask {
         announcedHalf=buildOrder.isEmpty() || buildCursor*2>=buildOrder.size();
     }
 
-    void configureEntrance(String facing, Material door) {
+    void configureEntrance(String facing, Material door, int[] position) {
         entranceState.cofferdamFacing=facing;
         entranceState.cofferdamDoor=door.name();
+        entranceState.cofferdamDoorX=position[0];
+        entranceState.cofferdamDoorY=position[1];
+        entranceState.cofferdamDoorZ=position[2];
     }
 
     @Override
@@ -361,6 +367,9 @@ public final class CofferdamJobTask implements JobTask {
         state.cofferdamId=entranceState.cofferdamId;
         state.cofferdamFacing=entranceState.cofferdamFacing;
         state.cofferdamDoor=entranceState.cofferdamDoor;
+        state.cofferdamDoorX=entranceState.cofferdamDoorX;
+        state.cofferdamDoorY=entranceState.cofferdamDoorY;
+        state.cofferdamDoorZ=entranceState.cofferdamDoorZ;
         state.cofferdamHasCeiling=entranceState.cofferdamHasCeiling;
         state.cofferdamHelperUuid=npc.getUniqueId().toString();
         for (Block plug:bulkheadPlugs) state.bulkheadPlugs.add(JobStorage.encodeBlock(plug));

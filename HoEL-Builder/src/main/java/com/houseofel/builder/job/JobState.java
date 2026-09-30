@@ -60,6 +60,9 @@ final class JobState {
     String cofferdamId;
     String cofferdamFacing;
     String cofferdamDoor;
+    Integer cofferdamDoorX;
+    Integer cofferdamDoorY;
+    Integer cofferdamDoorZ;
     boolean cofferdamHasCeiling = true; // Legacy jobs retain their original closed shell.
     String cofferdamHelperUuid;
     int buildCursor;

@@ -476,6 +476,18 @@ public final class JobExecutionService {
         }
 
         boolean hasCeiling=CofferdamGeometry.requiresCeiling(world,minX,maxX,maxY,minZ,maxZ);
+        JobState entranceGeometry=new JobState();
+        entranceGeometry.minX=minX; entranceGeometry.maxX=maxX;
+        entranceGeometry.minY=minY; entranceGeometry.maxY=maxY;
+        entranceGeometry.minZ=minZ; entranceGeometry.maxZ=maxZ;
+        entranceGeometry.cofferdamFacing=facing;
+        entranceGeometry.cofferdamHasCeiling=hasCeiling;
+        int[] entrance=CofferdamGeometry.chooseEntrance(world,entranceGeometry);
+        if (entrance==null) {
+            player.sendMessage(Component.text("There is no ground-level doorway with two blocks of clearance on that side. "
+                    + "Raise the top of your selection or clear an approach, then confirm again.",NamedTextColor.RED));
+            return null;
+        }
         int wallBlocks = CofferdamJobTask.computeBuildOrder(minX, maxX, minY, maxY, minZ, maxZ,hasCeiling).size();
 
         JobStorage storage = new JobStorage(plugin, world, minX, maxX, minY, maxY, minZ, maxZ);
@@ -493,7 +505,7 @@ public final class JobExecutionService {
                         + ": Got it, I'll use that one at " + c + ".",
                         NamedTextColor.GREEN));
                 finishCofferdamDispatch(player, npc, storage, world,
-                        minX, maxX, minY, maxY, minZ, maxZ, wallBlocks, facing, door, hasCeiling);
+                        minX, maxX, minY, maxY, minZ, maxZ, wallBlocks, facing, door, hasCeiling, entrance);
             };
         }
 
@@ -504,13 +516,13 @@ public final class JobExecutionService {
         logger.info("Storage chest placed at " + coords + " for " + player.getName() + "'s cofferdam");
 
         finishCofferdamDispatch(player, npc, storage, world,
-                minX, maxX, minY, maxY, minZ, maxZ, wallBlocks, facing, door, hasCeiling);
+                minX, maxX, minY, maxY, minZ, maxZ, wallBlocks, facing, door, hasCeiling, entrance);
         return null;
     }
 
     private void finishCofferdamDispatch(Player player, NPC npc, JobStorage storage, World world,
                                           int minX, int maxX, int minY, int maxY, int minZ, int maxZ,
-                                          int wallBlocks, String facing, Material door, boolean hasCeiling) {
+                                          int wallBlocks, String facing, Material door, boolean hasCeiling, int[] entrance) {
         Entity npcEntity = npc.getEntity();
         if (npcEntity == null) return;
 
@@ -529,7 +541,7 @@ public final class JobExecutionService {
         CofferdamJobTask task = new CofferdamJobTask(plugin, jobManager, levelService, redundancyTracker, freshLedger,
                 player.getUniqueId(), npc, npcEntity, equipment, label, world,
                 minX, maxX, minY, maxY, minZ, maxZ, outline, storage);
-        task.configureEntrance(facing,door);
+        task.configureEntrance(facing,door,entrance);
         task.configureCeiling(hasCeiling);
         jobManager.register(task);
         task.start();

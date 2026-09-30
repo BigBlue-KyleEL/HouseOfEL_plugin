@@ -212,4 +212,65 @@ class CofferdamTest {
         yaml.set("cofferdamHasCeiling",null);
         assertTrue(JobStateStore.decode(yaml).cofferdamHasCeiling);
     }
+    private World terrainWorld(java.util.function.Function<int[],Material> terrain) {
+        return (World)Proxy.newProxyInstance(World.class.getClassLoader(),new Class[]{World.class},(p,m,a)-> {
+            if (m.getName().equals("getMaxHeight")) return 320;
+            if (m.getName().equals("getBlockAt")) {
+                int x=(int)a[0],y=(int)a[1],z=(int)a[2];
+                Material type=terrain.apply(new int[]{x,y,z});
+                return Proxy.newProxyInstance(Block.class.getClassLoader(),new Class[]{Block.class},(bp,bm,ba)->switch(bm.getName()) {
+                    case "getType" -> type;
+                    case "getBlockData" -> Proxy.newProxyInstance(org.bukkit.block.data.BlockData.class.getClassLoader(),
+                            new Class[]{org.bukkit.block.data.BlockData.class},(dp,dm,da)-> {
+                                if (dm.getName().equals("isFaceSturdy")) return type==Material.STONE;
+                                throw new UnsupportedOperationException(dm.getName());
+                            });
+                    case "isPassable" -> type==Material.AIR || type==Material.WATER;
+                    case "getX" -> x;
+                    case "getY" -> y;
+                    case "getZ" -> z;
+                    default -> throw new UnsupportedOperationException(bm.getName());
+                });
+            }
+            throw new UnsupportedOperationException(m.getName());
+        });
+    }
+    @Test void entranceRisesToExteriorGroundOnEveryWall() {
+        for (String facing:List.of("NORTH","EAST","SOUTH","WEST")) {
+            JobState s=state();s.maxX=4;s.maxZ=4;s.maxY=20;s.cofferdamFacing=facing;
+            var face=org.bukkit.block.BlockFace.valueOf(facing);
+            World terrain=terrainWorld(p->{
+                boolean outside=face.getModX()!=0?p[0]==(face.getModX()>0?5:-1):p[2]==(face.getModZ()>0?5:-1);
+                return outside && p[1]<=14?Material.STONE:Material.AIR;
+            });
+            int[] entrance=CofferdamGeometry.chooseEntrance(terrain,s);
+            assertNotNull(entrance);
+            assertEquals(15,entrance[1]);
+        }
+    }
+    @Test void entranceMovesAlongSameWallIfCenterIsBlocked() {
+        JobState s=state();s.maxX=4;s.maxZ=4;s.maxY=20;
+        World terrain=terrainWorld(p->p[2]==-1 && (p[0]==2 || p[1]<=14)?Material.STONE:Material.AIR);
+        assertArrayEquals(new int[]{1,15,0},CofferdamGeometry.chooseEntrance(terrain,s));
+    }
+    @Test void noBuriedEntranceWhenGroundExceedsWallHeadroom() {
+        JobState s=state();
+        World terrain=terrainWorld(p->p[2]==-1?Material.STONE:Material.AIR);
+        assertNull(CofferdamGeometry.chooseEntrance(terrain,s));
+    }
+    @Test void submergedEntranceStillWorksWithoutExteriorFooting() {
+        JobState s=state();
+        assertArrayEquals(new int[]{1,11,0},CofferdamGeometry.chooseEntrance(terrainWorld(p->Material.WATER),s));
+    }
+    @Test void raisedDoorCoordinatesRoundTripAndControlRepairExclusion() throws Exception {
+        JobState s=state();s.maxY=20;s.cofferdamDoorX=1;s.cofferdamDoorY=15;s.cofferdamDoorZ=0;
+        var yaml=new YamlConfiguration();yaml.loadFromString(JobStateStore.encode(s).saveToString());
+        JobState restored=JobStateStore.decode(yaml);
+        assertArrayEquals(new int[]{1,15,0},CofferdamGeometry.door(restored));
+        assertTrue(CofferdamGeometry.isDoor(restored,1,15,0));
+        assertTrue(CofferdamGeometry.isDoor(restored,1,16,0));
+        assertFalse(CofferdamGeometry.isDoor(restored,1,11,0));
+        for (String key:List.of("cofferdamDoorX","cofferdamDoorY","cofferdamDoorZ")) yaml.set(key,null);
+        assertArrayEquals(new int[]{1,11,0},CofferdamGeometry.door(JobStateStore.decode(yaml)));
+    }
 }

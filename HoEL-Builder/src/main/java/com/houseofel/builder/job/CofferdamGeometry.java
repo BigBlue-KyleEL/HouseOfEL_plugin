@@ -29,6 +29,8 @@ final class CofferdamGeometry {
     private static double sq(double value) { return value*value; }
 
     static int[] door(JobState s) {
+        if (s.cofferdamDoorX!=null && s.cofferdamDoorY!=null && s.cofferdamDoorZ!=null)
+            return new int[]{s.cofferdamDoorX,s.cofferdamDoorY,s.cofferdamDoorZ};
         int x = s.minX + (s.maxX-s.minX)/2, z = s.minZ + (s.maxZ-s.minZ)/2;
         switch (s.cofferdamFacing) {
             case "NORTH" -> z=s.minZ;
@@ -39,6 +41,54 @@ final class CofferdamGeometry {
         }
         return new int[]{x,s.minY+1,z};
     }
+    /** Pick an exterior-ground-supported threshold on the confirmed wall, center first.
+     * The chosen coordinates are immutable for this job/watch; terrain edits after
+     * confirmation must not move the doorway or its repair exclusions.
+     */
+    static int[] chooseEntrance(World world, JobState s) {
+        BlockFace face=BlockFace.valueOf(s.cofferdamFacing);
+        boolean alongX=face==BlockFace.NORTH || face==BlockFace.SOUTH;
+        int low=(alongX?s.minX:s.minZ)+1, high=(alongX?s.maxX:s.maxZ)-1;
+        int center=low+(high-low)/2;
+        int highestDoorY=Math.min(s.maxY-(s.cofferdamHasCeiling?2:1),world.getMaxHeight()-4);
+        for (int offset=0;offset<=high-low;offset++) {
+            for (int sign:new int[]{-1,1}) {
+                if (offset==0 && sign==1) continue;
+                int along=center+offset*sign;
+                if (along<low || along>high) continue;
+                int x=alongX?along:(face==BlockFace.EAST?s.maxX:s.minX);
+                int z=alongX?(face==BlockFace.SOUTH?s.maxZ:s.minZ):along;
+                int outsideX=x+face.getModX(), outsideZ=z+face.getModZ();
+                for (int y=highestDoorY;y>s.minY;y--) {
+                    Block ground=world.getBlockAt(outsideX,y-1,outsideZ);
+                    if (!ground.getBlockData().isFaceSturdy(BlockFace.UP, org.bukkit.block.BlockSupport.FULL) || org.bukkit.Tag.LEAVES.isTagged(ground.getType())) continue;
+                    if (ground.getType()==Material.MAGMA_BLOCK || ground.getType()==Material.CACTUS
+                            || ground.getType()==Material.CAMPFIRE || ground.getType()==Material.SOUL_CAMPFIRE) continue;
+                    if (clearApproach(world.getBlockAt(outsideX,y,outsideZ))
+                            && clearApproach(world.getBlockAt(outsideX,y+1,outsideZ))
+                            && clearApproach(world.getBlockAt(x-face.getModX(),y,z-face.getModZ()))
+                            && clearApproach(world.getBlockAt(x-face.getModX(),y+1,z-face.getModZ()))) {
+                        return new int[]{x,y,z};
+                    }
+                }
+            }
+        }
+        // A submerged box can be above the seabed: swimming access needs no exterior
+        // footing. This fallback never accepts solid ground hiding a floor-level door.
+        int[] floorDoor=door(s);
+        Block outside=world.getBlockAt(floorDoor[0]+face.getModX(),floorDoor[1],floorDoor[2]+face.getModZ());
+        if (floorDoor[1]<=highestDoorY && CofferdamWork.wet(outside) && clearApproach(outside)
+                && clearApproach(world.getBlockAt(outside.getX(),floorDoor[1]+1,outside.getZ()))
+                && clearApproach(world.getBlockAt(floorDoor[0]-face.getModX(),floorDoor[1],floorDoor[2]-face.getModZ()))
+                && clearApproach(world.getBlockAt(floorDoor[0]-face.getModX(),floorDoor[1]+1,floorDoor[2]-face.getModZ()))) return floorDoor;
+        return null;
+    }
+    private static boolean clearApproach(Block block) {
+        // Water is valid for a submerged entrance; solid terrain is not a passage.
+        return block.isPassable() && block.getType()!=Material.LAVA
+                && block.getType()!=Material.FIRE && block.getType()!=Material.SOUL_FIRE;
+    }
+
     static boolean hasEntrance(JobState s) {
         return s.cofferdamFacing != null && s.maxY-s.minY>=3 && s.maxX-s.minX>=2 && s.maxZ-s.minZ>=2;
     }
