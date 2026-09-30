@@ -20,7 +20,7 @@ import org.bukkit.scheduler.BukkitTask;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.function.Consumer;
+import java.util.function.Predicate;
 import java.util.logging.Logger;
 
 /**
@@ -71,6 +71,7 @@ public final class RegionSelectionService {
     public void beginJob(Player player, NPC npc, TaskType taskType, Target target, boolean storeInChest,
                           boolean surfaceOnly, Integer requestedLevels, Integer requestedTargetY) {
         clearJob(player.getUniqueId());
+        clearChestSelection(player.getUniqueId());
         if (!rod.giveTo(player, BuilderNpcService.baseNameOf(npc))) {
             player.sendMessage(Component.text(
                     BuilderNpcService.baseNameOf(npc) + ": You can't even hold the Surveyor's Rod. Make space.",
@@ -84,6 +85,7 @@ public final class RegionSelectionService {
     public void beginLandscapeJob(Player player, NPC npc, LandscapeMode landscapeMode,
                                    LandscapeBiome landscapeBiome) {
         clearJob(player.getUniqueId());
+        clearChestSelection(player.getUniqueId());
         if (!rod.giveTo(player, BuilderNpcService.baseNameOf(npc))) {
             player.sendMessage(Component.text(
                     BuilderNpcService.baseNameOf(npc) + ": You can't even hold the Surveyor's Rod. Make space.",
@@ -97,6 +99,7 @@ public final class RegionSelectionService {
 
     public void beginCofferdamJob(Player player, NPC npc) {
         clearJob(player.getUniqueId());
+        clearChestSelection(player.getUniqueId());
         if (!rod.giveTo(player, BuilderNpcService.baseNameOf(npc))) {
             player.sendMessage(Component.text(
                     BuilderNpcService.baseNameOf(npc) + ": You can't even hold the Surveyor's Rod. Make space.",
@@ -110,9 +113,9 @@ public final class RegionSelectionService {
 
     /**
      * Enters chest-selection mode: gives the player back the Surveyor's Rod so they can
-     * tap a chest they placed themselves. Used when automatic chest placement fails.
+     * tap an existing chest after confirming the area for any chest-backed job.
      */
-    public void beginChestSelection(Player player, NPC npc, Consumer<Block> callback) {
+    public void beginChestSelection(Player player, NPC npc, Predicate<Block> callback) {
         clearChestSelection(player.getUniqueId());
         if (!rod.giveTo(player, BuilderNpcService.baseNameOf(npc))) {
             player.sendMessage(Component.text(
@@ -167,11 +170,11 @@ public final class RegionSelectionService {
                     NamedTextColor.RED));
             return;
         }
+        if (!sel.callback.test(block)) return;
         chestSelections.remove(player.getUniqueId());
         rod.removeAllFrom(player);
         logger.info(player.getName() + " selected chest at " + describe(location)
                 + " for " + BuilderNpcService.baseNameOf(sel.npc));
-        sel.callback.accept(block);
     }
 
     private void doConfirm(Player player, PendingJob job) {
@@ -183,7 +186,7 @@ public final class RegionSelectionService {
             Location pointB = job.pointB;
             NPC npc = job.npc;
             finish(player);
-            Consumer<Block> needsChest = jobExecutionService.dispatchClear(player, npc,
+            Predicate<Block> needsChest = jobExecutionService.dispatchClear(player, npc,
                     job.taskType, job.target, pointA, pointB, job.storeInChest,
                     job.surfaceOnly, false);
             if (needsChest != null) {
@@ -206,7 +209,7 @@ public final class RegionSelectionService {
             Location pointB = job.pointB;
             NPC npc = job.npc;
             finish(player);
-            Consumer<Block> needsChest = jobExecutionService.dispatchQuarryman(player, npc,
+            Predicate<Block> needsChest = jobExecutionService.dispatchQuarryman(player, npc,
                     job.taskType, job.target, pointA, pointB, job.storeInChest,
                     job.surfaceOnly, job.requestedLevels, job.requestedTargetY);
             if (needsChest != null) {
@@ -220,7 +223,7 @@ public final class RegionSelectionService {
             Location pointB = job.pointB;
             NPC npc = job.npc;
             finish(player);
-            Consumer<Block> needsChest = jobExecutionService.dispatchCofferdam(player, npc,
+            Predicate<Block> needsChest = jobExecutionService.dispatchCofferdam(player, npc,
                     pointA, pointB);
             if (needsChest != null) {
                 beginChestSelection(player, npc, needsChest);
@@ -233,7 +236,7 @@ public final class RegionSelectionService {
             Location pointB = job.pointB;
             NPC npc = job.npc;
             finish(player);
-            Consumer<Block> needsChest = jobExecutionService.dispatchShaftMiner(player, npc,
+            Predicate<Block> needsChest = jobExecutionService.dispatchShaftMiner(player, npc,
                     pointA, pointB, job.requestedLevels, job.requestedTargetY);
             if (needsChest != null) {
                 beginChestSelection(player, npc, needsChest);
@@ -423,9 +426,9 @@ public final class RegionSelectionService {
 
     private static final class PendingChestSelection {
         private final NPC npc;
-        private final Consumer<Block> callback;
+        private final Predicate<Block> callback;
 
-        private PendingChestSelection(NPC npc, Consumer<Block> callback) {
+        private PendingChestSelection(NPC npc, Predicate<Block> callback) {
             this.npc = npc;
             this.callback = callback;
         }

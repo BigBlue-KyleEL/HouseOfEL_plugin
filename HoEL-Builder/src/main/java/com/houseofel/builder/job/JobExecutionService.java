@@ -26,7 +26,7 @@ import org.bukkit.inventory.EntityEquipment;
 import org.bukkit.plugin.Plugin;
 
 import java.util.Deque;
-import java.util.function.Consumer;
+import java.util.function.Predicate;
 import java.util.logging.Logger;
 
 /**
@@ -59,6 +59,29 @@ public final class JobExecutionService {
         this.choiceStore = choiceStore;
     }
 
+    /** The job waits for an existing chest; no world edits occur before selection. */
+    private Predicate<Block> selectStorage(Player player, NPC npc, JobStorage storage, Runnable start) {
+        player.sendMessage(Component.text(BuilderNpcService.baseNameOf(npc)
+                + ": Tap the chest you want me to use with the Surveyor's Rod. Choose one outside the work area."
+                + " Use /builder cancel to cancel.", NamedTextColor.YELLOW));
+        return chest -> {
+            if (!storage.canAdoptChest(chest)) {
+                player.sendMessage(Component.text("Choose a chest in the same world, outside the work area.", NamedTextColor.RED));
+                return false;
+            }
+            // Availability may have changed while the player was choosing storage.
+            if (npc.getEntity()==null || jobManager.find(npc.getId())!=null || jobManager.isAtCeiling()) {
+                player.sendMessage(Component.text("That Helper cannot start right now. Try again when they are available, or /builder cancel.", NamedTextColor.RED));
+                return false;
+            }
+            storage.adoptChest(chest);
+            player.sendMessage(Component.text(BuilderNpcService.baseNameOf(npc)
+                    + ": Got it, I'll use that chest.", NamedTextColor.GREEN));
+            start.run();
+            return true;
+        };
+    }
+
     /**
      * Landscaper's depth cap, from its own balance clause in V1 Perk Ladders ("Depth
      * capped at 16 blocks below surface... It cannot dig deep — hand it a quarry and it
@@ -73,7 +96,7 @@ public final class JobExecutionService {
         return record != null && GroundworkerL8Choice.LANDSCAPER.name().equals(record.choice());
     }
 
-    public Consumer<Block> dispatchClear(Player player, NPC npc, TaskType taskType, Target target,
+    public Predicate<Block> dispatchClear(Player player, NPC npc, TaskType taskType, Target target,
                                Location pointA, Location pointB, boolean storeInChest,
                                boolean surfaceOnly, boolean restoreTopsoil) {
         Entity npcEntity = npc.getEntity();
@@ -128,29 +151,9 @@ public final class JobExecutionService {
                 : null;
 
         if (storage != null) {
-            Location chestAt = storage.depositPoint();
-            if (chestAt == null) {
-                player.sendMessage(Component.text(BuilderNpcService.baseNameOf(npc)
-                        + ": I can't find a spot for a chest. Place one down nearby "
-                        + "and tap it with the rod.",
-                        NamedTextColor.YELLOW));
-                return chestBlock -> {
-                    storage.adoptChest(chestBlock);
-                    String c = "(" + chestBlock.getX() + ", " + chestBlock.getY() + ", "
-                            + chestBlock.getZ() + ")";
-                    player.sendMessage(Component.text(BuilderNpcService.baseNameOf(npc)
-                            + ": Got it, I'll use that one at " + c + ".",
-                            NamedTextColor.GREEN));
-                    finishClearDispatch(player, npc, taskType, target, world,
-                            minX, maxX, minY, maxY, minZ, maxZ, storage,
-                            storeInChest, surfaceOnly, restoreTopsoil);
-                };
-            }
-            String coords = "(" + chestAt.getBlockX() + ", " + chestAt.getBlockY() + ", "
-                    + chestAt.getBlockZ() + ")";
-            player.sendMessage(Component.text("Storage chest placed at " + coords,
-                    NamedTextColor.AQUA));
-            logger.info("Storage chest placed at " + coords + " for " + player.getName() + "'s job");
+            return selectStorage(player, npc, storage, () -> finishClearDispatch(player, npc, taskType, target, world,
+                    minX, maxX, minY, maxY, minZ, maxZ, storage,
+                    storeInChest, surfaceOnly, restoreTopsoil));
         }
 
         finishClearDispatch(player, npc, taskType, target, world,
@@ -262,7 +265,7 @@ public final class JobExecutionService {
      * Shares {@link JobManager}'s registry/ceiling/persistence with Clear jobs since
      * 2026-08-21 — see {@link QuarrymanJobTask}'s class doc.
      */
-    public Consumer<Block> dispatchQuarryman(Player player, NPC npc, TaskType taskType, Target target,
+    public Predicate<Block> dispatchQuarryman(Player player, NPC npc, TaskType taskType, Target target,
                                    Location pointA, Location pointB, boolean storeInChest,
                                    boolean surfaceOnly, Integer requestedLevels, Integer requestedTargetY) {
         Entity npcEntity = npc.getEntity();
@@ -340,31 +343,12 @@ public final class JobExecutionService {
                 : null;
 
         if (storage != null) {
-            Location chestAt = storage.depositPoint();
-            if (chestAt == null) {
-                player.sendMessage(Component.text(BuilderNpcService.baseNameOf(npc)
-                        + ": I can't find a spot for a chest. Place one down nearby "
-                        + "and tap it with the rod.",
-                        NamedTextColor.YELLOW));
-                int finalRequestedDepth = requestedDepth;
-                boolean finalStepsAlongX = stepsAlongX;
-                int finalStepDirection = stepDirection;
-                return chestBlock -> {
-                    storage.adoptChest(chestBlock);
-                    String c = "(" + chestBlock.getX() + ", " + chestBlock.getY() + ", "
-                            + chestBlock.getZ() + ")";
-                    player.sendMessage(Component.text(BuilderNpcService.baseNameOf(npc)
-                            + ": Got it, I'll use that one at " + c + ".",
-                            NamedTextColor.GREEN));
-                    finishQuarryDispatch(player, npc, world, minX, maxX, minZ, maxZ, topY,
-                            finalRequestedDepth, finalStepsAlongX, finalStepDirection,
-                            digOrder, storage);
-                };
-            }
-            String coords = "(" + chestAt.getBlockX() + ", " + chestAt.getBlockY() + ", "
-                    + chestAt.getBlockZ() + ")";
-            player.sendMessage(Component.text("Storage chest placed at " + coords, NamedTextColor.AQUA));
-            logger.info("Storage chest placed at " + coords + " for " + player.getName() + "'s job");
+            int finalRequestedDepth = requestedDepth;
+            boolean finalStepsAlongX = stepsAlongX;
+            int finalStepDirection = stepDirection;
+            return selectStorage(player, npc, storage, () -> finishQuarryDispatch(player, npc, world,
+                    minX, maxX, minZ, maxZ, topY, finalRequestedDepth, finalStepsAlongX,
+                    finalStepDirection, digOrder, storage));
         }
 
         finishQuarryDispatch(player, npc, world, minX, maxX, minZ, maxZ, topY,
@@ -403,7 +387,7 @@ public final class JobExecutionService {
         task.start();
     }
 
-    public Consumer<Block> dispatchCofferdam(Player player, NPC npc, Location pointA, Location pointB) {
+    public Predicate<Block> dispatchCofferdam(Player player, NPC npc, Location pointA, Location pointB) {
         Entity npcEntity = npc.getEntity();
         if (npcEntity == null) {
             player.sendMessage(Component.text(
@@ -491,33 +475,8 @@ public final class JobExecutionService {
         int wallBlocks = CofferdamJobTask.computeBuildOrder(minX, maxX, minY, maxY, minZ, maxZ,hasCeiling).size();
 
         JobStorage storage = new JobStorage(plugin, world, minX, maxX, minY, maxY, minZ, maxZ);
-        Location chestAt = storage.depositPoint();
-        if (chestAt == null) {
-            player.sendMessage(Component.text(BuilderNpcService.baseNameOf(npc)
-                    + ": I can't find a spot for a chest out here. Place one down nearby "
-                    + "and tap it with the rod.",
-                    NamedTextColor.YELLOW));
-            return chestBlock -> {
-                storage.adoptChest(chestBlock);
-                String c = "(" + chestBlock.getX() + ", " + chestBlock.getY() + ", "
-                        + chestBlock.getZ() + ")";
-                player.sendMessage(Component.text(BuilderNpcService.baseNameOf(npc)
-                        + ": Got it, I'll use that one at " + c + ".",
-                        NamedTextColor.GREEN));
-                finishCofferdamDispatch(player, npc, storage, world,
-                        minX, maxX, minY, maxY, minZ, maxZ, wallBlocks, facing, door, hasCeiling, entrance);
-            };
-        }
-
-        String coords = "(" + chestAt.getBlockX() + ", " + chestAt.getBlockY() + ", "
-                + chestAt.getBlockZ() + ")";
-        player.sendMessage(Component.text("Storage chest placed at " + coords
-                + " — fill it with cobblestone for the dam walls.", NamedTextColor.AQUA));
-        logger.info("Storage chest placed at " + coords + " for " + player.getName() + "'s cofferdam");
-
-        finishCofferdamDispatch(player, npc, storage, world,
-                minX, maxX, minY, maxY, minZ, maxZ, wallBlocks, facing, door, hasCeiling, entrance);
-        return null;
+        return selectStorage(player, npc, storage, () -> finishCofferdamDispatch(player, npc, storage, world,
+                minX, maxX, minY, maxY, minZ, maxZ, wallBlocks, facing, door, hasCeiling, entrance));
     }
 
     private void finishCofferdamDispatch(Player player, NPC npc, JobStorage storage, World world,
@@ -547,7 +506,7 @@ public final class JobExecutionService {
         task.start();
     }
 
-    public Consumer<Block> dispatchShaftMiner(Player player, NPC npc, Location pointA, Location pointB,
+    public Predicate<Block> dispatchShaftMiner(Player player, NPC npc, Location pointA, Location pointB,
                                                 Integer requestedLevels, Integer requestedTargetY) {
         Entity npcEntity = npc.getEntity();
         if (npcEntity == null) {
@@ -621,33 +580,9 @@ public final class JobExecutionService {
         Deque<Block> digOrder = ShaftMinerJobTask.buildDigOrder(world, minX, maxX, minZ, maxZ, topY, requestedDepth);
 
         JobStorage storage = new JobStorage(plugin, world, minX, maxX, bottomY, topY, minZ, maxZ);
-        Location chestAt = storage.depositPoint();
-        if (chestAt == null) {
-            player.sendMessage(Component.text(BuilderNpcService.baseNameOf(npc)
-                    + ": I can't find a spot for a chest. Place one down nearby "
-                    + "and tap it with the rod.",
-                    NamedTextColor.YELLOW));
-            int finalRequestedDepth = requestedDepth;
-            return chestBlock -> {
-                storage.adoptChest(chestBlock);
-                String c = "(" + chestBlock.getX() + ", " + chestBlock.getY() + ", "
-                        + chestBlock.getZ() + ")";
-                player.sendMessage(Component.text(BuilderNpcService.baseNameOf(npc)
-                        + ": Got it, I'll use that one at " + c + ".",
-                        NamedTextColor.GREEN));
-                finishShaftMinerDispatch(player, npc, world, minX, maxX, minZ, maxZ, topY,
-                        finalRequestedDepth, digOrder, storage);
-            };
-        }
-
-        String coords = "(" + chestAt.getBlockX() + ", " + chestAt.getBlockY() + ", "
-                + chestAt.getBlockZ() + ")";
-        player.sendMessage(Component.text("Storage chest placed at " + coords, NamedTextColor.AQUA));
-        logger.info("Storage chest placed at " + coords + " for " + player.getName() + "'s shaft miner job");
-
-        finishShaftMinerDispatch(player, npc, world, minX, maxX, minZ, maxZ, topY,
-                requestedDepth, digOrder, storage);
-        return null;
+        int finalRequestedDepth = requestedDepth;
+        return selectStorage(player, npc, storage, () -> finishShaftMinerDispatch(player, npc, world,
+                minX, maxX, minZ, maxZ, topY, finalRequestedDepth, digOrder, storage));
     }
 
     private void finishShaftMinerDispatch(Player player, NPC npc, World world,

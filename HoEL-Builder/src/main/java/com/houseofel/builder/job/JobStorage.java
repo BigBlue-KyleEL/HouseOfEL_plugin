@@ -169,11 +169,15 @@ public final class JobStorage {
         columnSign = savedColumnSign;
     }
 
-    /**
-     * Adopts a player-placed chest as this job's storage instead of auto-placing one.
-     * Used when {@link #depositPoint()} returns null and the player manually places
-     * and selects a chest via the Surveyor's Rod.
-     */
+    /** Reject storage the job could destroy, and storage in another world. */
+    boolean canAdoptChest(Block chest) {
+        if (!world.equals(chest.getWorld())) return false;
+        if (chest.getType()!=Material.CHEST && chest.getType()!=Material.TRAPPED_CHEST) return false;
+        return chest.getX()<minX || chest.getX()>maxX || chest.getY()<minY || chest.getY()>maxY
+                || chest.getZ()<minZ || chest.getZ()>maxZ;
+    }
+
+    /** Adopts the existing chest selected with the Surveyor's Rod. */
     public void adoptChest(Block chestBlock) {
         chests.add(chestBlock);
         occupiedColumns.add(columnKey(chestBlock.getX(), chestBlock.getZ()));
