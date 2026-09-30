@@ -167,4 +167,49 @@ class CofferdamTest {
         method.invoke(task,block,Material.DIRT);
         assertEquals(Material.DIRT,type.get(),"fresh work must still perform the edit even though it earns no Toil");
     }
+    @Test void openTopBuildAndWatchBothOmitOnlyTheLidInterior() {
+        JobState s=state();s.cofferdamHasCeiling=false;
+        var open=CofferdamJobTask.computeBuildOrder(0,2,10,13,0,2,false);
+        assertEquals(33,open.size());
+        assertFalse(open.stream().anyMatch(p->p[0]==1 && p[1]==13 && p[2]==1));
+        assertFalse(CofferdamGeometry.isShell(s,1,13,1),"watch must not build a roof");
+        assertTrue(CofferdamGeometry.isShell(s,0,13,1),"top wall perimeter remains");
+        assertTrue(CofferdamGeometry.isShell(s,1,10,1),"floor remains");
+        assertFalse(CofferdamGeometry.isShell(s,1,11,1),"interior stays free");
+        s.cofferdamHasCeiling=true;
+        assertTrue(CofferdamGeometry.isShell(s,1,13,1),"submerged ceiling is repaired");
+    }
+    @Test void ceilingDecisionUsesRealWaterHeightIncludingOutsideCollar() {
+        World low=waterWorld(11,false);
+        assertFalse(CofferdamGeometry.requiresCeiling(low,0,2,13,0,2));
+        assertTrue(CofferdamGeometry.requiresCeiling(waterWorld(12,false),0,2,13,0,2));
+        assertTrue(CofferdamGeometry.requiresCeiling(waterWorld(13,false),0,2,13,0,2));
+        assertTrue(CofferdamGeometry.requiresCeiling(waterWorld(12,true),0,2,13,0,2));
+    }
+    private World waterWorld(int waterY, boolean collarOnly) {
+        return (World)Proxy.newProxyInstance(World.class.getClassLoader(),new Class[]{World.class},(p,m,a)-> {
+            if (m.getName().equals("getMaxHeight")) return 320;
+            if (m.getName().equals("getBlockAt")) {
+                boolean wet=(int)a[1]<=waterY && (!collarOnly || (int)a[0]==-1);
+                return Proxy.newProxyInstance(Block.class.getClassLoader(),new Class[]{Block.class},(bp,bm,ba)->switch(bm.getName()) {
+                    case "getType" -> wet?Material.WATER:Material.AIR;
+                    case "getBlockData" -> null;
+                    default -> throw new UnsupportedOperationException(bm.getName());
+                });
+            }
+            throw new UnsupportedOperationException(m.getName());
+        });
+    }
+    @Test void openTopChoiceSurvivesJobAndWatchYamlWhileLegacyDefaultsClosed() throws Exception {
+        JobState original=state();original.cofferdamHasCeiling=false;
+        var yaml=JobStateStore.encode(original);
+        assertFalse(JobStateStore.decode(yaml).cofferdamHasCeiling);
+        var watch=new CofferdamWatchService(plugin,null,null,null,null);watch.add(original);
+        var saved=YamlConfiguration.loadConfiguration(dir.resolve("cofferdam-watches")
+                .resolve(original.cofferdamId+".yml").toFile());
+        var job=new YamlConfiguration();job.loadFromString(saved.getString("job"));
+        assertFalse(JobStateStore.decode(job).cofferdamHasCeiling);
+        yaml.set("cofferdamHasCeiling",null);
+        assertTrue(JobStateStore.decode(yaml).cofferdamHasCeiling);
+    }
 }

@@ -475,7 +475,8 @@ public final class JobExecutionService {
             return null;
         }
 
-        int wallBlocks = CofferdamJobTask.computeBuildOrder(minX, maxX, minY, maxY, minZ, maxZ).size();
+        boolean hasCeiling=CofferdamGeometry.requiresCeiling(world,minX,maxX,maxY,minZ,maxZ);
+        int wallBlocks = CofferdamJobTask.computeBuildOrder(minX, maxX, minY, maxY, minZ, maxZ,hasCeiling).size();
 
         JobStorage storage = new JobStorage(plugin, world, minX, maxX, minY, maxY, minZ, maxZ);
         Location chestAt = storage.depositPoint();
@@ -492,7 +493,7 @@ public final class JobExecutionService {
                         + ": Got it, I'll use that one at " + c + ".",
                         NamedTextColor.GREEN));
                 finishCofferdamDispatch(player, npc, storage, world,
-                        minX, maxX, minY, maxY, minZ, maxZ, wallBlocks, facing, door);
+                        minX, maxX, minY, maxY, minZ, maxZ, wallBlocks, facing, door, hasCeiling);
             };
         }
 
@@ -503,13 +504,13 @@ public final class JobExecutionService {
         logger.info("Storage chest placed at " + coords + " for " + player.getName() + "'s cofferdam");
 
         finishCofferdamDispatch(player, npc, storage, world,
-                minX, maxX, minY, maxY, minZ, maxZ, wallBlocks, facing, door);
+                minX, maxX, minY, maxY, minZ, maxZ, wallBlocks, facing, door, hasCeiling);
         return null;
     }
 
     private void finishCofferdamDispatch(Player player, NPC npc, JobStorage storage, World world,
                                           int minX, int maxX, int minY, int maxY, int minZ, int maxZ,
-                                          int wallBlocks, String facing, Material door) {
+                                          int wallBlocks, String facing, Material door, boolean hasCeiling) {
         Entity npcEntity = npc.getEntity();
         if (npcEntity == null) return;
 
@@ -529,6 +530,7 @@ public final class JobExecutionService {
                 player.getUniqueId(), npc, npcEntity, equipment, label, world,
                 minX, maxX, minY, maxY, minZ, maxZ, outline, storage);
         task.configureEntrance(facing,door);
+        task.configureCeiling(hasCeiling);
         jobManager.register(task);
         task.start();
     }

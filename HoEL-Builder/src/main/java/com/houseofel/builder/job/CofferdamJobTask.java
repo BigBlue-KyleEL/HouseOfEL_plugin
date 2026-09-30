@@ -215,6 +215,7 @@ public final class CofferdamJobTask implements JobTask {
         if (state.cofferdamId!=null) task.entranceState.cofferdamId=state.cofferdamId;
         task.entranceState.cofferdamFacing=state.cofferdamFacing;
         task.entranceState.cofferdamDoor=state.cofferdamDoor;
+        task.configureCeiling(state.cofferdamHasCeiling);
         for (String encoded:state.bulkheadPlugs) {
             Block block=JobStorage.decodeBlock(world,encoded);
             if (block.getType()==Material.SPONGE || block.getType()==Material.WET_SPONGE
@@ -300,6 +301,12 @@ public final class CofferdamJobTask implements JobTask {
         }
     }
 
+    void configureCeiling(boolean hasCeiling) {
+        entranceState.cofferdamHasCeiling=hasCeiling;
+        buildOrder=computeBuildOrder(minX,maxX,minY,maxY,minZ,maxZ,hasCeiling);
+        announcedHalf=buildOrder.isEmpty() || buildCursor*2>=buildOrder.size();
+    }
+
     void configureEntrance(String facing, Material door) {
         entranceState.cofferdamFacing=facing;
         entranceState.cofferdamDoor=door.name();
@@ -354,6 +361,7 @@ public final class CofferdamJobTask implements JobTask {
         state.cofferdamId=entranceState.cofferdamId;
         state.cofferdamFacing=entranceState.cofferdamFacing;
         state.cofferdamDoor=entranceState.cofferdamDoor;
+        state.cofferdamHasCeiling=entranceState.cofferdamHasCeiling;
         state.cofferdamHelperUuid=npc.getUniqueId().toString();
         for (Block plug:bulkheadPlugs) state.bulkheadPlugs.add(JobStorage.encodeBlock(plug));
         state.buildCursor = buildCursor;
@@ -878,6 +886,11 @@ public final class CofferdamJobTask implements JobTask {
 
     static List<int[]> computeBuildOrder(int minX, int maxX, int minY, int maxY,
                                           int minZ, int maxZ) {
+        return computeBuildOrder(minX,maxX,minY,maxY,minZ,maxZ,true);
+    }
+
+    static List<int[]> computeBuildOrder(int minX, int maxX, int minY, int maxY,
+                                          int minZ, int maxZ, boolean hasCeiling) {
         List<int[]> order = new ArrayList<>();
         for (int x = minX; x <= maxX; x++) {
             for (int z = minZ; z <= maxZ; z++) {
@@ -904,8 +917,8 @@ public final class CofferdamJobTask implements JobTask {
                 order.add(new int[]{maxX, y, z});
             }
         }
-        // Ceiling — interior of top face; perimeter at y=maxY already covered by walls
-        for (int x = minX + 1; x < maxX; x++) {
+        // Open-top jobs keep the top wall perimeter but omit the interior of the lid.
+        if (hasCeiling) for (int x = minX + 1; x < maxX; x++) {
             for (int z = minZ + 1; z < maxZ; z++) {
                 order.add(new int[]{x, maxY, z});
             }

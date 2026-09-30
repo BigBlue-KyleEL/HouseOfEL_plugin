@@ -164,7 +164,8 @@ final class CofferdamWatchService implements Listener {
                         CofferdamWork.drain(block);
                         watch.pendingCredit+=units;
                     }
-                } else if (!CofferdamGeometry.isDoor(s,x,y,z) && !block.getType().isOccluding()) {
+                } else if (CofferdamGeometry.isShell(s,x,y,z)
+                        && !CofferdamGeometry.isDoor(s,x,y,z) && !block.getType().isOccluding()) {
                     if (withdrawLoaded(world,s)) {
                         int units=CofferdamWork.credit(block,helper,redundancy,fresh);
                         block.setType(Material.COBBLESTONE,false);

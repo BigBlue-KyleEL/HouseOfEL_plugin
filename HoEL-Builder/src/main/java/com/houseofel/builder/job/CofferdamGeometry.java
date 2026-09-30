@@ -50,6 +50,25 @@ final class CofferdamGeometry {
     static boolean interior(JobState s, int x,int y,int z) {
         return x>s.minX && x<s.maxX && y>s.minY && y<s.maxY && z>s.minZ && z<s.maxZ;
     }
+    /** Retain a lid if water can reach the opening at confirmation. Use actual local
+     * water, including waterlogged blocks, rather than a fixed sea-level constant.
+     */
+    static boolean requiresCeiling(World world, int minX, int maxX, int maxY, int minZ, int maxZ) {
+        // Top interior layer, proposed lid and one cell above, with an exterior collar.
+        for (int x=minX-1;x<=maxX+1;x++) for (int z=minZ-1;z<=maxZ+1;z++) {
+            for (int y=maxY-1;y<=Math.min(maxY+1,world.getMaxHeight()-1);y++) {
+                if (CofferdamWork.wet(world.getBlockAt(x,y,z))) return true;
+            }
+        }
+        return false;
+    }
+
+    static boolean isShell(JobState s, int x,int y,int z) {
+        if (x<s.minX || x>s.maxX || y<s.minY || y>s.maxY || z<s.minZ || z>s.maxZ) return false;
+        if (y==s.minY || x==s.minX || x==s.maxX || z==s.minZ || z==s.maxZ) return true;
+        return y==s.maxY && s.cofferdamHasCeiling;
+    }
+
     static boolean loaded(World w, int x,int z) { return w.isChunkLoaded(x>>4,z>>4); }
 
     static void entrance(World world, JobState s) {
