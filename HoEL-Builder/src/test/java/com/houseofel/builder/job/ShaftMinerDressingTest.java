@@ -28,9 +28,22 @@ class ShaftMinerDressingTest {
     @Test void persistentWaterEscalatesSpongesThenWallsThenAsksOwner() {
         for (int streak = 1; streak <= 3; streak++)
             assertEquals(ShaftMinerJobTask.WaterResponse.SPONGE_ONLY, ShaftMinerJobTask.waterResponseFor(streak));
-        assertEquals(ShaftMinerJobTask.WaterResponse.WALL_ENTRIES, ShaftMinerJobTask.waterResponseFor(4));
-        assertEquals(ShaftMinerJobTask.WaterResponse.RAISE_WALLS, ShaftMinerJobTask.waterResponseFor(5));
-        assertEquals(ShaftMinerJobTask.WaterResponse.ASK_OWNER, ShaftMinerJobTask.waterResponseFor(6));
+        for (int streak = 4; streak <= 6; streak++)
+            assertEquals(ShaftMinerJobTask.WaterResponse.WALL_ENTRIES, ShaftMinerJobTask.waterResponseFor(streak),
+                    "three first-level passes");
+        assertEquals(ShaftMinerJobTask.WaterResponse.RAISE_WALLS, ShaftMinerJobTask.waterResponseFor(7));
+        assertEquals(ShaftMinerJobTask.WaterResponse.ASK_OWNER, ShaftMinerJobTask.waterResponseFor(8));
+    }
+
+    @Test void wallSpanClosesGapsAndCoversWhereWaterWouldTurn() {
+        boolean[] none = new boolean[7];
+        assertTrue(ShaftMinerJobTask.wallSpan(none).isEmpty());
+        boolean[] twoApart = {false, false, true, false, true, false, false};
+        assertEquals(List.of(1, 2, 3, 4, 5), ShaftMinerJobTask.wallSpan(twoApart));
+        boolean[] atCorner = {true, false, false, false, false, false, false};
+        assertEquals(List.of(0, 1), ShaftMinerJobTask.wallSpan(atCorner));
+        boolean[] single = {false, false, false, true, false, false, false};
+        assertEquals(List.of(2, 3, 4), ShaftMinerJobTask.wallSpan(single));
     }
 
     @Test void ladderTorchEveryFourLayersIncludingLandings() {

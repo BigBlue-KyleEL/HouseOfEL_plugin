@@ -875,15 +875,34 @@ public final class ShaftMinerJobTask implements JobTask {
     // ── Persistent water: wall off the inflow (Kyle, 2026-10-01) ────────────
 
     static final int SPONGE_WAVES_BEFORE_WALLING = 3;
+    static final int FIRST_LEVEL_WALL_PASSES = 3;
     enum WaterResponse { SPONGE_ONLY, WALL_ENTRIES, RAISE_WALLS, ASK_OWNER }
 
     /** Water breaches counted since the last layer that stayed dry. */
     static WaterResponse waterResponseFor(int breachStreak) {
         int beyond = breachStreak - SPONGE_WAVES_BEFORE_WALLING;
         if (beyond <= 0) return WaterResponse.SPONGE_ONLY;
-        if (beyond == 1) return WaterResponse.WALL_ENTRIES;
-        if (beyond == 2) return WaterResponse.RAISE_WALLS;
+        if (beyond <= FIRST_LEVEL_WALL_PASSES) return WaterResponse.WALL_ENTRIES;
+        if (beyond == FIRST_LEVEL_WALL_PASSES + 1) return WaterResponse.RAISE_WALLS;
         return WaterResponse.ASK_OWNER;
+    }
+
+    /**
+     * Indices to wall along one edge line: the whole stretch from the first wet cell
+     * to the last (closing gaps between entries), plus one cell past each end where
+     * blocked water would turn. Empty when nothing along the edge is wet.
+     */
+    static List<Integer> wallSpan(boolean[] wet) {
+        int first = -1, last = -1;
+        for (int i = 0; i < wet.length; i++) {
+            if (!wet[i]) continue;
+            if (first < 0) first = i;
+            last = i;
+        }
+        List<Integer> span = new ArrayList<>();
+        if (first < 0) return span;
+        for (int i = Math.max(0, first - 1); i <= Math.min(wet.length - 1, last + 1); i++) span.add(i);
+        return span;
     }
 
     /** Returns true when the job paused instead of running a sponge wave. */
@@ -911,16 +930,38 @@ public final class ShaftMinerJobTask implements JobTask {
         return false;
     }
 
-    // Only the edge cells actually carrying water get a block; the rest of the rim is untouched.
+    // Only edges actually carrying water get walled, as one stretch per edge and height;
+    // the rest of the rim is untouched, and solid ground is never replaced.
     private void wallWaterEntries(int dugY) {
         int walled = 0;
-        for (Block entry : perimeterCells(dugY, topY + 1)) {
-            if (entry.getType() != Material.WATER) continue;
-            entry.setType(entry.getY() < 0 ? Material.DEEPSLATE : Material.COBBLESTONE);
-            waterWallColumns.merge(entry.getX() + "," + entry.getZ(), entry, (a, b) -> a.getY() >= b.getY() ? a : b);
-            walled++;
+        for (int y = dugY; y <= topY + 1; y++) {
+            for (List<Block> edge : edgeLines(y)) {
+                boolean[] wet = new boolean[edge.size()];
+                for (int i = 0; i < wet.length; i++) wet[i] = edge.get(i).getType() == Material.WATER;
+                for (int i : wallSpan(wet)) {
+                    Block cell = edge.get(i);
+                    if (cell.getType().isSolid()) continue;
+                    cell.setType(cell.getY() < 0 ? Material.DEEPSLATE : Material.COBBLESTONE);
+                    waterWallColumns.merge(cell.getX() + "," + cell.getZ(), cell, (a, b) -> a.getY() >= b.getY() ? a : b);
+                    walled++;
+                }
+            }
         }
         logger.info("[shaft-miner] " + BuilderNpcService.baseNameOf(npc) + " walled " + walled + " water entry block(s)");
+    }
+
+    /** The four lines of cells just outside the shaft at height y, each running corner to corner. */
+    private List<List<Block>> edgeLines(int y) {
+        List<Block> north = new ArrayList<>(), south = new ArrayList<>(), west = new ArrayList<>(), east = new ArrayList<>();
+        for (int x = minX - 1; x <= maxX + 1; x++) {
+            north.add(world.getBlockAt(x, y, minZ - 1));
+            south.add(world.getBlockAt(x, y, maxZ + 1));
+        }
+        for (int z = minZ - 1; z <= maxZ + 1; z++) {
+            west.add(world.getBlockAt(minX - 1, y, z));
+            east.add(world.getBlockAt(maxX + 1, y, z));
+        }
+        return List.of(north, south, west, east);
     }
 
     private void raiseWaterWalls() {
@@ -933,22 +974,6 @@ public final class ShaftMinerJobTask implements JobTask {
             raised++;
         }
         logger.info("[shaft-miner] " + BuilderNpcService.baseNameOf(npc) + " raised " + raised + " water wall(s) by one block");
-    }
-
-    /** Cells directly outside each shaft edge (corners excluded), from fromY up to toY. */
-    private List<Block> perimeterCells(int fromY, int toY) {
-        List<Block> cells = new ArrayList<>();
-        for (int y = fromY; y <= toY; y++) {
-            for (int x = minX; x <= maxX; x++) {
-                cells.add(world.getBlockAt(x, y, minZ - 1));
-                cells.add(world.getBlockAt(x, y, maxZ + 1));
-            }
-            for (int z = minZ; z <= maxZ; z++) {
-                cells.add(world.getBlockAt(minX - 1, y, z));
-                cells.add(world.getBlockAt(maxX + 1, y, z));
-            }
-        }
-        return cells;
     }
 
     private void notifyOwner(String message) {
