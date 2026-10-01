@@ -28,7 +28,10 @@ import org.bukkit.block.BlockFace;
 import org.bukkit.block.DoubleChest;
 import org.bukkit.block.Lidded;
 import org.bukkit.block.data.Directional;
+import org.bukkit.Axis;
+import org.bukkit.block.data.BlockData;
 import org.bukkit.block.data.Levelled;
+import org.bukkit.block.data.Orientable;
 import org.bukkit.block.data.type.Ladder;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
@@ -181,6 +184,7 @@ public final class ShaftMinerJobTask implements JobTask {
     private int bulkheadWaveStepTicks;
 
     private boolean paused;
+    private Material ringLog;
     private int waterBreachStreak;
     private boolean waterThisLayer;
     private final Map<String, Block> waterWallColumns = new HashMap<>();
@@ -610,7 +614,10 @@ public final class ShaftMinerJobTask implements JobTask {
     }
 
     private void dressCompletedLayer(int y) {
-        reinforceWalls(y);
+        // A ring layer skips patching: the ring fills the same cells, and patching first
+        // would let the ring "mine" conjured cobblestone for free items and Toil.
+        // Both run before the ladder and torches so those attach to the finished wall.
+        if (isRingLayer(topY - y)) placeFrameRing(y); else reinforceWalls(y);
         placeLadder(y);
         if (isLandingLayer(y)) {
             placeLighting(y);
@@ -618,6 +625,74 @@ public final class ShaftMinerJobTask implements JobTask {
         // After the landing torches: where a landing torch already holds this cell, it stays.
         if (isLadderLightLayer(topY - y)) {
             placeWallTorch(minX + 1, y, minZ, BlockFace.SOUTH);
+        }
+    }
+
+    // ── Frame rings (Kyle, 2026-10-01) ─────────────────────────────────────
+
+    static final int RING_INTERVAL = 8;
+
+    static boolean isRingLayer(int depth) {
+        return depth > 0 && depth % RING_INTERVAL == 0;
+    }
+
+    record RingCell(int x, int z, Axis axis) { }
+
+    /** The full ring just outside the shaft, corners included; logs lie along their wall, corners stand. */
+    static List<RingCell> ringCells(int minX, int maxX, int minZ, int maxZ) {
+        List<RingCell> cells = new ArrayList<>();
+        for (int x = minX - 1; x <= maxX + 1; x++) {
+            boolean corner = x == minX - 1 || x == maxX + 1;
+            cells.add(new RingCell(x, minZ - 1, corner ? Axis.Y : Axis.X));
+            cells.add(new RingCell(x, maxZ + 1, corner ? Axis.Y : Axis.X));
+        }
+        for (int z = minZ; z <= maxZ; z++) {
+            cells.add(new RingCell(minX - 1, z, Axis.Z));
+            cells.add(new RingCell(maxX + 1, z, Axis.Z));
+        }
+        return cells;
+    }
+
+    static Material logForDoor(Material door) {
+        if (door == null) return Material.OAK_LOG;
+        return switch (door) {
+            case SPRUCE_DOOR -> Material.SPRUCE_LOG;
+            case BIRCH_DOOR -> Material.BIRCH_LOG;
+            case JUNGLE_DOOR -> Material.JUNGLE_LOG;
+            case ACACIA_DOOR -> Material.ACACIA_LOG;
+            case DARK_OAK_DOOR -> Material.DARK_OAK_LOG;
+            case MANGROVE_DOOR -> Material.MANGROVE_LOG;
+            case CHERRY_DOOR -> Material.CHERRY_LOG;
+            case PALE_OAK_DOOR -> Material.PALE_OAK_LOG;
+            case BAMBOO_DOOR -> Material.BAMBOO_BLOCK;
+            default -> Material.OAK_LOG;
+        };
+    }
+
+    /** Biome wood at the shaft, else the nearest forest's; found once per job (same search as Cofferdam doors). */
+    private Material ringLog() {
+        if (ringLog == null) {
+            Location centre = new Location(world, (minX + maxX) / 2.0, topY, (minZ + maxZ) / 2.0);
+            ringLog = logForDoor(CofferdamGeometry.chooseDoor(world, centre));
+        }
+        return ringLog;
+    }
+
+    private void placeFrameRing(int y) {
+        Material material = y < 0 ? Material.DEEPSLATE_BRICKS : ringLog();
+        for (RingCell cell : ringCells(minX, maxX, minZ, maxZ)) {
+            Block block = world.getBlockAt(cell.x(), y, cell.z());
+            if (block.getType() == material) continue;
+            if (block.getType().getHardness() < 0 || block.getType() == Material.SPAWNER
+                    || block.getState() instanceof org.bukkit.inventory.BlockInventoryHolder) continue;
+            // Mined like spoil, so ores in the wall reach the chest and earn Toil.
+            if (block.getType().isSolid()) {
+                collectDrop(block);
+                awardGroundworkerProgress(creditUnitsFor(block));
+            }
+            BlockData data = material.createBlockData();
+            if (data instanceof Orientable log) log.setAxis(cell.axis());
+            block.setBlockData(data);
         }
     }
 

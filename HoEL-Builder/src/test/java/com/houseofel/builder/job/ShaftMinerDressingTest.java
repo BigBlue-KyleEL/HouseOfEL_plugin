@@ -13,6 +13,35 @@ class ShaftMinerDressingTest {
                 "the ladder's support must be the north wall behind the NW corner");
     }
 
+    @Test void ringsEveryEightLayers() {
+        assertFalse(ShaftMinerJobTask.isRingLayer(0));
+        for (int depth = 1; depth <= 32; depth++)
+            assertEquals(depth % 8 == 0, ShaftMinerJobTask.isRingLayer(depth), "depth " + depth);
+    }
+
+    @Test void ringEnclosesTheShaftWithLogsAlongEachWall() {
+        var cells = ShaftMinerJobTask.ringCells(0, 1, 0, 1);
+        assertEquals(12, cells.size(), "2x2 shaft has a 4x4 outline of 12 cells");
+        Set<String> seen = new HashSet<>();
+        for (var c : cells) {
+            assertTrue(seen.add(c.x() + "," + c.z()), "no duplicate cells");
+            boolean outside = c.x() < 0 || c.x() > 1 || c.z() < 0 || c.z() > 1;
+            assertTrue(outside, "ring never enters the shaft");
+            boolean corner = (c.x() == -1 || c.x() == 2) && (c.z() == -1 || c.z() == 2);
+            if (corner) assertEquals(org.bukkit.Axis.Y, c.axis());
+            else if (c.z() == -1 || c.z() == 2) assertEquals(org.bukkit.Axis.X, c.axis());
+            else assertEquals(org.bukkit.Axis.Z, c.axis());
+        }
+        assertEquals(4 * 7 + 4, ShaftMinerJobTask.ringCells(0, 6, 0, 6).size());
+    }
+
+    @Test void ringWoodFollowsTheBiomeDoorFamily() {
+        assertEquals(org.bukkit.Material.SPRUCE_LOG, ShaftMinerJobTask.logForDoor(org.bukkit.Material.SPRUCE_DOOR));
+        assertEquals(org.bukkit.Material.CHERRY_LOG, ShaftMinerJobTask.logForDoor(org.bukkit.Material.CHERRY_DOOR));
+        assertEquals(org.bukkit.Material.BAMBOO_BLOCK, ShaftMinerJobTask.logForDoor(org.bukkit.Material.BAMBOO_DOOR));
+        assertEquals(org.bukkit.Material.OAK_LOG, ShaftMinerJobTask.logForDoor(null), "no forest anywhere in range");
+    }
+
     @Test void shaftDepthSurvivesSaveAndResume() {
         JobState s = new JobState();
         s.jobType = JobType.SHAFT_MINER;
