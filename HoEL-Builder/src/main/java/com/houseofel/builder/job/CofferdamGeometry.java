@@ -104,11 +104,14 @@ final class CofferdamGeometry {
      * water, including waterlogged blocks, rather than a fixed sea-level constant.
      */
     static boolean requiresCeiling(World world, int minX, int maxX, int maxY, int minZ, int maxZ) {
-        // Top interior layer, proposed lid and one cell above, with an exterior collar.
+        // maxY is the top wall block, one above the selected interior. Water at
+        // or below that block is held back by the wall and drained from inside.
+        // Only water above the completed rim requires a lid. Keep an exterior
+        // collar so water immediately outside the opening is detected too.
+        int aboveRim=maxY+1;
+        if (aboveRim>=world.getMaxHeight()) return false;
         for (int x=minX-1;x<=maxX+1;x++) for (int z=minZ-1;z<=maxZ+1;z++) {
-            for (int y=maxY-1;y<=Math.min(maxY+1,world.getMaxHeight()-1);y++) {
-                if (CofferdamWork.wet(world.getBlockAt(x,y,z))) return true;
-            }
+            if (CofferdamWork.wet(world.getBlockAt(x,aboveRim,z))) return true;
         }
         return false;
     }

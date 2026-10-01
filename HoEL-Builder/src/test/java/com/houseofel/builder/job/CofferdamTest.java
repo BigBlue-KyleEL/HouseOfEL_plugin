@@ -179,12 +179,15 @@ class CofferdamTest {
         s.cofferdamHasCeiling=true;
         assertTrue(CofferdamGeometry.isShell(s,1,13,1),"submerged ceiling is repaired");
     }
-    @Test void ceilingDecisionUsesRealWaterHeightIncludingOutsideCollar() {
-        World low=waterWorld(11,false);
-        assertFalse(CofferdamGeometry.requiresCeiling(low,0,2,13,0,2));
-        assertTrue(CofferdamGeometry.requiresCeiling(waterWorld(12,false),0,2,13,0,2));
-        assertTrue(CofferdamGeometry.requiresCeiling(waterWorld(13,false),0,2,13,0,2));
-        assertTrue(CofferdamGeometry.requiresCeiling(waterWorld(12,true),0,2,13,0,2));
+    @Test void ceilingDecisionUsesWaterAboveCompletedRimIncludingOutsideCollar() {
+        // Surface water Y=13. Selected top Y=13/12/11 gives wall top Y=14/13/12.
+        World surface=waterWorld(13,false);
+        assertFalse(CofferdamGeometry.requiresCeiling(surface,0,2,14,0,2));
+        assertFalse(CofferdamGeometry.requiresCeiling(surface,0,2,13,0,2));
+        assertTrue(CofferdamGeometry.requiresCeiling(surface,0,2,12,0,2));
+        assertFalse(CofferdamGeometry.requiresCeiling(waterWorld(13,true),0,2,13,0,2));
+        assertTrue(CofferdamGeometry.requiresCeiling(waterWorld(14,true),0,2,13,0,2));
+        assertFalse(CofferdamGeometry.requiresCeiling(waterWorld(13,false),0,2,319,0,2));
     }
     private World waterWorld(int waterY, boolean collarOnly) {
         return (World)Proxy.newProxyInstance(World.class.getClassLoader(),new Class[]{World.class},(p,m,a)-> {
