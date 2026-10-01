@@ -256,10 +256,14 @@ class CofferdamTest {
         World terrain=terrainWorld(p->p[2]==-1 && (p[0]==2 || p[1]<=14)?Material.STONE:Material.AIR);
         assertArrayEquals(new int[]{1,15,0},CofferdamGeometry.chooseEntrance(terrain,s));
     }
-    @Test void noBuriedEntranceWhenGroundExceedsWallHeadroom() {
-        JobState s=state();
-        World terrain=terrainWorld(p->p[2]==-1?Material.STONE:Material.AIR);
-        assertNull(CofferdamGeometry.chooseEntrance(terrain,s));
+    @Test void buriedEntranceKeepsConfirmedWallWithoutExcavatingBank() {
+        for (String facing:List.of("NORTH","EAST","SOUTH","WEST")) {
+            JobState s=state();s.cofferdamFacing=facing;
+            // Fixture rejects every mutation: selecting the buried fallback does not dig.
+            World terrain=terrainWorld(p->Material.STONE);
+            assertArrayEquals(CofferdamGeometry.door(s),CofferdamGeometry.chooseEntrance(terrain,s));
+            assertEquals(facing,s.cofferdamFacing);
+        }
     }
     @Test void submergedEntranceStillWorksWithoutExteriorFooting() {
         JobState s=state();

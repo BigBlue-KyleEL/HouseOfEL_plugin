@@ -468,8 +468,8 @@ public final class JobExecutionService {
         entranceGeometry.cofferdamHasCeiling=hasCeiling;
         int[] entrance=CofferdamGeometry.chooseEntrance(world,entranceGeometry);
         if (entrance==null) {
-            player.sendMessage(Component.text("There is no ground-level doorway with two blocks of clearance on that side. "
-                    + "Raise the top of your selection or clear an approach, then confirm again.",NamedTextColor.RED));
+            player.sendMessage(Component.text("The entrance does not fit within the selected height or world limits. "
+                    + "Adjust the selection height, then confirm again.",NamedTextColor.RED));
             return null;
         }
         int wallBlocks = CofferdamJobTask.computeBuildOrder(minX, maxX, minY, maxY, minZ, maxZ,hasCeiling).size()

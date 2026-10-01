@@ -92,7 +92,10 @@ final class CofferdamGeometry {
                 }
             }
         }
-        return null;
+        // Kyle approved keeping this facing even when the bank blocks all approaches.
+        // Place only the normal doorway/marker; do not excavate an access tunnel.
+        int[] fallback=door(s);
+        return fallback[1]<=highestDoorY?fallback:null;
     }
     private static boolean clearApproach(Block block) {
         // Water is valid for a submerged entrance; solid terrain is not a passage.
