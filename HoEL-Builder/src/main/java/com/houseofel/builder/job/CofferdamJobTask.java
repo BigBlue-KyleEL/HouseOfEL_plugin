@@ -218,6 +218,7 @@ public final class CofferdamJobTask implements JobTask {
         task.entranceState.cofferdamDoorX=state.cofferdamDoorX;
         task.entranceState.cofferdamDoorY=state.cofferdamDoorY;
         task.entranceState.cofferdamDoorZ=state.cofferdamDoorZ;
+        task.entranceState.cofferdamFramedEntrance=state.cofferdamFramedEntrance;
         task.configureCeiling(state.cofferdamHasCeiling);
         for (String encoded:state.bulkheadPlugs) {
             Block block=JobStorage.decodeBlock(world,encoded);
@@ -307,10 +308,13 @@ public final class CofferdamJobTask implements JobTask {
     void configureCeiling(boolean hasCeiling) {
         entranceState.cofferdamHasCeiling=hasCeiling;
         buildOrder=computeBuildOrder(minX,maxX,minY,maxY,minZ,maxZ,hasCeiling);
+        for (int[] p:CofferdamGeometry.entranceFrame(entranceState))
+            if (p[1]>maxY) buildOrder.add(p);
         announcedHalf=buildOrder.isEmpty() || buildCursor*2>=buildOrder.size();
     }
 
     void configureEntrance(String facing, Material door, int[] position) {
+        entranceState.cofferdamFramedEntrance=true;
         entranceState.cofferdamFacing=facing;
         entranceState.cofferdamDoor=door.name();
         entranceState.cofferdamDoorX=position[0];
@@ -346,6 +350,10 @@ public final class CofferdamJobTask implements JobTask {
         Block wall=lantern.getRelative(BlockFace.UP);
         if (lantern.getType()==Material.LANTERN) lantern.setType(Material.AIR,false);
         if (wall.getType()==Material.COBBLESTONE_WALL) wall.setType(Material.AIR,false);
+        if (entranceState.cofferdamFramedEntrance && p[1]+3>maxY) {
+            Block backing=world.getBlockAt(p[0],p[1]+3,p[2]);
+            if (backing.getType()==Material.COBBLESTONE_WALL) backing.setType(Material.AIR,false);
+        }
     }
 
     @Override
@@ -371,6 +379,7 @@ public final class CofferdamJobTask implements JobTask {
         state.cofferdamDoorY=entranceState.cofferdamDoorY;
         state.cofferdamDoorZ=entranceState.cofferdamDoorZ;
         state.cofferdamHasCeiling=entranceState.cofferdamHasCeiling;
+        state.cofferdamFramedEntrance=entranceState.cofferdamFramedEntrance;
         state.cofferdamHelperUuid=npc.getUniqueId().toString();
         for (Block plug:bulkheadPlugs) state.bulkheadPlugs.add(JobStorage.encodeBlock(plug));
         state.buildCursor = buildCursor;

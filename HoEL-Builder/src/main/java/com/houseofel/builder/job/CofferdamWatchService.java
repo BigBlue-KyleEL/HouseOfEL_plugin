@@ -149,7 +149,7 @@ final class CofferdamWatchService implements Listener {
         if (world.getFullTime()<watch.expires) {
             // Legacy watches retain their old outer bounds; no fabricated historical entrance.
             if (s.cofferdamFacing!=null) CofferdamGeometry.entrance(world,s);
-            long sx=(long)s.maxX-s.minX+1, sy=(long)s.maxY-s.minY+1, sz=(long)s.maxZ-s.minZ+1;
+            long sx=(long)s.maxX-s.minX+1, sy=(long)CofferdamGeometry.repairMaxY(s)-s.minY+1, sz=(long)s.maxZ-s.minZ+1;
             long volume=sx*sy*sz;
             for (int i=0;i<Math.min(512L,volume);i++) {
                 long index=watch.cursor++ % volume;

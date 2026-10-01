@@ -273,4 +273,33 @@ class CofferdamTest {
         for (String key:List.of("cofferdamDoorX","cofferdamDoorY","cofferdamDoorZ")) yaml.set(key,null);
         assertArrayEquals(new int[]{1,11,0},CofferdamGeometry.door(JobStateStore.decode(yaml)));
     }
+    @Test void lowEntranceFrameConnectsToWallOnEveryFacingAndIsWatched() {
+        for (String facing:List.of("NORTH","EAST","SOUTH","WEST")) {
+            JobState s=state();s.cofferdamFacing=facing;s.cofferdamHasCeiling=false;
+            s.cofferdamFramedEntrance=true;s.cofferdamDoorY=12;
+            int[] old=CofferdamGeometry.door(s);
+            s.cofferdamDoorX=old[0];s.cofferdamDoorZ=old[2];
+            int[] door=CofferdamGeometry.door(s);
+            var frame=CofferdamGeometry.entranceFrame(s);
+            assertEquals(3,frame.size());
+            assertEquals(14,CofferdamGeometry.repairMaxY(s));
+            for (int[] p:frame) {
+                assertEquals(door[1]+2,p[1]);
+                assertTrue(CofferdamGeometry.isShell(s,p[0],p[1],p[2]));
+                assertFalse(CofferdamGeometry.interior(s,p[0],p[1],p[2]));
+                assertTrue(p[0]>=s.minX && p[0]<=s.maxX && p[2]>=s.minZ && p[2]<=s.maxZ);
+            }
+            assertFalse(CofferdamGeometry.isShell(s,1,14,1),"frame must not create a roof");
+        }
+    }
+    @Test void frameChoicePersistsAndLegacyStructuresAreNotRemodeled() {
+        JobState s=state();s.cofferdamFramedEntrance=true;
+        var yaml=JobStateStore.encode(s);
+        assertTrue(JobStateStore.decode(yaml).cofferdamFramedEntrance);
+        yaml.set("cofferdamFramedEntrance",null);
+        JobState legacy=JobStateStore.decode(yaml);
+        assertFalse(legacy.cofferdamFramedEntrance);
+        assertTrue(CofferdamGeometry.entranceFrame(legacy).isEmpty());
+        assertEquals(legacy.maxY,CofferdamGeometry.repairMaxY(legacy));
+    }
 }

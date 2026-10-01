@@ -117,7 +117,7 @@ public final class RegionSelectionService {
      */
     public void beginChestSelection(Player player, NPC npc, Predicate<Block> callback) {
         clearChestSelection(player.getUniqueId());
-        if (!rod.giveTo(player, BuilderNpcService.baseNameOf(npc))) {
+        if (!rod.giveTo(player, BuilderNpcService.baseNameOf(npc), true)) {
             player.sendMessage(Component.text(
                     BuilderNpcService.baseNameOf(npc)
                             + ": You can't even hold the Surveyor's Rod. Make space.",

@@ -472,7 +472,8 @@ public final class JobExecutionService {
                     + "Raise the top of your selection or clear an approach, then confirm again.",NamedTextColor.RED));
             return null;
         }
-        int wallBlocks = CofferdamJobTask.computeBuildOrder(minX, maxX, minY, maxY, minZ, maxZ,hasCeiling).size();
+        int wallBlocks = CofferdamJobTask.computeBuildOrder(minX, maxX, minY, maxY, minZ, maxZ,hasCeiling).size()
+                + (entrance[1]+2>maxY?3:0);
 
         JobStorage storage = new JobStorage(plugin, world, minX, maxX, minY, maxY, minZ, maxZ);
         return selectStorage(player, npc, storage, () -> finishCofferdamDispatch(player, npc, storage, world,

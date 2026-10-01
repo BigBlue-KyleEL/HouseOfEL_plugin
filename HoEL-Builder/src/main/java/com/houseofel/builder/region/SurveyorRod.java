@@ -31,11 +31,16 @@ public final class SurveyorRod {
         this.key = new NamespacedKey(plugin, "surveyor_rod");
     }
 
-    public ItemStack create() {
+    public ItemStack create() { return create(false); }
+
+    private ItemStack create(boolean chestSelection) {
         ItemStack item = new ItemStack(Material.BLAZE_ROD);
         ItemMeta meta = item.getItemMeta();
         meta.displayName(Component.text("Surveyor's Rod", NamedTextColor.GOLD));
-        meta.lore(List.of(
+        meta.lore(chestSelection ? List.of(
+                Component.text("Tap a chest to use it for this job", NamedTextColor.GRAY),
+                Component.text("/builder cancel: cancel selection", NamedTextColor.GRAY)
+        ) : List.of(
                 Component.text("Left-click: mark point A", NamedTextColor.GRAY),
                 Component.text("Right-click: mark point B", NamedTextColor.GRAY)
         ));
@@ -58,13 +63,16 @@ public final class SurveyorRod {
      * room for it — {@code addItem} silently drops what doesn't fit rather than
      * throwing, so this is the only way to know the hand-off didn't actually happen.
      */
-    public boolean giveTo(Player player, String npcName) {
+    public boolean giveTo(Player player, String npcName) { return giveTo(player, npcName, false); }
+
+    public boolean giveTo(Player player, String npcName, boolean chestSelection) {
         removeAllFrom(player);
-        Map<Integer, ItemStack> leftover = player.getInventory().addItem(create());
+        Map<Integer, ItemStack> leftover = player.getInventory().addItem(create(chestSelection));
         if (!leftover.isEmpty()) {
             return false;
         }
-        String line = FLAVOR_LINES.get(ThreadLocalRandom.current().nextInt(FLAVOR_LINES.size()));
+        String line = chestSelection ? "Tap the chest you want me to use for this job."
+                : FLAVOR_LINES.get(ThreadLocalRandom.current().nextInt(FLAVOR_LINES.size()));
         player.sendMessage(Component.text(npcName + ": ", NamedTextColor.DARK_AQUA)
                 .append(Component.text(line, NamedTextColor.WHITE)));
         return true;

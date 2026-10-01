@@ -63,6 +63,7 @@ final class JobState {
     Integer cofferdamDoorX;
     Integer cofferdamDoorY;
     Integer cofferdamDoorZ;
+    boolean cofferdamFramedEntrance; // Older structures retain their original entrance.
     boolean cofferdamHasCeiling = true; // Legacy jobs retain their original closed shell.
     String cofferdamHelperUuid;
     int buildCursor;

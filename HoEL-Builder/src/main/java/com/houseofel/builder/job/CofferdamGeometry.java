@@ -113,7 +113,23 @@ final class CofferdamGeometry {
         return false;
     }
 
+    /** Three-wide lintel in the wall plane, with a connected marker arm above it. */
+    static java.util.List<int[]> entranceFrame(JobState s) {
+        if (!s.cofferdamFramedEntrance || !hasEntrance(s)) return java.util.List.of();
+        int[] p=door(s);
+        BlockFace face=BlockFace.valueOf(s.cofferdamFacing);
+        java.util.List<int[]> frame=new java.util.ArrayList<>();
+        for (int offset=-1;offset<=1;offset++)
+            frame.add(new int[]{p[0]+offset*face.getModZ(),p[1]+2,p[2]+offset*face.getModX()});
+        return frame;
+    }
+
+    static int repairMaxY(JobState s) {
+        return s.cofferdamFramedEntrance && hasEntrance(s)?Math.max(s.maxY,door(s)[1]+2):s.maxY;
+    }
+
     static boolean isShell(JobState s, int x,int y,int z) {
+        for (int[] p:entranceFrame(s)) if (x==p[0] && y==p[1] && z==p[2]) return true;
         if (x<s.minX || x>s.maxX || y<s.minY || y>s.maxY || z<s.minZ || z>s.maxZ) return false;
         if (y==s.minY || x==s.minX || x==s.maxX || z==s.minZ || z==s.maxZ) return true;
         return y==s.maxY && s.cofferdamHasCeiling;
@@ -138,6 +154,12 @@ final class CofferdamGeometry {
             data.setFacing(face);
             data.setHalf(dy==0?Bisected.Half.BOTTOM:Bisected.Half.TOP);
             b.setBlockData(data,false);
+        }
+        // Above a low wall, join the projecting marker to a post on the lintel.
+        // Taller walls already provide its backing.
+        if (s.cofferdamFramedEntrance && p[1]+3>s.maxY) {
+            Block backing=world.getBlockAt(p[0],p[1]+3,p[2]);
+            if (backing.getType()!=Material.COBBLESTONE_WALL) backing.setType(Material.COBBLESTONE_WALL,false);
         }
         Block support=world.getBlockAt(mx,p[1]+3,mz);
         if (support.getType()!=Material.COBBLESTONE_WALL) support.setType(Material.COBBLESTONE_WALL,false);
