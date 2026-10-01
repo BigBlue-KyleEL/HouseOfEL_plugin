@@ -626,13 +626,19 @@ public final class ShaftMinerJobTask implements JobTask {
         }
     }
 
+    // A ladder faces away from its supporting wall; the support here is the north wall.
+    static final BlockFace LADDER_FACING = BlockFace.SOUTH;
+
     private void placeLadder(int y) {
         Block pos = world.getBlockAt(minX, y, minZ);
-        if (pos.getType() != Material.AIR) return;
-        Block wall = world.getBlockAt(minX, y, minZ - 1);
+        boolean misfacedLadder = pos.getType() == Material.LADDER
+                && pos.getBlockData() instanceof Directional existing
+                && existing.getFacing() != LADDER_FACING;
+        if (pos.getType() != Material.AIR && !misfacedLadder) return;
+        Block wall = pos.getRelative(LADDER_FACING.getOppositeFace());
         if (!wall.getType().isSolid()) return;
         Directional data = (Directional) Material.LADDER.createBlockData();
-        data.setFacing(BlockFace.NORTH);
+        data.setFacing(LADDER_FACING);
         pos.setBlockData(data);
     }
 
@@ -641,12 +647,25 @@ public final class ShaftMinerJobTask implements JobTask {
         return depth > 0 && depth % LANDING_INTERVAL == 0;
     }
 
-    private void placeLighting(int y) {
+    record TorchSpot(int x, int z, BlockFace facing) { }
+
+    /** Shafts at least 3 wide both ways light all four walls; narrower ones keep the south and east walls. */
+    static java.util.List<TorchSpot> landingTorchSpots(int minX, int maxX, int minZ, int maxZ) {
         int midX = (minX + maxX) / 2;
         int midZ = (minZ + maxZ) / 2;
-        placeWallTorch(midX, y, maxZ, BlockFace.NORTH);
-        if (maxX > minX) {
-            placeWallTorch(maxX, y, midZ, BlockFace.WEST);
+        java.util.List<TorchSpot> spots = new java.util.ArrayList<>();
+        spots.add(new TorchSpot(midX, maxZ, BlockFace.NORTH));
+        if (maxX > minX) spots.add(new TorchSpot(maxX, midZ, BlockFace.WEST));
+        if (maxX - minX >= 2 && maxZ - minZ >= 2) {
+            spots.add(new TorchSpot(midX, minZ, BlockFace.SOUTH));
+            spots.add(new TorchSpot(minX, midZ, BlockFace.EAST));
+        }
+        return spots;
+    }
+
+    private void placeLighting(int y) {
+        for (TorchSpot spot : landingTorchSpots(minX, maxX, minZ, maxZ)) {
+            placeWallTorch(spot.x(), y, spot.z(), spot.facing());
         }
     }
 
