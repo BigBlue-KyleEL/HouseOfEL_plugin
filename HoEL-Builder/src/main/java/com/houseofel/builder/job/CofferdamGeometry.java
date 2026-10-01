@@ -73,14 +73,25 @@ final class CofferdamGeometry {
                 }
             }
         }
-        // A submerged box can be above the seabed: swimming access needs no exterior
-        // footing. This fallback never accepts solid ground hiding a floor-level door.
-        int[] floorDoor=door(s);
-        Block outside=world.getBlockAt(floorDoor[0]+face.getModX(),floorDoor[1],floorDoor[2]+face.getModZ());
-        if (floorDoor[1]<=highestDoorY && CofferdamWork.wet(outside) && clearApproach(outside)
-                && clearApproach(world.getBlockAt(outside.getX(),floorDoor[1]+1,outside.getZ()))
-                && clearApproach(world.getBlockAt(floorDoor[0]-face.getModX(),floorDoor[1],floorDoor[2]-face.getModZ()))
-                && clearApproach(world.getBlockAt(floorDoor[0]-face.getModX(),floorDoor[1]+1,floorDoor[2]-face.getModZ()))) return floorDoor;
+        // Swimming access needs no exterior footing. Search the whole confirmed
+        // wall: its center/floor may be buried even when higher or side cells are clear.
+        for (int offset=0;offset<=high-low;offset++) {
+            for (int sign:new int[]{-1,1}) {
+                if (offset==0 && sign==1) continue;
+                int along=center+offset*sign;
+                if (along<low || along>high) continue;
+                int x=alongX?along:(face==BlockFace.EAST?s.maxX:s.minX);
+                int z=alongX?(face==BlockFace.SOUTH?s.maxZ:s.minZ):along;
+                for (int y=s.minY+1;y<=highestDoorY;y++) {
+                    Block outside=world.getBlockAt(x+face.getModX(),y,z+face.getModZ());
+                    if (CofferdamWork.wet(outside) && clearApproach(outside)
+                            && clearApproach(world.getBlockAt(x+face.getModX(),y+1,z+face.getModZ()))
+                            && clearApproach(world.getBlockAt(x-face.getModX(),y,z-face.getModZ()))
+                            && clearApproach(world.getBlockAt(x-face.getModX(),y+1,z-face.getModZ())))
+                        return new int[]{x,y,z};
+                }
+            }
+        }
         return null;
     }
     private static boolean clearApproach(Block block) {

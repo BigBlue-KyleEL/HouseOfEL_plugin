@@ -305,4 +305,15 @@ class CofferdamTest {
         assertTrue(CofferdamGeometry.entranceFrame(legacy).isEmpty());
         assertEquals(legacy.maxY,CofferdamGeometry.repairMaxY(legacy));
     }
+    @Test void swimmingEntranceSearchesAboveBlockedInteriorFloor() {
+        JobState s=state();s.maxY=18;
+        // Interior seabed blocks the old floor-only swimming fallback. Exterior is deep water.
+        World terrain=terrainWorld(p->p[2]==1 && p[1]<=13?Material.STONE:Material.WATER);
+        assertArrayEquals(new int[]{1,14,0},CofferdamGeometry.chooseEntrance(terrain,s));
+    }
+    @Test void swimmingEntranceSearchesBesideBuriedCenter() {
+        JobState s=state();s.maxX=4;s.maxZ=4;s.maxY=18;
+        World terrain=terrainWorld(p->p[0]==2 && p[2]==-1?Material.STONE:Material.WATER);
+        assertArrayEquals(new int[]{1,11,0},CofferdamGeometry.chooseEntrance(terrain,s));
+    }
 }
