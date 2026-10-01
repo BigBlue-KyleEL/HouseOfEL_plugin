@@ -180,6 +180,9 @@ public final class ShaftMinerJobTask implements JobTask {
     private int bulkheadWaveStepTicks;
 
     private boolean paused;
+    private int waterBreachStreak;
+    private boolean waterThisLayer;
+    private final Map<String, Block> waterWallColumns = new HashMap<>();
     private final long startedAtMillis = System.currentTimeMillis();
 
     private BukkitTask task;
@@ -524,6 +527,11 @@ public final class ShaftMinerJobTask implements JobTask {
                 dressCompletedLayer(y);
             }
             currentLayerY = candidate.getY();
+            if (!waterThisLayer) {
+                waterBreachStreak = 0;
+                waterWallColumns.clear();
+            }
+            waterThisLayer = false;
         }
 
         pendingCell = candidate;
@@ -843,6 +851,7 @@ public final class ShaftMinerJobTask implements JobTask {
 
         List<Block> waterBreach = detectWaterBreach(pendingCell);
         List<Block> lavaBreach = detectLavaBreach(pendingCell);
+        if (!waterBreach.isEmpty() && respondToPersistentWater(pendingCell.getY())) return;
         if (!waterBreach.isEmpty() || !lavaBreach.isEmpty()) {
             beginBulkhead(waterBreach, lavaBreach);
             return;
@@ -853,6 +862,94 @@ public final class ShaftMinerJobTask implements JobTask {
             startHauling();
         } else {
             phase = Phase.SEEKING;
+        }
+    }
+
+    // ── Persistent water: wall off the inflow (Kyle, 2026-10-01) ────────────
+
+    static final int SPONGE_WAVES_BEFORE_WALLING = 3;
+    enum WaterResponse { SPONGE_ONLY, WALL_ENTRIES, RAISE_WALLS, ASK_OWNER }
+
+    /** Water breaches counted since the last layer that stayed dry. */
+    static WaterResponse waterResponseFor(int breachStreak) {
+        int beyond = breachStreak - SPONGE_WAVES_BEFORE_WALLING;
+        if (beyond <= 0) return WaterResponse.SPONGE_ONLY;
+        if (beyond == 1) return WaterResponse.WALL_ENTRIES;
+        if (beyond == 2) return WaterResponse.RAISE_WALLS;
+        return WaterResponse.ASK_OWNER;
+    }
+
+    /** Returns true when the job paused instead of running a sponge wave. */
+    private boolean respondToPersistentWater(int dugY) {
+        waterBreachStreak++;
+        waterThisLayer = true;
+        switch (waterResponseFor(waterBreachStreak)) {
+            case SPONGE_ONLY -> { }
+            case WALL_ENTRIES -> wallWaterEntries(dugY);
+            case RAISE_WALLS -> {
+                wallWaterEntries(dugY);
+                raiseWaterWalls();
+            }
+            case ASK_OWNER -> {
+                String name = BuilderNpcService.baseNameOf(npc);
+                String message = name + ": There's too much water coming in for me to hold back. Can you help seal it? "
+                        + "Say \"" + name + " continue\" when it's done, or \"" + name + " stop\" to end the job.";
+                logger.info("[shaft-miner] " + name + " paused: water still entering after walling");
+                waterBreachStreak = 0;
+                jobManager.pause(npc.getId(), playerId);
+                notifyOwner(message);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Only the edge cells actually carrying water get a block; the rest of the rim is untouched.
+    private void wallWaterEntries(int dugY) {
+        int walled = 0;
+        for (Block entry : perimeterCells(dugY, topY + 1)) {
+            if (entry.getType() != Material.WATER) continue;
+            entry.setType(entry.getY() < 0 ? Material.DEEPSLATE : Material.COBBLESTONE);
+            waterWallColumns.merge(entry.getX() + "," + entry.getZ(), entry, (a, b) -> a.getY() >= b.getY() ? a : b);
+            walled++;
+        }
+        logger.info("[shaft-miner] " + BuilderNpcService.baseNameOf(npc) + " walled " + walled + " water entry block(s)");
+    }
+
+    private void raiseWaterWalls() {
+        int raised = 0;
+        for (Map.Entry<String, Block> column : waterWallColumns.entrySet()) {
+            Block above = column.getValue().getRelative(BlockFace.UP);
+            if (above.getType().isSolid()) continue;
+            above.setType(above.getY() < 0 ? Material.DEEPSLATE : Material.COBBLESTONE);
+            column.setValue(above);
+            raised++;
+        }
+        logger.info("[shaft-miner] " + BuilderNpcService.baseNameOf(npc) + " raised " + raised + " water wall(s) by one block");
+    }
+
+    /** Cells directly outside each shaft edge (corners excluded), from fromY up to toY. */
+    private List<Block> perimeterCells(int fromY, int toY) {
+        List<Block> cells = new ArrayList<>();
+        for (int y = fromY; y <= toY; y++) {
+            for (int x = minX; x <= maxX; x++) {
+                cells.add(world.getBlockAt(x, y, minZ - 1));
+                cells.add(world.getBlockAt(x, y, maxZ + 1));
+            }
+            for (int z = minZ; z <= maxZ; z++) {
+                cells.add(world.getBlockAt(minX - 1, y, z));
+                cells.add(world.getBlockAt(maxX + 1, y, z));
+            }
+        }
+        return cells;
+    }
+
+    private void notifyOwner(String message) {
+        Player player = Bukkit.getPlayer(playerId);
+        if (player != null) {
+            player.sendMessage(Component.text(message, NamedTextColor.YELLOW));
+        } else {
+            jobManager.queueOfflineNotification(playerId, message);
         }
     }
 

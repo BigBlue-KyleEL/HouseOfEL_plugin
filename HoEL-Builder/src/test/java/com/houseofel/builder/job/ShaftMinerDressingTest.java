@@ -13,6 +13,14 @@ class ShaftMinerDressingTest {
                 "the ladder's support must be the north wall behind the NW corner");
     }
 
+    @Test void persistentWaterEscalatesSpongesThenWallsThenAsksOwner() {
+        for (int streak = 1; streak <= 3; streak++)
+            assertEquals(ShaftMinerJobTask.WaterResponse.SPONGE_ONLY, ShaftMinerJobTask.waterResponseFor(streak));
+        assertEquals(ShaftMinerJobTask.WaterResponse.WALL_ENTRIES, ShaftMinerJobTask.waterResponseFor(4));
+        assertEquals(ShaftMinerJobTask.WaterResponse.RAISE_WALLS, ShaftMinerJobTask.waterResponseFor(5));
+        assertEquals(ShaftMinerJobTask.WaterResponse.ASK_OWNER, ShaftMinerJobTask.waterResponseFor(6));
+    }
+
     @Test void ladderTorchEveryFourLayersIncludingLandings() {
         assertFalse(ShaftMinerJobTask.isLadderLightLayer(0), "surface layer");
         for (int depth = 1; depth <= 24; depth++)
