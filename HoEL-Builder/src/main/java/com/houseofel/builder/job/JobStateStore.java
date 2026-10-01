@@ -68,6 +68,9 @@ final class JobStateStore {
             yaml.set("requestedDepth", state.requestedDepth);
             yaml.set("stepsAlongX", state.stepsAlongX);
             yaml.set("stepDirection", state.stepDirection);
+        } else if (state.jobType == JobType.SHAFT_MINER) {
+            yaml.set("topY", state.topY);
+            yaml.set("requestedDepth", state.requestedDepth);
         } else if (state.jobType == JobType.LANDSCAPE) {
             yaml.set("minY", state.minY);
             yaml.set("maxY", state.maxY);
@@ -182,6 +185,9 @@ final class JobStateStore {
                 state.requestedDepth = yaml.getInt("requestedDepth");
                 state.stepsAlongX = yaml.getBoolean("stepsAlongX");
                 state.stepDirection = yaml.getInt("stepDirection");
+            } else if (state.jobType == JobType.SHAFT_MINER) {
+                state.topY = yaml.getInt("topY");
+                state.requestedDepth = yaml.getInt("requestedDepth");
             } else if (state.jobType == JobType.LANDSCAPE) {
                 state.minY = yaml.getInt("minY");
                 state.maxY = yaml.getInt("maxY");

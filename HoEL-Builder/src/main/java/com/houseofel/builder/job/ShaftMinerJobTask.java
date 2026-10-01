@@ -29,6 +29,7 @@ import org.bukkit.block.DoubleChest;
 import org.bukkit.block.Lidded;
 import org.bukkit.block.data.Directional;
 import org.bukkit.block.data.Levelled;
+import org.bukkit.block.data.type.Ladder;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
 import org.bukkit.entity.LivingEntity;
@@ -599,9 +600,11 @@ public final class ShaftMinerJobTask implements JobTask {
 
     // ── Shaft infrastructure ─────────────────────────────────────────────
 
+    // Re-dresses every layer, not just the unfinished ones: a layer can miss its
+    // ladder or torches if water was running through the spot when it was dressed.
     private void dressRemainingLayers() {
         int bottomY = topY - requestedDepth + 1;
-        for (int y = currentLayerY; y >= bottomY; y--) {
+        for (int y = topY; y >= bottomY; y--) {
             dressCompletedLayer(y);
         }
     }
@@ -652,11 +655,15 @@ public final class ShaftMinerJobTask implements JobTask {
         boolean misfacedLadder = pos.getType() == Material.LADDER
                 && pos.getBlockData() instanceof Directional existing
                 && existing.getFacing() != LADDER_FACING;
-        if (pos.getType() != Material.AIR && !misfacedLadder) return;
+        boolean flowingWater = pos.getType() == Material.WATER
+                && pos.getBlockData() instanceof Levelled water && water.getLevel() != 0;
+        boolean sourceWater = pos.getType() == Material.WATER && !flowingWater;
+        if (pos.getType() != Material.AIR && !misfacedLadder && !flowingWater && !sourceWater) return;
         Block wall = pos.getRelative(LADDER_FACING.getOppositeFace());
         if (!wall.getType().isSolid()) return;
-        Directional data = (Directional) Material.LADDER.createBlockData();
+        Ladder data = (Ladder) Material.LADDER.createBlockData();
         data.setFacing(LADDER_FACING);
+        data.setWaterlogged(sourceWater);
         pos.setBlockData(data);
     }
 

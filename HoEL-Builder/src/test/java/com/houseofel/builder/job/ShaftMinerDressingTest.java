@@ -13,6 +13,18 @@ class ShaftMinerDressingTest {
                 "the ladder's support must be the north wall behind the NW corner");
     }
 
+    @Test void shaftDepthSurvivesSaveAndResume() {
+        JobState s = new JobState();
+        s.jobType = JobType.SHAFT_MINER;
+        s.npcId = 8; s.playerId = java.util.UUID.randomUUID(); s.worldName = "world";
+        s.minX = 91; s.maxX = 95; s.minZ = -69; s.maxZ = -65;
+        s.topY = 69; s.requestedDepth = 30; s.processedCells = 390;
+        JobState back = JobStateStore.decode(JobStateStore.encode(s));
+        assertEquals(69, back.topY);
+        assertEquals(30, back.requestedDepth);
+        assertEquals(390, back.processedCells);
+    }
+
     @Test void persistentWaterEscalatesSpongesThenWallsThenAsksOwner() {
         for (int streak = 1; streak <= 3; streak++)
             assertEquals(ShaftMinerJobTask.WaterResponse.SPONGE_ONLY, ShaftMinerJobTask.waterResponseFor(streak));
