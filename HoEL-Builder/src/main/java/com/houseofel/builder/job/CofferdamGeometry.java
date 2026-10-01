@@ -7,6 +7,8 @@ import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
 import org.bukkit.block.Biome;
 import org.bukkit.block.data.Bisected;
+import org.bukkit.block.data.Waterlogged;
+import org.bukkit.block.data.type.Wall;
 import org.bukkit.block.data.type.Door;
 import org.bukkit.block.data.type.Lantern;
 import org.bukkit.util.BiomeSearchResult;
@@ -189,12 +191,9 @@ final class CofferdamGeometry {
         }
         // Above a low wall, join the projecting marker to a post on the lintel.
         // Taller walls already provide its backing.
-        if (s.cofferdamFramedEntrance && p[1]+3>s.maxY) {
-            Block backing=world.getBlockAt(p[0],p[1]+3,p[2]);
-            if (backing.getType()!=Material.COBBLESTONE_WALL) backing.setType(Material.COBBLESTONE_WALL,false);
-        }
-        Block support=world.getBlockAt(mx,p[1]+3,mz);
-        if (support.getType()!=Material.COBBLESTONE_WALL) support.setType(Material.COBBLESTONE_WALL,false);
+        if (s.cofferdamFramedEntrance && p[1]+3>s.maxY)
+            bracketPost(world.getBlockAt(p[0],p[1]+3,p[2]),face);
+        bracketPost(world.getBlockAt(mx,p[1]+3,mz),face.getOppositeFace());
         Block marker=world.getBlockAt(mx,p[1]+2,mz);
         if (!(marker.getBlockData() instanceof Lantern lantern) || !lantern.isHanging()) {
             Lantern data=(Lantern)Material.LANTERN.createBlockData();
@@ -202,6 +201,27 @@ final class CofferdamGeometry {
             data.setWaterlogged(marker.getType()==Material.WATER);
             marker.setBlockData(data,false);
         }
+    }
+
+    // Placement skips physics, so wall connections are never computed by vanilla;
+    // set the arm explicitly. Only a missing arm counts as damage.
+    private static void bracketPost(Block block, BlockFace toward) {
+        if (block.getType()==Material.COBBLESTONE_WALL && block.getBlockData() instanceof Wall existing
+                && bracketConnected(existing,toward)) return;
+        boolean wet=block.getType()==Material.WATER
+                || (block.getBlockData() instanceof Waterlogged w && w.isWaterlogged());
+        Wall data=(Wall)Material.COBBLESTONE_WALL.createBlockData();
+        shapeBracket(data,toward,wet);
+        block.setBlockData(data,false);
+    }
+    static boolean bracketConnected(Wall wall, BlockFace toward) {
+        return wall.getHeight(toward)!=Wall.Height.NONE;
+    }
+    static void shapeBracket(Wall wall, BlockFace toward, boolean waterlogged) {
+        for (BlockFace side:new BlockFace[]{BlockFace.NORTH,BlockFace.EAST,BlockFace.SOUTH,BlockFace.WEST})
+            wall.setHeight(side,side==toward?Wall.Height.LOW:Wall.Height.NONE);
+        wall.setUp(true);
+        wall.setWaterlogged(waterlogged);
     }
 
     static Material nativeDoor(String biome) {

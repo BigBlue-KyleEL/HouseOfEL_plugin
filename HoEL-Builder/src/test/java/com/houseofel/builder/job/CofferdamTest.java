@@ -299,6 +299,36 @@ class CofferdamTest {
             assertFalse(CofferdamGeometry.isShell(s,1,14,1),"frame must not create a roof");
         }
     }
+    private static org.bukkit.block.data.type.Wall fakeWall() {
+        Map<org.bukkit.block.BlockFace,org.bukkit.block.data.type.Wall.Height> heights=new HashMap<>();
+        boolean[] flags=new boolean[2];
+        return (org.bukkit.block.data.type.Wall)Proxy.newProxyInstance(World.class.getClassLoader(),
+                new Class[]{org.bukkit.block.data.type.Wall.class},(p,m,a)->switch(m.getName()) {
+            case "getHeight" -> heights.getOrDefault(a[0],org.bukkit.block.data.type.Wall.Height.NONE);
+            case "setHeight" -> { heights.put((org.bukkit.block.BlockFace)a[0],(org.bukkit.block.data.type.Wall.Height)a[1]); yield null; }
+            case "isUp" -> flags[0];
+            case "setUp" -> { flags[0]=(Boolean)a[0]; yield null; }
+            case "isWaterlogged" -> flags[1];
+            case "setWaterlogged" -> { flags[1]=(Boolean)a[0]; yield null; }
+            default -> throw new UnsupportedOperationException(m.getName());
+        });
+    }
+    @Test void entranceBracketPostsJoinEachOtherOnEveryFacing() {
+        for (var face:List.of(org.bukkit.block.BlockFace.NORTH,org.bukkit.block.BlockFace.EAST,
+                org.bukkit.block.BlockFace.SOUTH,org.bukkit.block.BlockFace.WEST)) {
+            var bare=fakeWall();
+            assertFalse(CofferdamGeometry.bracketConnected(bare,face),"default post is disconnected");
+            var rear=fakeWall(); var support=fakeWall();
+            CofferdamGeometry.shapeBracket(rear,face,false);
+            CofferdamGeometry.shapeBracket(support,face.getOppositeFace(),true);
+            assertTrue(CofferdamGeometry.bracketConnected(rear,face));
+            assertTrue(CofferdamGeometry.bracketConnected(support,face.getOppositeFace()));
+            assertEquals(org.bukkit.block.data.type.Wall.Height.NONE,rear.getHeight(face.getOppositeFace()));
+            assertTrue(rear.isUp() && support.isUp());
+            assertFalse(rear.isWaterlogged());
+            assertTrue(support.isWaterlogged(),"underwater bracket keeps its water");
+        }
+    }
     @Test void frameChoicePersistsAndLegacyStructuresAreNotRemodeled() {
         JobState s=state();s.cofferdamFramedEntrance=true;
         var yaml=JobStateStore.encode(s);
