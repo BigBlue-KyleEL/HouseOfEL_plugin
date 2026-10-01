@@ -345,17 +345,18 @@ public final class ShaftMinerJobTask implements JobTask {
     static Deque<Block> buildDigOrder(World world, int minX, int maxX, int minZ, int maxZ,
                                        int topY, int requestedDepth) {
         Deque<Block> cells = new ArrayDeque<>();
+        Set<Long> pillars = pillarColumns(minX, maxX, minZ, maxZ);
         boolean forward = true;
         for (int layer = 0; layer < requestedDepth; layer++) {
             int y = topY - layer;
             for (int x = minX; x <= maxX; x++) {
                 if (forward) {
                     for (int z = minZ; z <= maxZ; z++) {
-                        cells.add(world.getBlockAt(x, y, z));
+                        if (!pillars.contains(columnKey(x, z))) cells.add(world.getBlockAt(x, y, z));
                     }
                 } else {
                     for (int z = maxZ; z >= minZ; z--) {
-                        cells.add(world.getBlockAt(x, y, z));
+                        if (!pillars.contains(columnKey(x, z))) cells.add(world.getBlockAt(x, y, z));
                     }
                 }
                 forward = !forward;
@@ -618,6 +619,7 @@ public final class ShaftMinerJobTask implements JobTask {
         // would let the ring "mine" conjured cobblestone for free items and Toil.
         // Both run before the ladder and torches so those attach to the finished wall.
         if (isRingLayer(topY - y)) placeFrameRing(y); else reinforceWalls(y);
+        placePillars(y);
         placeLadder(y);
         if (isLandingLayer(y)) {
             placeLighting(y);
@@ -679,20 +681,74 @@ public final class ShaftMinerJobTask implements JobTask {
     }
 
     private void placeFrameRing(int y) {
-        Material material = y < 0 ? Material.DEEPSLATE_BRICKS : ringLog();
+        Material material = frameMaterial(y);
         for (RingCell cell : ringCells(minX, maxX, minZ, maxZ)) {
-            Block block = world.getBlockAt(cell.x(), y, cell.z());
-            if (block.getType() == material) continue;
-            if (block.getType().getHardness() < 0 || block.getType() == Material.SPAWNER
-                    || block.getState() instanceof org.bukkit.inventory.BlockInventoryHolder) continue;
-            // Mined like spoil, so ores in the wall reach the chest and earn Toil.
-            if (block.getType().isSolid()) {
-                collectDrop(block);
-                awardGroundworkerProgress(creditUnitsFor(block));
-            }
-            BlockData data = material.createBlockData();
-            if (data instanceof Orientable log) log.setAxis(cell.axis());
-            block.setBlockData(data);
+            convertToFrame(world.getBlockAt(cell.x(), y, cell.z()), material, cell.axis());
+        }
+    }
+
+    private Material frameMaterial(int y) {
+        return y < 0 ? Material.DEEPSLATE_BRICKS : ringLog();
+    }
+
+    /** Swaps a block for frame material in place; the old block is mined like spoil (chest + Toil). */
+    private void convertToFrame(Block block, Material material, Axis axis) {
+        if (block.getType() == material) return;
+        if (block.getType().getHardness() < 0 || block.getType() == Material.SPAWNER
+                || block.getState() instanceof org.bukkit.inventory.BlockInventoryHolder) return;
+        if (block.getType().isSolid()) {
+            collectDrop(block);
+            awardGroundworkerProgress(creditUnitsFor(block));
+        }
+        BlockData data = material.createBlockData();
+        if (data instanceof Orientable log) log.setAxis(axis);
+        block.setBlockData(data);
+    }
+
+    // ── Centre pillars (Kyle, 2026-10-01) ──────────────────────────────────
+
+    static final int PILLAR_MIN_SIDE = 7;
+    static final int WIDE_PILLAR_SIDE = 12;
+    static final int PILLAR_GAP = 5;
+
+    /**
+     * Pillar offsets along one side. 7–11 wide: a single middle cell (just west/north
+     * of centre on even widths). 12+: 5 open, 2 pillar, repeated while a whole pillar
+     * fits — leftover space falls at the far end.
+     */
+    static List<Integer> pillarOffsets(int side) {
+        List<Integer> offsets = new ArrayList<>();
+        if (side < PILLAR_MIN_SIDE) return offsets;
+        if (side < WIDE_PILLAR_SIDE) {
+            offsets.add((side - 1) / 2);
+            return offsets;
+        }
+        for (int start = PILLAR_GAP; start + 1 < side; start += PILLAR_GAP + 2) {
+            offsets.add(start);
+            offsets.add(start + 1);
+        }
+        return offsets;
+    }
+
+    /** Pillar columns as (x,z) keys; empty unless both sides are at least 7. */
+    static Set<Long> pillarColumns(int minX, int maxX, int minZ, int maxZ) {
+        Set<Long> columns = new HashSet<>();
+        int sideX = maxX - minX + 1, sideZ = maxZ - minZ + 1;
+        if (sideX < PILLAR_MIN_SIDE || sideZ < PILLAR_MIN_SIDE) return columns;
+        for (int dx : pillarOffsets(sideX))
+            for (int dz : pillarOffsets(sideZ))
+                columns.add(columnKey(minX + dx, minZ + dz));
+        return columns;
+    }
+
+    static long columnKey(int x, int z) {
+        return ((long) x << 32) | (z & 0xffffffffL);
+    }
+
+    private void placePillars(int y) {
+        Material material = frameMaterial(y);
+        for (long key : pillarColumns(minX, maxX, minZ, maxZ)) {
+            convertToFrame(world.getBlockAt((int) (key >> 32), y, (int) key), material, Axis.Y);
         }
     }
 

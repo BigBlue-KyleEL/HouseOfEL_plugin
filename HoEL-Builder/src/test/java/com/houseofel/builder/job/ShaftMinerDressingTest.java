@@ -13,6 +13,33 @@ class ShaftMinerDressingTest {
                 "the ladder's support must be the north wall behind the NW corner");
     }
 
+    @Test void pillarOffsetsFollowKylesTable() {
+        assertEquals(List.of(), ShaftMinerJobTask.pillarOffsets(6));
+        assertEquals(List.of(3), ShaftMinerJobTask.pillarOffsets(7));
+        assertEquals(List.of(3), ShaftMinerJobTask.pillarOffsets(8));
+        assertEquals(List.of(5), ShaftMinerJobTask.pillarOffsets(11));
+        assertEquals(List.of(5, 6), ShaftMinerJobTask.pillarOffsets(12));
+        assertEquals(List.of(5, 6), ShaftMinerJobTask.pillarOffsets(13), "leftover at the far end");
+        assertEquals(List.of(5, 6, 12, 13), ShaftMinerJobTask.pillarOffsets(14), "second pillar against the wall");
+        assertEquals(List.of(5, 6, 12, 13), ShaftMinerJobTask.pillarOffsets(19));
+        assertEquals(List.of(5, 6, 12, 13, 19, 20), ShaftMinerJobTask.pillarOffsets(21));
+    }
+
+    @Test void pillarGridNeedsBothSidesAndAvoidsTheLadderCorner() {
+        assertTrue(ShaftMinerJobTask.pillarColumns(0, 5, 0, 9).isEmpty(), "6 wide: no pillars");
+        assertEquals(Set.of(ShaftMinerJobTask.columnKey(3, 3)), ShaftMinerJobTask.pillarColumns(0, 6, 0, 6));
+        assertEquals(4, ShaftMinerJobTask.pillarColumns(0, 11, 0, 11).size(), "12x12 -> one 2x2");
+        assertEquals(16, ShaftMinerJobTask.pillarColumns(0, 18, 0, 18).size(), "19x19 -> four 2x2");
+        assertEquals(2, ShaftMinerJobTask.pillarColumns(0, 6, 0, 11).size(), "7x12 -> one 1x2");
+        for (int side = 7; side <= 30; side++) {
+            var cols = ShaftMinerJobTask.pillarColumns(10, 10 + side - 1, -20, -20 + side - 1);
+            for (int dx = 0; dx <= 1; dx++)
+                for (int dz = 0; dz <= 1; dz++)
+                    assertFalse(cols.contains(ShaftMinerJobTask.columnKey(10 + dx, -20 + dz)),
+                            "ladder corner and its torch spot stay clear at side " + side);
+        }
+    }
+
     @Test void ringsEveryEightLayers() {
         assertFalse(ShaftMinerJobTask.isRingLayer(0));
         for (int depth = 1; depth <= 32; depth++)
