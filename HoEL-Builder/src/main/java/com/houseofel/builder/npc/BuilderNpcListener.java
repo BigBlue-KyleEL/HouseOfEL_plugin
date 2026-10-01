@@ -35,6 +35,7 @@ public final class BuilderNpcListener implements Listener {
     private final BedrockJobForm bedrockForm;
     private final JobWizardHandler wizardHandler;
     private final JobManager jobManager;
+    private final com.houseofel.builder.region.RegionSelectionService regionService;
     private final MilestoneChoiceStore choiceStore;
     private final MilestoneChoiceDialog choiceDialog;
     private final MilestoneChoiceForm choiceForm;
@@ -45,7 +46,8 @@ public final class BuilderNpcListener implements Listener {
                                JavaJobDialog javaDialog, BedrockJobForm bedrockForm,
                                JobWizardHandler wizardHandler, JobManager jobManager,
                                MilestoneChoiceStore choiceStore,
-                               MilestoneChoiceDialog choiceDialog, MilestoneChoiceForm choiceForm) {
+                               MilestoneChoiceDialog choiceDialog, MilestoneChoiceForm choiceForm,
+                               com.houseofel.builder.region.RegionSelectionService regionService) {
         this.capabilityService = capabilityService;
         this.screenService = screenService;
         this.npcService = npcService;
@@ -54,6 +56,7 @@ public final class BuilderNpcListener implements Listener {
         this.bedrockForm = bedrockForm;
         this.wizardHandler = wizardHandler;
         this.jobManager = jobManager;
+        this.regionService = regionService;
         this.choiceStore = choiceStore;
         this.choiceDialog = choiceDialog;
         this.choiceForm = choiceForm;
@@ -66,6 +69,12 @@ public final class BuilderNpcListener implements Listener {
         }
         Player player = event.getClicker();
         NPC npc = event.getNPC();
+        if (jobManager.find(npc.getId()) instanceof com.houseofel.builder.job.CofferdamJobTask dam
+                && dam.waitingForEntrance() && !dam.isPaused()) {
+            event.setCancelled(true);
+            regionService.beginEntranceSelection(player,npc,dam);
+            return;
+        }
         UiPath uiPath = capabilityService.getUiPath(player);
         boolean isBedrock = uiPath == UiPath.BEDROCK;
         LOGGER.info(player.getName() + " → " + npc.getName() + " [" + uiPath + "]");

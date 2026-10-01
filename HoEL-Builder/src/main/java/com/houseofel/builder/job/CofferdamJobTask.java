@@ -52,7 +52,7 @@ import java.util.logging.Logger;
  */
 public final class CofferdamJobTask implements JobTask {
 
-    enum CofferdamPhase { BUILDING, DRAINING, EXITING, STRIKING }
+    enum CofferdamPhase { BUILDING, WAITING_ENTRANCE, DRAINING, EXITING, STRIKING }
     private enum WalkState { SEEKING, WALKING, ACTING }
 
     static final Material DAM_MATERIAL = Material.COBBLESTONE;
@@ -218,6 +218,7 @@ public final class CofferdamJobTask implements JobTask {
         task.entranceState.cofferdamDoorX=state.cofferdamDoorX;
         task.entranceState.cofferdamDoorY=state.cofferdamDoorY;
         task.entranceState.cofferdamDoorZ=state.cofferdamDoorZ;
+        task.entranceState.cofferdamManualEntrance=state.cofferdamManualEntrance;
         task.entranceState.cofferdamFramedEntrance=state.cofferdamFramedEntrance;
         task.configureCeiling(state.cofferdamHasCeiling);
         for (String encoded:state.bulkheadPlugs) {
@@ -313,6 +314,38 @@ public final class CofferdamJobTask implements JobTask {
         announcedHalf=buildOrder.isEmpty() || buildCursor*2>=buildOrder.size();
     }
 
+    void configureManualEntrance(Material door) {
+        entranceState.cofferdamManualEntrance=true;
+        entranceState.cofferdamDoor=door.name();
+    }
+
+    public boolean waitingForEntrance() {
+        return !ended && cofferdamPhase==CofferdamPhase.WAITING_ENTRANCE;
+    }
+
+    public boolean selectEntrance(Player player, Block upper) {
+        if (!playerId.equals(player.getUniqueId()) || !waitingForEntrance() || jobManager.find(npc.getId())!=this)
+            return false;
+        if (paused) {
+            player.sendMessage(Component.text("Resume this job before choosing its entrance.",NamedTextColor.YELLOW));
+            return false;
+        }
+        String facing=world.equals(upper.getWorld())?CofferdamGeometry.selectedDoorFacing(entranceState,
+                upper.getX(),upper.getY(),upper.getZ(),world.getMaxHeight()):null;
+        if (facing==null) {
+            player.sendMessage(Component.text("Tap a side-wall block for the UPPER half of the door, with room below it. Avoid corners, the floor and the ceiling.",NamedTextColor.RED));
+            return false;
+        }
+        configureEntrance(facing,Material.valueOf(entranceState.cofferdamDoor),
+                new int[]{upper.getX(),upper.getY()-1,upper.getZ()});
+        configureCeiling(entranceState.cofferdamHasCeiling);
+        cofferdamPhase=CofferdamPhase.BUILDING;
+        walkState=WalkState.SEEKING;
+        jobManager.checkpoint(this);
+        player.sendMessage(Component.text("Got it. I'll finish that entrance, then drain the dam.",NamedTextColor.GREEN));
+        return true;
+    }
+
     void configureEntrance(String facing, Material door, int[] position) {
         entranceState.cofferdamFramedEntrance=true;
         entranceState.cofferdamFacing=facing;
@@ -380,6 +413,7 @@ public final class CofferdamJobTask implements JobTask {
         state.cofferdamDoorZ=entranceState.cofferdamDoorZ;
         state.cofferdamHasCeiling=entranceState.cofferdamHasCeiling;
         state.cofferdamFramedEntrance=entranceState.cofferdamFramedEntrance;
+        state.cofferdamManualEntrance=entranceState.cofferdamManualEntrance;
         state.cofferdamHelperUuid=npc.getUniqueId().toString();
         for (Block plug:bulkheadPlugs) state.bulkheadPlugs.add(JobStorage.encodeBlock(plug));
         state.buildCursor = buildCursor;
@@ -424,6 +458,7 @@ public final class CofferdamJobTask implements JobTask {
         } else {
             switch (cofferdamPhase) {
                 case BUILDING -> tickBuilding();
+                case WAITING_ENTRANCE -> { }
                 case DRAINING -> tickDraining();
                 case EXITING -> tickExiting();
                 case STRIKING -> tickStriking();
@@ -551,6 +586,34 @@ public final class CofferdamJobTask implements JobTask {
     }
 
     private void onBuildingComplete() {
+        if (entranceState.cofferdamManualEntrance && !CofferdamGeometry.hasEntrance(entranceState)) {
+            cofferdamPhase=CofferdamPhase.WAITING_ENTRANCE;
+            walkState=WalkState.SEEKING;
+            npc.getNavigator().cancelNavigation();
+            Location safe=findSafeExit();
+            if (safe!=null) npcEntity.teleport(safe);
+            String prompt=BuilderNpcService.baseNameOf(npc)+": The shell is ready. Talk to me to choose the entrance - tap me for the rod, then tap the block for the UPPER half of the door.";
+            messagePlayer(Component.text(prompt,NamedTextColor.YELLOW));
+            if (Bukkit.getPlayer(playerId)==null) jobManager.queueOfflineNotification(playerId,prompt);
+            jobManager.checkpoint(this);
+            return;
+        }
+        if (entranceState.cofferdamManualEntrance) {
+            int refund=0;
+            var placed=damBlocks.iterator();
+            while (placed.hasNext()) {
+                int[] p=placed.next();
+                if (CofferdamGeometry.isDoor(entranceState,p[0],p[1],p[2])) {
+                    if (world.getBlockAt(p[0],p[1],p[2]).getType()==DAM_MATERIAL) refund++;
+                    placed.remove();
+                }
+            }
+            if (refund>0) {
+                var leftover=storage.deposit(java.util.Map.of(DAM_MATERIAL,refund));
+                for (var entry:leftover.entrySet()) world.dropItemNaturally(npcEntity.getLocation(),
+                        new org.bukkit.inventory.ItemStack(entry.getKey(),entry.getValue()));
+            }
+        }
         CofferdamGeometry.entrance(world,entranceState);
         if (waterIntrusionListener==null) registerWaterIntrusionListener();
         messagePlayer(Component.text(
@@ -559,6 +622,7 @@ public final class CofferdamJobTask implements JobTask {
                 NamedTextColor.GREEN));
         cofferdamPhase = CofferdamPhase.DRAINING;
         walkState = WalkState.SEEKING;
+        jobManager.checkpoint(this);
     }
 
     // ── DRAINING phase — scaled Bulkhead sponge wave ─────────────────────
@@ -962,6 +1026,7 @@ public final class CofferdamJobTask implements JobTask {
                     text = "Draining...";
                 }
             }
+            case WAITING_ENTRANCE -> text = "Talk to me: choose entrance";
             case EXITING -> text = "Leaving dam";
             case STRIKING -> {
                 int total = damBlocks.size();

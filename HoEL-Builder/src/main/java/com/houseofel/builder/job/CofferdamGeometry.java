@@ -103,6 +103,21 @@ final class CofferdamGeometry {
                 && block.getType()!=Material.FIRE && block.getType()!=Material.SOUL_FIRE;
     }
 
+    /** A tap names the upper door cell on exactly one side wall, never a corner. */
+    static String selectedDoorFacing(JobState s, int x, int upperY, int z, int worldMaxHeight) {
+        if (upperY<s.minY+2 || upperY>(s.cofferdamHasCeiling?s.maxY-1:s.maxY)
+                || upperY+2>=worldMaxHeight) return null;
+        if (x>s.minX && x<s.maxX) {
+            if (z==s.minZ) return "NORTH";
+            if (z==s.maxZ) return "SOUTH";
+        }
+        if (z>s.minZ && z<s.maxZ) {
+            if (x==s.maxX) return "EAST";
+            if (x==s.minX) return "WEST";
+        }
+        return null;
+    }
+
     static boolean hasEntrance(JobState s) {
         return s.cofferdamFacing != null && s.maxY-s.minY>=3 && s.maxX-s.minX>=2 && s.maxZ-s.minZ>=2;
     }

@@ -33,11 +33,16 @@ public final class SurveyorRod {
 
     public ItemStack create() { return create(false); }
 
-    private ItemStack create(boolean chestSelection) {
+    private ItemStack create(boolean chestSelection) { return create(chestSelection, false); }
+
+    private ItemStack create(boolean chestSelection, boolean entranceSelection) {
         ItemStack item = new ItemStack(Material.BLAZE_ROD);
         ItemMeta meta = item.getItemMeta();
         meta.displayName(Component.text("Surveyor's Rod", NamedTextColor.GOLD));
-        meta.lore(chestSelection ? List.of(
+        meta.lore(entranceSelection ? List.of(
+                Component.text("Tap the UPPER half of the doorway", NamedTextColor.GRAY),
+                Component.text("/builder cancel: put rod away", NamedTextColor.GRAY)
+        ) : chestSelection ? List.of(
                 Component.text("Tap a chest to use it for this job", NamedTextColor.GRAY),
                 Component.text("/builder cancel: cancel selection", NamedTextColor.GRAY)
         ) : List.of(
@@ -65,13 +70,19 @@ public final class SurveyorRod {
      */
     public boolean giveTo(Player player, String npcName) { return giveTo(player, npcName, false); }
 
+    public boolean giveForEntrance(Player player, String npcName) { return giveTo(player,npcName,false,true); }
+
     public boolean giveTo(Player player, String npcName, boolean chestSelection) {
+        return giveTo(player,npcName,chestSelection,false);
+    }
+
+    private boolean giveTo(Player player, String npcName, boolean chestSelection, boolean entranceSelection) {
         removeAllFrom(player);
-        Map<Integer, ItemStack> leftover = player.getInventory().addItem(create(chestSelection));
+        Map<Integer, ItemStack> leftover = player.getInventory().addItem(create(chestSelection,entranceSelection));
         if (!leftover.isEmpty()) {
             return false;
         }
-        String line = chestSelection ? "Tap the chest you want me to use for this job."
+        String line = entranceSelection ? "Tap the wall block where the UPPER half of the door should go." : chestSelection ? "Tap the chest you want me to use for this job."
                 : FLAVOR_LINES.get(ThreadLocalRandom.current().nextInt(FLAVOR_LINES.size()));
         player.sendMessage(Component.text(npcName + ": ", NamedTextColor.DARK_AQUA)
                 .append(Component.text(line, NamedTextColor.WHITE)));

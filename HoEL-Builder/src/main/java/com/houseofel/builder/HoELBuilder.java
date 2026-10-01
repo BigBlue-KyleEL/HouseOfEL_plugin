@@ -115,7 +115,7 @@ public final class HoELBuilder extends JavaPlugin {
         getServer().getPluginManager().registerEvents(
                 new BuilderNpcListener(capabilityService, screenService, npcService, levelService,
                         javaDialog, bedrockForm, wizardHandler, jobManager,
-                        choiceStore, choiceDialog, choiceForm), this);
+                        choiceStore, choiceDialog, choiceForm, regionService), this);
         getServer().getPluginManager().registerEvents(
                 new HelperCommandListener(this, npcService, jobManager), this);
         getServer().getPluginManager().registerEvents(

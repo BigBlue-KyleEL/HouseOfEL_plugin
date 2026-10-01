@@ -430,7 +430,6 @@ public final class JobExecutionService {
             player.sendMessage(Component.text("The dam shell or entrance marker would cross the world border.",NamedTextColor.RED));
             return null;
         }
-        String facing=CofferdamGeometry.facing(player.getLocation().getX(),player.getLocation().getZ(),minX,maxX,minZ,maxZ);
         Material door=CofferdamGeometry.chooseDoor(world,new Location(world,(minX+maxX)/2.0,minY+1,(minZ+maxZ)/2.0));
         if (door==null) {
             player.sendMessage(Component.text("No wooded biome was found within 8192 blocks for the dam door.",NamedTextColor.RED));
@@ -460,29 +459,16 @@ public final class JobExecutionService {
         }
 
         boolean hasCeiling=CofferdamGeometry.requiresCeiling(world,minX,maxX,maxY,minZ,maxZ);
-        JobState entranceGeometry=new JobState();
-        entranceGeometry.minX=minX; entranceGeometry.maxX=maxX;
-        entranceGeometry.minY=minY; entranceGeometry.maxY=maxY;
-        entranceGeometry.minZ=minZ; entranceGeometry.maxZ=maxZ;
-        entranceGeometry.cofferdamFacing=facing;
-        entranceGeometry.cofferdamHasCeiling=hasCeiling;
-        int[] entrance=CofferdamGeometry.chooseEntrance(world,entranceGeometry);
-        if (entrance==null) {
-            player.sendMessage(Component.text("The entrance does not fit within the selected height or world limits. "
-                    + "Adjust the selection height, then confirm again.",NamedTextColor.RED));
-            return null;
-        }
-        int wallBlocks = CofferdamJobTask.computeBuildOrder(minX, maxX, minY, maxY, minZ, maxZ,hasCeiling).size()
-                + (entrance[1]+2>maxY?3:0);
+        int wallBlocks = CofferdamJobTask.computeBuildOrder(minX, maxX, minY, maxY, minZ, maxZ,hasCeiling).size();
 
         JobStorage storage = new JobStorage(plugin, world, minX, maxX, minY, maxY, minZ, maxZ);
         return selectStorage(player, npc, storage, () -> finishCofferdamDispatch(player, npc, storage, world,
-                minX, maxX, minY, maxY, minZ, maxZ, wallBlocks, facing, door, hasCeiling, entrance));
+                minX, maxX, minY, maxY, minZ, maxZ, wallBlocks, door, hasCeiling));
     }
 
     private void finishCofferdamDispatch(Player player, NPC npc, JobStorage storage, World world,
                                           int minX, int maxX, int minY, int maxY, int minZ, int maxZ,
-                                          int wallBlocks, String facing, Material door, boolean hasCeiling, int[] entrance) {
+                                          int wallBlocks, Material door, boolean hasCeiling) {
         Entity npcEntity = npc.getEntity();
         if (npcEntity == null) return;
 
@@ -491,7 +477,7 @@ public final class JobExecutionService {
                 BuilderNpcService.baseNameOf(npc), TaskType.COFFERDAM.toolNoun());
 
         player.sendMessage(Component.text(BuilderNpcService.baseNameOf(npc)
-                + ": Right, I'll wall it off and drain the inside — up to " + wallBlocks
+                + ": Right, I'll build the shell, then ask you where the door goes — up to " + wallBlocks
                 + " blocks to seal. Make sure there's cobblestone in the chest.",
                 NamedTextColor.GREEN));
         logger.info(player.getName() + " dispatched COFFERDAM job, up to " + wallBlocks + " wall blocks");
@@ -501,7 +487,7 @@ public final class JobExecutionService {
         CofferdamJobTask task = new CofferdamJobTask(plugin, jobManager, levelService, redundancyTracker, freshLedger,
                 player.getUniqueId(), npc, npcEntity, equipment, label, world,
                 minX, maxX, minY, maxY, minZ, maxZ, outline, storage);
-        task.configureEntrance(facing,door,entrance);
+        task.configureManualEntrance(door);
         task.configureCeiling(hasCeiling);
         jobManager.register(task);
         task.start();

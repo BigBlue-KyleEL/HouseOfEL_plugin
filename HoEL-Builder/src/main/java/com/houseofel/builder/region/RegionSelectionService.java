@@ -52,6 +52,7 @@ public final class RegionSelectionService {
     private final SurveyorRod rod;
     private final JobExecutionService jobExecutionService;
     private final Map<UUID, PendingJob> jobs = new ConcurrentHashMap<>();
+    private final Map<UUID, com.houseofel.builder.job.CofferdamJobTask> entranceSelections = new ConcurrentHashMap<>();
     private final Map<UUID, PendingChestSelection> chestSelections = new ConcurrentHashMap<>();
 
     public RegionSelectionService(Plugin plugin, SurveyorRod rod, JobExecutionService jobExecutionService) {
@@ -70,6 +71,7 @@ public final class RegionSelectionService {
     /** Quarry-dispatch overload — carries the depth choice made before this area was ever marked. */
     public void beginJob(Player player, NPC npc, TaskType taskType, Target target, boolean storeInChest,
                           boolean surfaceOnly, Integer requestedLevels, Integer requestedTargetY) {
+        entranceSelections.remove(player.getUniqueId());
         clearJob(player.getUniqueId());
         clearChestSelection(player.getUniqueId());
         if (!rod.giveTo(player, BuilderNpcService.baseNameOf(npc))) {
@@ -84,6 +86,7 @@ public final class RegionSelectionService {
 
     public void beginLandscapeJob(Player player, NPC npc, LandscapeMode landscapeMode,
                                    LandscapeBiome landscapeBiome) {
+        entranceSelections.remove(player.getUniqueId());
         clearJob(player.getUniqueId());
         clearChestSelection(player.getUniqueId());
         if (!rod.giveTo(player, BuilderNpcService.baseNameOf(npc))) {
@@ -98,6 +101,7 @@ public final class RegionSelectionService {
     }
 
     public void beginCofferdamJob(Player player, NPC npc) {
+        entranceSelections.remove(player.getUniqueId());
         clearJob(player.getUniqueId());
         clearChestSelection(player.getUniqueId());
         if (!rod.giveTo(player, BuilderNpcService.baseNameOf(npc))) {
@@ -112,10 +116,26 @@ public final class RegionSelectionService {
     }
 
     /**
-     * Enters chest-selection mode: gives the player back the Surveyor's Rod so they can
-     * tap an existing chest after confirming the area for any chest-backed job.
+     * Hands the job owner a rod to mark the upper door cell after the shell is built.
      */
+    public void beginEntranceSelection(Player player, NPC npc, com.houseofel.builder.job.CofferdamJobTask task) {
+        if (!task.playerId().equals(player.getUniqueId())) {
+            player.sendMessage(Component.text("Only the owner of this job can choose its entrance.",NamedTextColor.RED));
+            return;
+        }
+        if (!task.waitingForEntrance()) return;
+        clearJob(player.getUniqueId());
+        clearChestSelection(player.getUniqueId());
+        entranceSelections.remove(player.getUniqueId());
+        if (!rod.giveForEntrance(player,BuilderNpcService.baseNameOf(npc))) {
+            player.sendMessage(Component.text("Make space for the Surveyor's Rod, then tap me again.",NamedTextColor.RED));
+            return;
+        }
+        entranceSelections.put(player.getUniqueId(),task);
+    }
+
     public void beginChestSelection(Player player, NPC npc, Predicate<Block> callback) {
+        entranceSelections.remove(player.getUniqueId());
         clearChestSelection(player.getUniqueId());
         if (!rod.giveTo(player, BuilderNpcService.baseNameOf(npc), true)) {
             player.sendMessage(Component.text(
@@ -135,6 +155,14 @@ public final class RegionSelectionService {
      * identically regardless of platform.
      */
     public void onClick(Player player, Location location) {
+        var entrance=entranceSelections.get(player.getUniqueId());
+        if (entrance!=null) {
+            if (!entrance.waitingForEntrance() || entrance.selectEntrance(player,location.getBlock())) {
+                entranceSelections.remove(player.getUniqueId());
+                rod.removeAllFrom(player);
+            }
+            return;
+        }
         PendingChestSelection chestSel = chestSelections.get(player.getUniqueId());
         if (chestSel != null) {
             handleChestClick(player, location, chestSel);
@@ -305,11 +333,15 @@ public final class RegionSelectionService {
 
     /** Thread-safe existence check for the async chat listener — see {@link RegionConfirmListener}. */
     public boolean hasPending(UUID playerId) {
-        return jobs.containsKey(playerId) || chestSelections.containsKey(playerId);
+        return jobs.containsKey(playerId) || chestSelections.containsKey(playerId) || entranceSelections.containsKey(playerId);
     }
 
     /** Confirm/cancel entry point for both the "Yep"/"Wait" chat reply and the /builder command fallback. */
     public void confirmPending(Player player) {
+        if (entranceSelections.containsKey(player.getUniqueId())) {
+            player.sendMessage(Component.text("Tap the wall block for the UPPER half of the door.",NamedTextColor.YELLOW));
+            return;
+        }
         if (chestSelections.containsKey(player.getUniqueId())) {
             player.sendMessage(Component.text(
                     "Tap a chest with the rod to select it.", NamedTextColor.YELLOW));
@@ -324,6 +356,11 @@ public final class RegionSelectionService {
     }
 
     public void cancelPending(Player player) {
+        if (entranceSelections.remove(player.getUniqueId())!=null) {
+            rod.removeAllFrom(player);
+            player.sendMessage(Component.text("Rod put away. The dam is still waiting; tap the Helper to choose its entrance later.",NamedTextColor.YELLOW));
+            return;
+        }
         PendingChestSelection chestSel = chestSelections.remove(player.getUniqueId());
         if (chestSel != null) {
             rod.removeAllFrom(player);

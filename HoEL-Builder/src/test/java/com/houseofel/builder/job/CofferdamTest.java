@@ -320,4 +320,30 @@ class CofferdamTest {
         World terrain=terrainWorld(p->p[0]==2 && p[2]==-1?Material.STONE:Material.WATER);
         assertArrayEquals(new int[]{1,11,0},CofferdamGeometry.chooseEntrance(terrain,s));
     }
+    @Test void manualDoorTapUsesUpperCellAndDerivesEachWall() {
+        JobState s=state();s.maxX=4;s.maxZ=4;s.maxY=16;
+        assertEquals("NORTH",CofferdamGeometry.selectedDoorFacing(s,2,12,0,320));
+        assertEquals("SOUTH",CofferdamGeometry.selectedDoorFacing(s,2,12,4,320));
+        assertEquals("EAST",CofferdamGeometry.selectedDoorFacing(s,4,12,2,320));
+        assertEquals("WEST",CofferdamGeometry.selectedDoorFacing(s,0,12,2,320));
+        assertNull(CofferdamGeometry.selectedDoorFacing(s,0,12,0,320),"corner");
+        assertNull(CofferdamGeometry.selectedDoorFacing(s,2,12,2,320),"interior");
+        assertNull(CofferdamGeometry.selectedDoorFacing(s,2,11,0,320),"lower half would hit floor");
+        assertNull(CofferdamGeometry.selectedDoorFacing(s,2,16,0,320),"closed ceiling");
+        s.cofferdamHasCeiling=false;
+        assertEquals("NORTH",CofferdamGeometry.selectedDoorFacing(s,2,16,0,320));
+        assertNull(CofferdamGeometry.selectedDoorFacing(s,2,16,0,18),"marker exceeds world");
+    }
+    @Test void waitingForManualEntranceRoundTripsWithoutInventingDoor() throws Exception {
+        JobState s=state();s.cofferdamManualEntrance=true;s.cofferdamFacing=null;
+        s.cofferdamPhase="WAITING_ENTRANCE";
+        var yaml=new YamlConfiguration();yaml.loadFromString(JobStateStore.encode(s).saveToString());
+        JobState restored=JobStateStore.decode(yaml);
+        assertTrue(restored.cofferdamManualEntrance);
+        assertEquals(CofferdamJobTask.CofferdamPhase.WAITING_ENTRANCE,
+                CofferdamJobTask.CofferdamPhase.valueOf(restored.cofferdamPhase));
+        assertFalse(CofferdamGeometry.hasEntrance(restored));
+        yaml.set("cofferdamManualEntrance",null);
+        assertFalse(JobStateStore.decode(yaml).cofferdamManualEntrance,"legacy jobs retain automatic behavior");
+    }
 }

@@ -199,6 +199,11 @@ public final class JobManager {
         return Outcome.OK;
     }
 
+    /** Persist a workflow checkpoint without pausing its task. */
+    void checkpoint(JobTask task) {
+        if (jobs.get(task.npc().getId())==task) store.save(task.toJobState());
+    }
+
     /** Snapshots every tracked job (running or paused) to disk — the restart safety net. */
     public void saveAllOnDisable() {
         cofferdamWatches.saveAll();
