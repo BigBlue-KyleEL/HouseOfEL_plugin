@@ -62,7 +62,7 @@ public final class LandscaperJobTask implements JobTask {
     private static final int NO_PROGRESS_TICKS = 20 * 3;
     private static final int WALK_TIMEOUT_TICKS = 20 * 30;
     private static final int PATH_GRACE_TICKS = 20;
-    private static final int PLACE_DELAY_TICKS = 0; // TODO: revert to 3 after testing
+    private static final int PLACE_DELAY_TICKS = 0; // instant on purpose (Kyle, 2026-10-01)
     private static final double NOISE_SCALE = 0.06;
     private static final int NOISE_OCTAVES = 3;
 
