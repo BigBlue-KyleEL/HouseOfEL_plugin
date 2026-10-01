@@ -13,6 +13,26 @@ class ShaftMinerDressingTest {
                 "the ladder's support must be the north wall behind the NW corner");
     }
 
+    @Test void oreAlcovesKeepClearOfLandingsAndEachOther() {
+        int none = Integer.MIN_VALUE / 2;
+        for (int depth : new int[]{1, 2, 6, 7, 8, 9, 10, 14, 15, 16})
+            assertFalse(ShaftMinerJobTask.oreAlcoveAllowed(depth, none), "within 2 of a landing: depth " + depth);
+        assertTrue(ShaftMinerJobTask.oreAlcoveAllowed(3, none));
+        assertTrue(ShaftMinerJobTask.oreAlcoveAllowed(12, none), "4 below the depth-8 landing");
+        assertFalse(ShaftMinerJobTask.oreAlcoveAllowed(5, 3), "only 2 below the last ore alcove");
+        assertFalse(ShaftMinerJobTask.oreAlcoveAllowed(11, none), "only 3 below the depth-8 landing");
+        assertTrue(ShaftMinerJobTask.oreAlcoveAllowed(13, 3));
+    }
+
+    @Test void oreListCoversVanillaOresAndDebrisButNotStone() {
+        assertTrue(ShaftMinerJobTask.isOre(org.bukkit.Material.DEEPSLATE_DIAMOND_ORE));
+        assertTrue(ShaftMinerJobTask.isOre(org.bukkit.Material.COAL_ORE));
+        assertTrue(ShaftMinerJobTask.isOre(org.bukkit.Material.NETHER_QUARTZ_ORE));
+        assertTrue(ShaftMinerJobTask.isOre(org.bukkit.Material.ANCIENT_DEBRIS));
+        assertFalse(ShaftMinerJobTask.isOre(org.bukkit.Material.STONE));
+        assertFalse(ShaftMinerJobTask.isOre(org.bukkit.Material.DIAMOND_BLOCK));
+    }
+
     @Test void pillarOffsetsFollowKylesTable() {
         assertEquals(List.of(), ShaftMinerJobTask.pillarOffsets(6));
         assertEquals(List.of(3), ShaftMinerJobTask.pillarOffsets(7));

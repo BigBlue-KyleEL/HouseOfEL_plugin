@@ -29,6 +29,7 @@ import org.bukkit.block.DoubleChest;
 import org.bukkit.block.Lidded;
 import org.bukkit.block.data.Directional;
 import org.bukkit.Axis;
+import org.bukkit.Tag;
 import org.bukkit.block.data.BlockData;
 import org.bukkit.block.data.Levelled;
 import org.bukkit.block.data.Orientable;
@@ -185,6 +186,10 @@ public final class ShaftMinerJobTask implements JobTask {
 
     private boolean paused;
     private Material ringLog;
+    private final Set<Integer> oreDugDepths = new HashSet<>();
+    private final Set<Integer> oreAlcoveDecided = new HashSet<>();
+    private final Set<Integer> oreAlcoveDepths = new HashSet<>();
+    private int lastOreAlcoveDepth = Integer.MIN_VALUE / 2;
     private int waterBreachStreak;
     private boolean waterThisLayer;
     private final Map<String, Block> waterWallColumns = new HashMap<>();
@@ -530,6 +535,7 @@ public final class ShaftMinerJobTask implements JobTask {
 
         if (!reconciled && candidate.getY() != currentLayerY) {
             for (int y = currentLayerY; y > candidate.getY(); y--) {
+                decideOreAlcove(y);
                 dressCompletedLayer(y);
             }
             currentLayerY = candidate.getY();
@@ -609,6 +615,8 @@ public final class ShaftMinerJobTask implements JobTask {
     // ladder or torches if water was running through the spot when it was dressed.
     private void dressRemainingLayers() {
         int bottomY = topY - requestedDepth + 1;
+        // The last layers never pass a layer change, so decide their ore alcoves here.
+        for (int y = currentLayerY; y >= bottomY; y--) decideOreAlcove(y);
         for (int y = topY; y >= bottomY; y--) {
             dressCompletedLayer(y);
         }
@@ -620,6 +628,7 @@ public final class ShaftMinerJobTask implements JobTask {
         // Both run before the ladder and torches so those attach to the finished wall.
         if (isRingLayer(topY - y)) placeFrameRing(y); else reinforceWalls(y);
         placePillars(y);
+        if (isAlcoveLayer(topY - y)) carveAlcove(y);
         placeLadder(y);
         if (isLandingLayer(y)) {
             placeLighting(y);
@@ -682,7 +691,10 @@ public final class ShaftMinerJobTask implements JobTask {
 
     private void placeFrameRing(int y) {
         Material material = frameMaterial(y);
+        boolean alcove = isAlcoveLayer(topY - y);
         for (RingCell cell : ringCells(minX, maxX, minZ, maxZ)) {
+            // The alcove's doorway stays open rather than being filled and carved again.
+            if (alcove && cell.x() == minX - 1 && (cell.z() == minZ || cell.z() == minZ + 1)) continue;
             convertToFrame(world.getBlockAt(cell.x(), y, cell.z()), material, cell.axis());
         }
     }
@@ -703,6 +715,97 @@ public final class ShaftMinerJobTask implements JobTask {
         BlockData data = material.createBlockData();
         if (data instanceof Orientable log) log.setAxis(axis);
         block.setBlockData(data);
+    }
+
+    // ── Landing alcoves (Kyle, 2026-10-01) ─────────────────────────────────
+
+    static final int ORE_ALCOVE_MIN_SPACING = 4;
+    static final int ORE_ALCOVE_LANDING_MARGIN = 2;
+
+    static boolean isOre(Material type) {
+        return Tag.COAL_ORES.isTagged(type) || Tag.COPPER_ORES.isTagged(type) || Tag.IRON_ORES.isTagged(type)
+                || Tag.GOLD_ORES.isTagged(type) || Tag.REDSTONE_ORES.isTagged(type) || Tag.LAPIS_ORES.isTagged(type)
+                || Tag.DIAMOND_ORES.isTagged(type) || Tag.EMERALD_ORES.isTagged(type)
+                || type == Material.NETHER_QUARTZ_ORE || type == Material.ANCIENT_DEBRIS;
+    }
+
+    /**
+     * An ore layer gets its own alcove only if it is more than 2 layers from an every-8
+     * landing (that landing serves it) and at least 4 layers below the previous alcove.
+     */
+    static boolean oreAlcoveAllowed(int depth, int lastAlcoveDepth) {
+        if (depth <= 0) return false;
+        int offset = depth % RING_INTERVAL;
+        if (Math.min(offset, RING_INTERVAL - offset) <= ORE_ALCOVE_LANDING_MARGIN) return false;
+        int lastLanding = depth - offset;
+        int last = Math.max(lastAlcoveDepth, lastLanding > 0 ? lastLanding : Integer.MIN_VALUE / 2);
+        return depth - last >= ORE_ALCOVE_MIN_SPACING;
+    }
+
+    private boolean isAlcoveLayer(int depth) {
+        return isRingLayer(depth) || oreAlcoveDepths.contains(depth);
+    }
+
+    // Decided once per layer, before its walls are dressed (rings would hide wall ores).
+    private void decideOreAlcove(int y) {
+        int depth = topY - y;
+        if (!oreAlcoveDecided.add(depth)) return;
+        boolean ore = oreDugDepths.contains(depth);
+        if (!ore) {
+            for (RingCell cell : ringCells(minX, maxX, minZ, maxZ)) {
+                if (isOre(world.getBlockAt(cell.x(), y, cell.z()).getType())) { ore = true; break; }
+            }
+        }
+        if (ore && oreAlcoveAllowed(depth, lastOreAlcoveDepth)) {
+            oreAlcoveDepths.add(depth);
+            lastOreAlcoveDepth = depth;
+        }
+    }
+
+    /**
+     * A 2 wide x 2 tall x 2 deep room in the west wall beside the ladder, floor level with
+     * the layer. Its shell is sealed first so carving can never open water, lava or
+     * falling sand into it; carved blocks go to the chest and earn Toil.
+     */
+    private void carveAlcove(int y) {
+        int nearX = minX - 1, backX = minX - 2, z0 = minZ, z1 = minZ + 1;
+        Material seal = y < 0 ? Material.DEEPSLATE : Material.COBBLESTONE;
+        for (int x = backX; x <= nearX; x++) {
+            for (int z = z0; z <= z1; z++) {
+                sealIfNeeded(world.getBlockAt(x, y - 1, z), seal);
+                sealIfNeeded(world.getBlockAt(x, y + 2, z), seal);
+            }
+            for (int dy = 0; dy <= 1; dy++) {
+                sealIfNeeded(world.getBlockAt(x, y + dy, z0 - 1), seal);
+                sealIfNeeded(world.getBlockAt(x, y + dy, z1 + 1), seal);
+            }
+        }
+        for (int dy = 0; dy <= 1; dy++)
+            for (int z = z0; z <= z1; z++) sealIfNeeded(world.getBlockAt(backX - 1, y + dy, z), seal);
+
+        for (int x = backX; x <= nearX; x++) {
+            for (int dy = 0; dy <= 1; dy++) {
+                for (int z = z0; z <= z1; z++) {
+                    Block cell = world.getBlockAt(x, y + dy, z);
+                    Material type = cell.getType();
+                    if (type == Material.AIR || type == Material.WALL_TORCH) continue;
+                    if (type.getHardness() < 0 || type == Material.SPAWNER
+                            || cell.getState() instanceof org.bukkit.inventory.BlockInventoryHolder) continue;
+                    if (type.isSolid()) {
+                        collectDrop(cell);
+                        awardGroundworkerProgress(creditUnitsFor(cell));
+                    }
+                    cell.setType(Material.AIR);
+                }
+            }
+        }
+        placeWallTorch(backX, y + 1, z0, BlockFace.EAST);
+    }
+
+    private void sealIfNeeded(Block block, Material seal) {
+        Material type = block.getType();
+        if (type.getHardness() < 0) return;
+        if (!type.isSolid() || LOOSE_WALL_MATERIALS.contains(type)) block.setType(seal);
     }
 
     // ── Centre pillars (Kyle, 2026-10-01) ──────────────────────────────────
@@ -983,6 +1086,7 @@ public final class ShaftMinerJobTask implements JobTask {
 
         collectDrop(pendingCell);
         awardGroundworkerProgress(creditUnitsFor(pendingCell));
+        if (isOre(pendingCell.getType())) oreDugDepths.add(topY - pendingCell.getY());
         pendingCell.setType(Material.AIR);
         clearedCells++;
         lastSafeLocation = npcEntity.getLocation();
