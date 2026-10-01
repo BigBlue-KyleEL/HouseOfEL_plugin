@@ -604,6 +604,16 @@ public final class ShaftMinerJobTask implements JobTask {
         if (isLandingLayer(y)) {
             placeLighting(y);
         }
+        // After the landing torches: where a landing torch already holds this cell, it stays.
+        if (isLadderLightLayer(topY - y)) {
+            placeWallTorch(minX + 1, y, minZ, BlockFace.SOUTH);
+        }
+    }
+
+    static final int LADDER_LIGHT_INTERVAL = 4;
+
+    static boolean isLadderLightLayer(int depth) {
+        return depth > 0 && depth % LADDER_LIGHT_INTERVAL == 0;
     }
 
     private void reinforceWalls(int y) {

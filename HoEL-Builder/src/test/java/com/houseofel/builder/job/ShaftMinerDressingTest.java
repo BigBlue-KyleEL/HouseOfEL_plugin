@@ -13,6 +13,12 @@ class ShaftMinerDressingTest {
                 "the ladder's support must be the north wall behind the NW corner");
     }
 
+    @Test void ladderTorchEveryFourLayersIncludingLandings() {
+        assertFalse(ShaftMinerJobTask.isLadderLightLayer(0), "surface layer");
+        for (int depth = 1; depth <= 24; depth++)
+            assertEquals(depth % 4 == 0, ShaftMinerJobTask.isLadderLightLayer(depth), "depth " + depth);
+    }
+
     @Test void twoByTwoKeepsTheOriginalSouthAndEastTorches() {
         var spots = ShaftMinerJobTask.landingTorchSpots(0, 1, 0, 1);
         assertEquals(List.of(new ShaftMinerJobTask.TorchSpot(0, 1, BlockFace.NORTH),
