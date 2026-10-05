@@ -60,14 +60,7 @@ public final class BedrockJobForm {
                 .title(HelperTitleFormatter.dispatchTitleOf(npc, specialization, deathRecordStore, choiceStore))
                 .content(statusContent(npc, specialization, level));
         for (TaskType type : jobs) {
-            String label = switch (type) {
-                case QUARRY -> "Lvl.8: Quarryman";
-                case LANDSCAPE -> "Lvl.8: Landscaper";
-                case COFFERDAM -> "Lvl.16: Cofferdam";
-                case SHAFT_MINER -> "Lvl.16: Shaft Miner";
-                default -> type.label();
-            };
-            if (specialization != null && type == specialization.taskType()) label += " ★ (specialty)";
+            String label = taskLabel(type, specialization);
             form.button(label);
         }
         form.validResultHandler(response -> onMain(player, () -> {
@@ -78,6 +71,11 @@ public final class BedrockJobForm {
             Specialization currentSpec = levelService.specializationOf(npc);
             int currentLevel = levelService.levelOf(npc);
             if (!taskOptionsFor(npc, currentSpec, currentLevel).contains(type)) return;
+            if (JobAvailability.comingSoon(type)) {
+                player.sendMessage(JobAvailability.refusal());
+                open(player, npc, currentSpec, currentLevel);
+                return;
+            }
             switch (type) {
                 case QUARRY, SHAFT_MINER -> showDepth(player, npc, type);
                 case LANDSCAPE -> showLandscapeMode(player, npc);
@@ -311,6 +309,19 @@ public final class BedrockJobForm {
             }
         })).closedOrInvalidResultHandler(() -> onClosed(player));
         send(player, form.build());
+    }
+
+    static String taskLabel(TaskType type, Specialization specialization) {
+        if (JobAvailability.comingSoon(type)) return JobAvailability.label(type);
+        String label = switch (type) {
+            case QUARRY -> "Lvl.8: Quarryman";
+            case LANDSCAPE -> "Lvl.8: Landscaper";
+            case COFFERDAM -> "Lvl.16: Cofferdam";
+            case SHAFT_MINER -> "Lvl.16: Shaft Miner";
+            default -> type.label();
+        };
+        if (specialization != null && type == specialization.taskType()) label += " ★ (specialty)";
+        return label;
     }
 
     private java.util.List<TaskType> taskOptionsFor(NPC npc, Specialization specialization, int level) {

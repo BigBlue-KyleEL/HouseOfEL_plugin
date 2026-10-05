@@ -272,8 +272,7 @@ public final class RegionSelectionService {
             return;
         }
 
-        player.sendMessage(Component.text("Region confirmed for " + job.taskType.label() + " " + job.target.label()
-                + " — logged, but only Clearing is wired up to actually run so far.", NamedTextColor.GREEN));
+        player.sendMessage(com.houseofel.builder.gui.JobAvailability.refusal());
         finish(player);
     }
 

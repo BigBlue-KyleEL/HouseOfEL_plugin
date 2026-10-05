@@ -115,6 +115,8 @@ public final class JobWizardHandler implements ScreenDispatchHandler, Listener {
             return;
         }
 
+        if (JobAvailability.refuseAction(action, player::sendMessage)) return;
+
         if (MainMenuLayout.SCREEN_ID.equals(screenId)) {
             WizardSession session = sessions.get(player.getUniqueId());
             if (session == null) return;
@@ -149,9 +151,6 @@ public final class JobWizardHandler implements ScreenDispatchHandler, Listener {
         if (npc == null) return;
 
         switch (action) {
-            case "mine" -> advanceToTarget(player, session, npc, TaskType.MINE);
-            case "lumberjack" -> advanceToTarget(player, session, npc, TaskType.LUMBERJACK);
-            case "farm" -> advanceToTarget(player, session, npc, TaskType.FARM);
             case "clear" -> advanceToTarget(player, session, npc, TaskType.CLEAR);
             case "quarry" -> {
                 session.taskType = TaskType.QUARRY;

@@ -235,7 +235,8 @@ public final class JobMenuLayout {
         return new GuiElement.Button(id, Anchor.TOP_CENTER, new int[]{0, y}, true,
                 new int[]{BTN_W, BTN_H}, action, text,
                 "houseofel:gui/button_normal", "houseofel:gui/button_hover",
-                "houseofel:gui/button_disabled", true);
+                "houseofel:gui/button_disabled", !JobAvailability.comingSoon(action),
+                JobAvailability.comingSoon(action) ? "Coming soon" : null);
     }
 
     private static OpenScreenPayload wrapInPanel(String screenId, int contentBottom,

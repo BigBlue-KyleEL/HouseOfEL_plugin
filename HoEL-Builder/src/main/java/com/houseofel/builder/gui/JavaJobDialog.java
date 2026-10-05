@@ -88,10 +88,11 @@ public final class JavaJobDialog {
             // The task type matching this Helper's specialization gets a yellow tint;
             // the rest stay plain white.
             boolean isSpecialty = specialization != null && type == specialization.taskType();
-            Component label = isSpecialty
+            Component label = JobAvailability.comingSoon(type)
+                    ? Component.text(JobAvailability.label(type), NamedTextColor.GRAY) : isSpecialty
                     ? Component.text(type.label(), NamedTextColor.YELLOW)
                     : Component.text(type.label());
-            Component tooltip = specialization == null ? null : Component.text(isSpecialty
+            Component tooltip = JobAvailability.comingSoon(type) ? Component.text("Coming soon") : specialization == null ? null : Component.text(isSpecialty
                     ? name + "'s specialty — bonus drops apply here."
                     : "Not " + name + "'s specialty — no bonus drops.");
             buttons.add(ActionButton.create(label, tooltip, 150,
@@ -101,6 +102,11 @@ public final class JavaJobDialog {
                                     // showDialog sends a packet — stays on the main thread,
                                     // same as every other Bukkit call triggered from a click.
                                     Bukkit.getScheduler().runTask(plugin, () -> {
+                                        if (JobAvailability.comingSoon(type)) {
+                                            p.sendMessage(JobAvailability.refusal());
+                                            showTaskTypeStep(p, npc, levelService.specializationOf(npc), levelService.levelOf(npc));
+                                            return;
+                                        }
                                         if (type == TaskType.QUARRY) {
                                             // Quarryman has no material choice — it digs
                                             // everything within its own footprint, so there's

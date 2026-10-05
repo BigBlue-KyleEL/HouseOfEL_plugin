@@ -168,6 +168,7 @@ public final class MainMenuLayout {
     private static GuiElement.Button button(String id, Anchor anchor, int x, int y,
                                             String action, String text, boolean enabled) {
         return new GuiElement.Button(id, anchor, new int[]{x, y}, true, new int[]{120, 20}, action, text,
-                "houseofel:gui/button_normal", "houseofel:gui/button_hover", "houseofel:gui/button_disabled", enabled);
+                "houseofel:gui/button_normal", "houseofel:gui/button_hover", "houseofel:gui/button_disabled", enabled && !JobAvailability.comingSoon(action),
+                JobAvailability.comingSoon(action) ? "Coming soon" : null);
     }
 }
