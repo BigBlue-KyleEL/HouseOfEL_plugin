@@ -715,6 +715,7 @@ public final class ShaftMinerJobTask implements JobTask {
         BlockData data = material.createBlockData();
         if (data instanceof Orientable log) log.setAxis(axis);
         block.setBlockData(data);
+        jobManager.placed(npc);
     }
 
     // ── Landing alcoves (Kyle, 2026-10-01) ─────────────────────────────────
@@ -805,7 +806,7 @@ public final class ShaftMinerJobTask implements JobTask {
     private void sealIfNeeded(Block block, Material seal) {
         Material type = block.getType();
         if (type.getHardness() < 0) return;
-        if (!type.isSolid() || LOOSE_WALL_MATERIALS.contains(type)) block.setType(seal);
+        if (!type.isSolid() || LOOSE_WALL_MATERIALS.contains(type)) { block.setType(seal); jobManager.placed(npc); }
     }
 
     // ── Centre pillars (Kyle, 2026-10-01) ──────────────────────────────────
@@ -878,6 +879,7 @@ public final class ShaftMinerJobTask implements JobTask {
         Material type = wall.getType();
         if (!type.isSolid() || LOOSE_WALL_MATERIALS.contains(type)) {
             wall.setType(replacement);
+            jobManager.placed(npc);
         }
     }
 
@@ -899,6 +901,7 @@ public final class ShaftMinerJobTask implements JobTask {
         data.setFacing(LADDER_FACING);
         data.setWaterlogged(sourceWater);
         pos.setBlockData(data);
+        jobManager.placed(npc);
     }
 
     private boolean isLandingLayer(int y) {
@@ -936,6 +939,7 @@ public final class ShaftMinerJobTask implements JobTask {
         Directional data = (Directional) Material.WALL_TORCH.createBlockData();
         data.setFacing(facing);
         pos.setBlockData(data);
+        jobManager.placed(npc);
     }
 
     // ── Walk ───────────────────────────────────────────────────────────────
@@ -1177,6 +1181,7 @@ public final class ShaftMinerJobTask implements JobTask {
                     Block cell = edge.get(i);
                     if (cell.getType().isSolid()) continue;
                     cell.setType(cell.getY() < 0 ? Material.DEEPSLATE : Material.COBBLESTONE);
+                    jobManager.placed(npc);
                     waterWallColumns.merge(cell.getX() + "," + cell.getZ(), cell, (a, b) -> a.getY() >= b.getY() ? a : b);
                     walled++;
                 }
@@ -1205,6 +1210,7 @@ public final class ShaftMinerJobTask implements JobTask {
             Block above = column.getValue().getRelative(BlockFace.UP);
             if (above.getType().isSolid()) continue;
             above.setType(above.getY() < 0 ? Material.DEEPSLATE : Material.COBBLESTONE);
+            jobManager.placed(npc);
             column.setValue(above);
             raised++;
         }
@@ -1304,6 +1310,7 @@ public final class ShaftMinerJobTask implements JobTask {
         npc.getNavigator().cancelNavigation();
         for (Block source : lavaBreach) {
             source.setType(BULKHEAD_PLUG_MATERIAL);
+            jobManager.placed(npc);
             bulkheadPlugs.add(source);
         }
         bulkheadWaveAnchors.clear();
@@ -1322,6 +1329,7 @@ public final class ShaftMinerJobTask implements JobTask {
             if (bulkheadWaveStepTicks > 0) return;
             Block anchor = bulkheadWaveAnchors.get(bulkheadWaveIndex);
             anchor.setType(Material.SPONGE);
+            jobManager.placed(npc);
             bulkheadPlugs.add(anchor);
             world.spawnParticle(Particle.SPLASH, anchor.getLocation().add(0.5, 0.5, 0.5),
                     12, 0.3, 0.3, 0.3, 0.05);

@@ -69,6 +69,8 @@ import java.util.stream.Collectors;
  * defense-in-depth, never read back by this class.
  */
 public final class HelperLevelService {
+    private com.houseofel.builder.visual.HelperVisuals visuals = com.houseofel.builder.visual.HelperVisuals.NONE;
+    public void setVisuals(com.houseofel.builder.visual.HelperVisuals visuals) { this.visuals = visuals; }
 
     private static final double BONUS_DROP_CHANCE = 0.15;
     /** WARY's 3rd-scar choice — see the Death Policy plan. Small enough to read inline rather than its own class. */
@@ -185,6 +187,7 @@ public final class HelperLevelService {
         boolean leveledUp = newLevel > oldLevel;
         List<String> announcementLines;
         if (leveledUp) {
+            visuals.levelUp(npc);
             titleService.applyTitle(npc, record.specialization(), newLevel);
             announcementLines = announcementLinesFor(npc, newLevel);
             announceChoiceIfApplicable(npc, newLevel, record.specialization());
@@ -217,6 +220,7 @@ public final class HelperLevelService {
         cache.put(npc.getUniqueId(), updated);
         mirrorToPdc(npc, updated);
         titleService.applyTitle(npc, record.specialization(), clampedLevel);
+        if (clampedLevel > record.level()) visuals.levelUp(npc);
     }
 
     /**

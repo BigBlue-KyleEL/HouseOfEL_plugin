@@ -35,6 +35,7 @@ repositories {
 }
 
 dependencies {
+    compileOnly("io.github.toxicity188:bettermodel-bukkit-api:3.0.2")
     compileOnly("net.citizensnpcs:citizens-main:2.0.43-SNAPSHOT") {
         exclude(group = "*", module = "*")
     }

@@ -31,6 +31,9 @@ import java.util.logging.Logger;
  * that async existence-checking can never race the main thread's own reads/writes.
  */
 public final class JobManager {
+    private com.houseofel.builder.visual.HelperVisuals visuals = com.houseofel.builder.visual.HelperVisuals.NONE;
+    public void setVisuals(com.houseofel.builder.visual.HelperVisuals visuals) { this.visuals = visuals; }
+    public void placed(NPC npc) { visuals.placed(npc); }
 
     /** What a pause/resume/cancel attempt actually did, so a caller can pick the right response. */
     public enum Outcome { OK, NOT_OWNER, ALREADY_IN_THAT_STATE }

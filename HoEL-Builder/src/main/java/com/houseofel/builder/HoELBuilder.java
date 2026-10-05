@@ -56,6 +56,7 @@ import org.bukkit.scheduler.BukkitTask;
  */
 public final class HoELBuilder extends JavaPlugin {
 
+    private com.houseofel.builder.visual.HelperVisuals helperVisuals = com.houseofel.builder.visual.HelperVisuals.NONE;
     private JobManager jobManager;
     private ToilDatabase toilDatabase;
     private HelperLevelService levelService;
@@ -72,6 +73,7 @@ public final class HoELBuilder extends JavaPlugin {
             getLogger().warning(throughputBreach);
         }
 
+        saveDefaultConfig();
         toilDatabase = new ToilDatabase(this);
         DeathRecordStore deathRecordStore = new DeathRecordStore(toilDatabase, getLogger());
         MilestoneChoiceStore choiceStore = new MilestoneChoiceStore(toilDatabase, getLogger());
@@ -89,6 +91,17 @@ public final class HoELBuilder extends JavaPlugin {
         WorkLedgerBook ledgerBook = new WorkLedgerBook(this);
         SurveyorRod rod = new SurveyorRod(this);
         jobManager = new JobManager(this, levelService, redundancyTracker, freshLedger);
+        if (getConfig().getBoolean("helpers.custom-model.enabled", false)
+                && getServer().getPluginManager().isPluginEnabled("BetterModel")) {
+            helperVisuals = new com.houseofel.builder.visual.GroundworkerModelService(
+                    this, npcService, levelService, deathRecordStore, jobManager);
+        } else {
+            getCommand("helpermodel").setExecutor((sender, command, label, args) -> {
+                sender.sendMessage("Groundworker custom models are disabled or BetterModel is unavailable."); return true;
+            });
+        }
+        levelService.setVisuals(helperVisuals);
+        jobManager.setVisuals(helperVisuals);
         JobExecutionService jobExecutionService = new JobExecutionService(this, jobManager, levelService,
                 deathRecordStore, redundancyTracker, freshLedger, choiceStore);
         RegionSelectionService regionService = new RegionSelectionService(this, rod, jobExecutionService);
@@ -183,6 +196,7 @@ public final class HoELBuilder extends JavaPlugin {
 
     @Override
     public void onDisable() {
+        helperVisuals.close();
         if (ledgerExpiryTask != null) {
             ledgerExpiryTask.cancel();
         }

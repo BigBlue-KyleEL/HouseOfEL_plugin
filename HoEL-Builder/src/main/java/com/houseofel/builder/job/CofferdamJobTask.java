@@ -566,6 +566,7 @@ public final class CofferdamJobTask implements JobTask {
         }
 
         block.setType(DAM_MATERIAL);
+        jobManager.placed(npc);
         damBlocks.add(new int[]{targetX, targetY, targetZ});
         world.playSound(block.getLocation(), Sound.BLOCK_STONE_PLACE, 0.7f, 1.0f);
         world.spawnParticle(Particle.BLOCK, block.getLocation().add(0.5, 0.5, 0.5),
@@ -637,6 +638,7 @@ public final class CofferdamJobTask implements JobTask {
                 int anchorCredit=CofferdamWork.wet(anchor)?creditUnitsFor(anchor):0;
                 activeSponge=anchor;
                 anchor.setType(Material.SPONGE);
+                jobManager.placed(npc);
                 activeSponge=null;
                 awardProgress(anchorCredit);
                 bulkheadPlugs.add(anchor);
@@ -690,6 +692,7 @@ public final class CofferdamJobTask implements JobTask {
     private void beginDrainWave(List<Block> waterAnchors, List<Block> lavaPlugs) {
         for (Block source : lavaPlugs) {
             source.setType(BULKHEAD_PLUG_MATERIAL);
+            jobManager.placed(npc);
             bulkheadPlugs.add(source);
         }
         bulkheadWaveAnchors.clear();

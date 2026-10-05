@@ -1217,6 +1217,7 @@ public final class ClearJobTask implements JobTask {
             Block cell = world.getBlockAt(npcX, y, npcZ);
             if (!cell.getType().isSolid()) {
                 cell.setType(Material.SCAFFOLDING);
+                jobManager.placed(npc);
                 placed.add(cell);
             }
         }
@@ -1514,6 +1515,7 @@ public final class ClearJobTask implements JobTask {
         pendingBlock = null;
         for (Block source : lavaBreach) {
             source.setType(BULKHEAD_PLUG_MATERIAL);
+            jobManager.placed(npc);
             bulkheadPlugs.add(source);
         }
         bulkheadWaveAnchors.clear();
@@ -1552,6 +1554,7 @@ public final class ClearJobTask implements JobTask {
             }
             Block anchor = bulkheadWaveAnchors.get(bulkheadWaveIndex);
             anchor.setType(Material.SPONGE);
+            jobManager.placed(npc);
             bulkheadPlugs.add(anchor);
             world.spawnParticle(Particle.SPLASH, anchor.getLocation().add(0.5, 0.5, 0.5),
                     12, 0.3, 0.3, 0.3, 0.05);
@@ -1929,6 +1932,7 @@ public final class ClearJobTask implements JobTask {
             return true;
         }
         above.setType(TOPSOIL_MATERIAL);
+        jobManager.placed(npc);
         topsoilPlaced++;
         world.playSound(above.getLocation(), Sound.BLOCK_ROOTED_DIRT_PLACE, 0.7f, 1.0f);
         world.spawnParticle(Particle.BLOCK, above.getLocation().add(0.5, 0.5, 0.5),

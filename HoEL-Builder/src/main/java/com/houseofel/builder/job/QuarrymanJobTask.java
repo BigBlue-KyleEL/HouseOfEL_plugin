@@ -1427,6 +1427,7 @@ public final class QuarrymanJobTask implements JobTask {
         npc.getNavigator().cancelNavigation();
         for (Block source : lavaBreach) {
             source.setType(BULKHEAD_PLUG_MATERIAL);
+            jobManager.placed(npc);
             bulkheadPlugs.add(source);
         }
         bulkheadWaveAnchors.clear();
@@ -1449,6 +1450,7 @@ public final class QuarrymanJobTask implements JobTask {
             }
             Block anchor = bulkheadWaveAnchors.get(bulkheadWaveIndex);
             anchor.setType(Material.SPONGE);
+            jobManager.placed(npc);
             bulkheadPlugs.add(anchor);
             world.spawnParticle(Particle.SPLASH, anchor.getLocation().add(0.5, 0.5, 0.5),
                     12, 0.3, 0.3, 0.3, 0.05);

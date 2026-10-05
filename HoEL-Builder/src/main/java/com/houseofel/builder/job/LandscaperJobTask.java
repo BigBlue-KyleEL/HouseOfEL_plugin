@@ -625,6 +625,7 @@ public final class LandscaperJobTask implements JobTask {
         if (block.getType() == material) return;
         int creditUnits = creditUnitsFor(block);
         block.setType(material);
+        if (jobManager != null && material != Material.AIR && material != Material.CAVE_AIR && material != Material.VOID_AIR) jobManager.placed(npc);
         if (creditUnits <= 0 || levelService.specializationOf(npc) != Specialization.GROUNDWORKER) return;
         for (TicketAwardResult result : levelService.awardProgress(
                 npc, TicketKind.GROUNDWORKER_CLEAR_512, 512 * 4, creditUnits)) {
