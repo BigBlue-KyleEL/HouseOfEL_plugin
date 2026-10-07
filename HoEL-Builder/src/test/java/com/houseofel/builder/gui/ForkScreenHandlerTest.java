@@ -133,4 +133,28 @@ class ForkScreenHandlerTest {
         assertEquals(2,refusals);
     }
 
+    @Test void namingStepDispatchesOnlySubmittedTextAndConsumesConfirmationOnce() {
+        List<String> names = new ArrayList<>();
+        assertTrue(handler.openName(player,"Thaddeus",null,names::add));
+        String id = lastOpened.screenId();
+        handler.onDispatch(player,id,"recruit",Map.of("name",new DispatchValue.StringVal("Ann Marie"),
+                "specialization",new DispatchValue.StringVal("FARMER")));
+        handler.onDispatch(player,id,"recruit",Map.of("name",new DispatchValue.StringVal("Duplicate")));
+        assertEquals(List.of("Ann Marie"),names);
+        assertNull(screens.getOpenScreen(player));
+    }
+    @Test void namingCancelAndStaleScreensNeverSubmitAndWrongValueTypesFailValidation() {
+        List<String> names = new ArrayList<>();
+        handler.openName(player,"Thaddeus",null,names::add);
+        String old = lastOpened.screenId();
+        handler.openName(player,"Thaddeus",null,names::add);
+        click(old,"recruit");
+        click(lastOpened.screenId(),"cancel");
+        assertTrue(names.isEmpty());
+        handler.openName(player,"Thaddeus",null,names::add);
+        handler.onDispatch(player,lastOpened.screenId(),"recruit",Map.of("name",new DispatchValue.IntVal(7)));
+        assertEquals(1,names.size());
+        assertNull(names.getFirst(),"Malformed text must reach validation as missing, never as a trusted name");
+    }
+
 }

@@ -1,6 +1,5 @@
 package com.houseofel.builder.npc;
 
-import net.citizensnpcs.api.npc.NPC;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import org.bukkit.Bukkit;
@@ -18,14 +17,18 @@ import org.geysermc.floodgate.api.player.FloodgatePlayer;
 public final class SpecializationForm {
 
     private final Plugin plugin;
-    private final BuilderNpcService npcService;
+    private final RecruitmentNameFlow naming;
 
     public SpecializationForm(Plugin plugin, BuilderNpcService npcService) {
+        this(plugin,npcService,new RecruitmentNameFlow(plugin,npcService,null));
+    }
+    public SpecializationForm(Plugin plugin, BuilderNpcService npcService, RecruitmentNameFlow naming) {
         this.plugin = plugin;
-        this.npcService = npcService;
+        this.naming = naming;
     }
 
     public void open(Player player, Location location) {
+        naming.clear(player);
         FloodgatePlayer floodgatePlayer = FloodgateApi.getInstance().getPlayer(player.getUniqueId());
         if (floodgatePlayer == null) {
             return;
@@ -58,13 +61,7 @@ public final class SpecializationForm {
                 open(player,location);
                 return;
             }
-            NPC npc = npcService.recruitHelper(player, location, specialization);
-            if (npc == null) {
-                // RecruitmentCost already told the player exactly what they're short on.
-                return;
-            }
-            player.sendMessage(Component.text("Spawned Helper NPC '" + BuilderNpcService.baseNameOf(npc) + "' (#" + npc.getId()
-                    + ") as a " + specialization.label() + ".", NamedTextColor.GREEN));
+            naming.begin(player,location,specialization,true);
         });
     }
 }

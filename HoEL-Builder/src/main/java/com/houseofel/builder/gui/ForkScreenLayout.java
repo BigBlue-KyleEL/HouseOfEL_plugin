@@ -54,6 +54,30 @@ public final class ForkScreenLayout {
         return new OpenScreenPayload(screenId, new int[]{426, height}, null, List.of(panel));
     }
 
+    public static OpenScreenPayload nameScreen(String id, String initial, String error) {
+        List<GuiElement> children = new ArrayList<>();
+        children.add(new GuiElement.Image("medallion",Anchor.TOP_CENTER,new int[]{0,-15},true,
+                new int[]{120,48},"houseofel:gui/medallion"));
+        children.add(new GuiElement.Label("title",Anchor.TOP_CENTER,new int[]{0,40},true,
+                "New Helper — Name","#FFFFFF",true,"center"));
+        children.add(new GuiElement.Label("hint",Anchor.TOP_CENTER,new int[]{0,62},true,
+                "Choose a name (1–24 characters).","#CCCCCC",true,"center"));
+        children.add(new GuiElement.TextInput("name",Anchor.TOP_CENTER,new int[]{0,84},true,
+                new int[]{BUTTON_WIDTH,20},"Helper name",initial));
+        int y = 113;
+        if (error != null) for (String line : wrap(error,BUTTON_WIDTH-4)) {
+            children.add(new GuiElement.Label("error_"+y,Anchor.TOP_CENTER,new int[]{0,y},true,
+                    line,"#FF5555",true,"center"));
+            y += 12;
+        }
+        y += 8;
+        children.add(button("recruit",y,"recruit","Recruit",true,null));
+        children.add(button("cancel",y+26,"cancel","Cancel",true,null));
+        int height = Math.max(250,y+68);
+        return new OpenScreenPayload(id,new int[]{426,height},null,List.of(new GuiElement.Panel(
+                "bg",Anchor.CENTER,new int[]{0,0},true,new int[]{426,height},"houseofel:gui/panel_main",null,children)));
+    }
+
     public static String description(Specialization specialization) {
         return switch (specialization) {
             case GROUNDWORKER -> "Specializes in Clearing and earthworks. This Helper's specialization is fixed at recruitment.";

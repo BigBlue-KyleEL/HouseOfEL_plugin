@@ -55,6 +55,17 @@ public final class ForkScreenHandler implements ScreenDispatchHandler, Listener 
         return true;
     }
 
+    public boolean openName(Player player, String initial, String error, Consumer<String> submit) {
+        if (uiPath.apply(player) != UiPath.MOD) return false;
+        String id = PREFIX + UUID.randomUUID();
+        sessions.put(player.getUniqueId(), new Session(id, Map.of("recruit", values -> {
+            String name = values.get("name") instanceof DispatchValue.StringVal text ? text.value() : null;
+            submit.accept(name);
+        })));
+        screens.openScreen(player, ForkScreenLayout.nameScreen(id, initial, error));
+        return true;
+    }
+
     @Override public void onDispatch(Player player, String screenId, String action, Map<String, DispatchValue> values) {
         mainThread.accept(() -> {
             Session session = sessions.get(player.getUniqueId());

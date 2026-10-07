@@ -98,6 +98,21 @@ class ForkScreenLayoutTest {
         assertTrue(lines.stream().allMatch(l -> ForkScreenLayout.textWidthBound(l)<=ForkScreenLayout.BUTTON_WIDTH-4));
     }
 
+    @Test void namingTextboxAndValidationMessageRoundTripOnSchemaV3() {
+        assertEquals(3,GuiConstants.SCHEMA_VERSION);
+        var screen = OpenScreenPayload.fromBytes(ForkScreenLayout.nameScreen("naming","Ann Marie",
+                "That Helper name is already in use.").toBytes());
+        var panel = (GuiElement.Panel)screen.root().getFirst();
+        var input = panel.children().stream().filter(GuiElement.TextInput.class::isInstance)
+                .map(GuiElement.TextInput.class::cast).findFirst().orElseThrow();
+        assertEquals("name",input.id());
+        assertEquals("Ann Marie",input.initial());
+        assertEquals(Anchor.TOP_CENTER,input.anchor());
+        assertEquals(240,input.size()[0]);
+        assertEquals(List.of("recruit","cancel"),panel.children().stream().filter(GuiElement.Button.class::isInstance)
+                .map(GuiElement.Button.class::cast).map(GuiElement.Button::action).toList());
+    }
+
     private void assertBounds(GuiElement.Panel panel) {
         int previousBottom = 0;
         for (var element : panel.children()) {

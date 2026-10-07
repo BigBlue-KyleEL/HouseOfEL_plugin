@@ -55,17 +55,50 @@ public final class BuilderNpcService {
             owner.sendMessage(RecruitmentAvailability.refusal());
             return null;
         }
-        if (!recruitmentCost.tryCharge(owner, specialization)) {
+        return recruitHelper(owner, location, specialization, suggestedName());
+    }
+
+    public NPC recruitHelper(Player owner, Location location, Specialization specialization, String requestedName) {
+        if (!RecruitmentAvailability.available(specialization)) {
+            owner.sendMessage(RecruitmentAvailability.refusal());
             return null;
         }
-        NPC npc = spawnHelper(location, specialization);
+        HelperNames.Result name = validateName(requestedName);
+        if (!name.valid()) {
+            owner.sendMessage(net.kyori.adventure.text.Component.text(name.error(),
+                    net.kyori.adventure.text.format.NamedTextColor.RED));
+            return null;
+        }
+        if (!recruitmentCost.tryCharge(owner, specialization)) return null;
+        NPC npc = createHelper(location, specialization, name.name());
         deathRecordStore.setOwner(npc.getUniqueId(), owner.getUniqueId());
         return npc;
     }
 
     public NPC spawnHelper(Location location, Specialization specialization) {
         if (!RecruitmentAvailability.available(specialization)) throw new IllegalArgumentException(RecruitmentAvailability.MESSAGE);
-        String baseName = nextName();
+        return spawnHelper(location, specialization, suggestedName());
+    }
+
+    public NPC spawnHelper(Location location, Specialization specialization, String requestedName) {
+        if (!RecruitmentAvailability.available(specialization)) throw new IllegalArgumentException(RecruitmentAvailability.MESSAGE);
+        HelperNames.Result name = validateName(requestedName);
+        if (!name.valid()) throw new IllegalArgumentException(name.error());
+        return createHelper(location, specialization, name.name());
+    }
+
+    public HelperNames.Result validateName(String requestedName) {
+        HelperNames.Result syntax = HelperNames.validate(requestedName, List.of());
+        return syntax.valid() ? HelperNames.validate(syntax.name(), takenNames()) : syntax;
+    }
+
+    private Set<String> takenNames() {
+        Set<String> taken = new HashSet<>();
+        for (NPC npc : CitizensAPI.getNPCRegistry()) if (isHelper(npc)) taken.add(baseNameOf(npc));
+        return taken;
+    }
+
+    private NPC createHelper(Location location, Specialization specialization, String baseName) {
         NPC npc = CitizensAPI.getNPCRegistry().createNPC(EntityType.VILLAGER, baseName);
         npc.data().setPersistent(ROLE_KEY, ROLE_VALUE);
         npc.data().setPersistent(BASE_NAME_KEY, baseName);
@@ -75,10 +108,7 @@ public final class BuilderNpcService {
         npc.setProtected(false);
         levelService.assign(npc, specialization);
         titleService.applyTitle(npc, specialization, 1);
-        // Citizens only writes saves.yml on its own ~1-hour autosave or a graceful
-        // shutdown — this dev environment only ever force-kills (no console access), so
-        // without an explicit save here a fresh Helper's very existence/position could be
-        // silently lost on the next restart.
+        // Persist the chosen base name and NPC immediately, without waiting for autosave.
         CitizensAPI.getNPCRegistry().saveToStore();
         return npc;
     }
@@ -124,40 +154,41 @@ public final class BuilderNpcService {
      * what the player has to type at it.
      */
     public NPC matchHelper(String message) {
-        for (NPC npc : CitizensAPI.getNPCRegistry()) {
+        return matchHelper(message, CitizensAPI.getNPCRegistry());
+    }
+
+    NPC matchHelper(String message, Iterable<NPC> candidates) {
+        NPC best = null;
+        int longest = -1;
+        for (NPC npc : candidates) {
             if (!isHelper(npc)) {
                 continue;
             }
             String name = baseNameOf(npc);
             if (message.length() > name.length()
                     && message.regionMatches(true, 0, name, 0, name.length())
-                    && Character.isWhitespace(message.charAt(name.length()))) {
-                return npc;
+                    && Character.isWhitespace(message.charAt(name.length())) && name.length() > longest) {
+                best = npc;
+                longest = name.length();
             }
         }
-        return null;
+        return best;
     }
 
     /** Next unused roster name, or the roster cycled with a number suffix once every name is taken. */
-    private String nextName() {
+    public String suggestedName() {
         Set<String> taken = new HashSet<>();
-        for (NPC npc : CitizensAPI.getNPCRegistry()) {
-            if (isHelper(npc)) {
-                // Base name, not the titled one — otherwise "Bartholomew the Trench-Hand"
-                // wouldn't match "Bartholomew" and the roster would hand it out twice.
-                taken.add(baseNameOf(npc));
-            }
-        }
+        for (String name : takenNames()) taken.add(HelperNames.key(name));
 
         for (String name : NAME_ROSTER) {
-            if (!taken.contains(name)) {
+            if (!taken.contains(HelperNames.key(name))) {
                 return name;
             }
         }
         for (int cycle = 2; ; cycle++) {
             for (String name : NAME_ROSTER) {
                 String candidate = name + " " + cycle;
-                if (!taken.contains(candidate)) {
+                if (!taken.contains(HelperNames.key(candidate))) {
                     return candidate;
                 }
             }

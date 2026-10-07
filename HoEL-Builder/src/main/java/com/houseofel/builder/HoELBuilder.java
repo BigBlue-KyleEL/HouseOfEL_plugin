@@ -114,8 +114,10 @@ public final class HoELBuilder extends JavaPlugin {
         ForkScreenHandler forkScreens = new ForkScreenHandler(this, screenService, capabilityService);
         getServer().getPluginManager().registerEvents(forkScreens, this);
 
-        SpecializationDialog specializationDialog = new SpecializationDialog(this, npcService, forkScreens);
-        SpecializationForm specializationForm = new SpecializationForm(this, npcService);
+        var naming = new com.houseofel.builder.npc.RecruitmentNameFlow(this,npcService,forkScreens);
+        getServer().getPluginManager().registerEvents(naming,this);
+        SpecializationDialog specializationDialog = new SpecializationDialog(this, npcService, forkScreens,naming);
+        SpecializationForm specializationForm = new SpecializationForm(this, npcService,naming);
         MilestoneChoiceDialog choiceDialog = new MilestoneChoiceDialog(this, choiceStore, choiceService, forkScreens);
         MilestoneChoiceForm choiceForm = new MilestoneChoiceForm(this, choiceStore, choiceService);
 

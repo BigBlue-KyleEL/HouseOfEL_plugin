@@ -7,7 +7,6 @@ import io.papermc.paper.registry.data.dialog.ActionButton;
 import io.papermc.paper.registry.data.dialog.DialogBase;
 import io.papermc.paper.registry.data.dialog.action.DialogAction;
 import io.papermc.paper.registry.data.dialog.type.DialogType;
-import net.citizensnpcs.api.npc.NPC;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.event.ClickCallback;
 import net.kyori.adventure.text.format.NamedTextColor;
@@ -29,15 +28,20 @@ public final class SpecializationDialog {
 
     private final ForkScreenHandler forkScreens;
     private final Plugin plugin;
-    private final BuilderNpcService npcService;
+    private final RecruitmentNameFlow naming;
 
     public SpecializationDialog(Plugin plugin, BuilderNpcService npcService, ForkScreenHandler forkScreens) {
+        this(plugin,npcService,forkScreens,new RecruitmentNameFlow(plugin,npcService,forkScreens));
+    }
+    public SpecializationDialog(Plugin plugin, BuilderNpcService npcService, ForkScreenHandler forkScreens,
+                                RecruitmentNameFlow naming) {
         this.forkScreens = forkScreens;
         this.plugin = plugin;
-        this.npcService = npcService;
+        this.naming = naming;
     }
 
     public void open(Player player, Location location) {
+        naming.clear(player);
         Location spawnLocation = location.clone();
         List<ForkScreenLayout.Option> options = new ArrayList<>();
         java.util.Map<String, Runnable> actions = new java.util.HashMap<>();
@@ -77,12 +81,6 @@ public final class SpecializationDialog {
             open(player,location);
             return;
         }
-        NPC npc = npcService.recruitHelper(player, location, specialization);
-        if (npc == null) {
-            // RecruitmentCost already told the player exactly what they're short on.
-            return;
-        }
-        player.sendMessage(Component.text("Spawned Helper NPC '" + BuilderNpcService.baseNameOf(npc) + "' (#" + npc.getId()
-                + ") as a " + specialization.label() + ".", NamedTextColor.GREEN));
+        naming.begin(player,location,specialization,false);
     }
 }
