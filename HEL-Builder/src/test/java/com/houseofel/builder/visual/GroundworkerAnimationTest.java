@@ -72,11 +72,11 @@ class GroundworkerAnimationTest {
         assertEquals(PLACE, a.clip(), "a fresh event is accepted after the previous clip ends");
         assertEquals(2, played.stream().filter(c -> c == PLACE).count());
     }
-    @Test void doubleSpeedScalesWorkClipsButPreservesGreetingAndLevelupPacing() {
+    @Test void doubleSpeedScalesWorkClipsButPreservesAmbientAndCelebrationPacing() {
         var a = new GroundworkerAnimation((c, h) -> {}, 2.0);
         for (var clip : GroundworkerAnimation.Clip.values()) {
-            assertEquals(clip == GREET || clip == LEVELUP || clip == RECOVER ? clip.ticks : (clip.ticks + 1L) / 2,
-                    a.scaledTicks(clip), clip.name);
+            assertEquals(clip == IDLE || clip == WALK || clip == GREET || clip == LEVELUP || clip == RECOVER
+                    ? clip.ticks : (clip.ticks + 1L) / 2, a.scaledTicks(clip), clip.name);
         }
         assertEquals(50, a.scaledTicks(100), "loop preview window also scales");
         a.tick(0, true, false, false);
@@ -118,6 +118,19 @@ class GroundworkerAnimationTest {
         ready[0] = true; a.tick(128, true, false, false); assertEquals(RECOVER, a.clip());
         a.tick(238, true, false, false); assertEquals(RECOVER, a.clip());
         ready[0] = true; a.tick(239, true, false, false); assertEquals(IDLE, a.clip());
+    }
+
+    @Test void idleAndWalkKeepAuthoredPaceWhileRustedIdleAndDigScale() {
+        assertEquals(1f, GroundworkerAnimation.speedFor("idle", 2.0f));
+        assertEquals(1f, GroundworkerAnimation.speedFor("walk", 2.0f));
+        assertEquals(1f, GroundworkerAnimation.speedFor("greet", 2.0f));
+        assertEquals(1f, GroundworkerAnimation.speedFor("levelup", 2.0f));
+        assertEquals(1f, GroundworkerAnimation.speedFor("levelup_recover", 2.0f));
+        assertEquals(2f, GroundworkerAnimation.speedFor("rusted_idle", 2.0f));
+        assertEquals(2f, GroundworkerAnimation.speedFor("dig", 2.0f));
+        assertEquals(2f, GroundworkerAnimation.speedFor("shovel_draw", 2.0f));
+        assertEquals(2f, GroundworkerAnimation.speedFor("shovel_stow", 2.0f));
+        assertEquals(2f, GroundworkerAnimation.speedFor("place", 2.0f));
     }
 
     @Test void greetingPreviewKeepsAuthoredDeadlineAndWaitsForRenderedPose() {

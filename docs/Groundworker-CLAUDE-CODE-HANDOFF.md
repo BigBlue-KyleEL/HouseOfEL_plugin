@@ -4,7 +4,7 @@
 
 ## Pre-release update — 6 October 2026
 
-The current dev changes supersede the former 2x greeting policy: `greet`, `levelup` and `levelup_recover` use 1.0x in runtime sampling, controller deadlines and previews; other clips retain configured speed 2.0. The model and pack are unchanged. Job diagnostics now use `helpers.diagnostics.enabled: false` (graceful restart required). `/builder setlevel` and `/builder testpanel` have separate default-false permissions. See [the pre-release implementation report](Pre-release-2026-10-06.md) for configuration, command gates, audit, build and local deployment evidence. These changes remain uncommitted pending Kyle’s in-game check; the 5 October acceptance below covers the previous build.
+The current dev changes supersede the former 2x greeting policy: `idle`, `walk`, `greet`, `levelup` and `levelup_recover` use 1.0x in runtime sampling, controller deadlines and previews; active working clips retain configured speed 2.0. The model and pack are unchanged. Job diagnostics now use `helpers.diagnostics.enabled: false` (graceful restart required). `/builder setlevel` and `/builder testpanel` have separate default-false permissions. See [the pre-release implementation report](Pre-release-2026-10-06.md) for configuration, command gates, audit, build and local deployment evidence. These changes remain uncommitted pending Kyle’s in-game check; the 5 October acceptance below covers the previous build.
 
 ## Final client acceptance — 5 October 2026
 
@@ -94,12 +94,12 @@ helpers:
     debug: true
 ```
 
-**`greet`, `levelup` and `levelup_recover` always use 1.0x**, regardless of the general speed setting. Kyle explicitly rejected faster celebration pacing and accepted the restored pacing; the 6 October deploy decision also restores the authored greeting pace. Sampling, controller deadlines and standalone previews share this exception.
+**`idle`, `walk`, `greet`, `levelup` and `levelup_recover` always use 1.0x**, regardless of the general speed setting. Ambient motion (idle/walk) and celebration/greeting keep their authored pacing; only active working clips (`dig`, `rusted_idle`, `shovel_draw`, `shovel_stow`, `place`) follow the configured speed. Sampling, controller deadlines, standalone previews and the loop preview window all share this exception.
 
 | Clip | Authored motion | Accepted dev motion | Timed controller deadline |
 |---|---:|---:|---:|
-| `idle` | 4s | 2s | loop |
-| `walk` | 1.2s | 0.6s | loop |
+| `idle` | 4s | **4s** | loop |
+| `walk` | 1.2s | **1.2s** | loop |
 | `dig` | 1.8s | 0.9s | loop |
 | `rusted_idle` | 4.5s | 2.25s | loop |
 | `shovel_draw` | 3.5s | 1.75s | 35 ticks |
@@ -109,7 +109,7 @@ helpers:
 | `levelup` | 4.5s | **4.5s** | **90 ticks** |
 | `levelup_recover` | 5.5s | **5.5s** | **110 ticks** |
 
-These are nominal motion durations; engine startup, loop boundaries and final display/server-tick synchronization add small cadence overhead. Timed transitions require both the deadline and the final-pose completion guard. Loop preview window scales from five seconds to 2.5 seconds at dev speed. Maintenance scans and Rusted polling do not accelerate. Invalid nonpositive/nonfinite speed falls back to 1.0 with a warning.
+These are nominal motion durations; engine startup, loop boundaries and final display/server-tick synchronization add small cadence overhead. Timed transitions require both the deadline and the final-pose completion guard. Loop preview window is 5 seconds for 1x clips, 2.5 seconds for working clips at dev speed. Maintenance scans and Rusted polling do not accelerate. Invalid nonpositive/nonfinite speed falls back to 1.0 with a warning.
 
 ### Why native BetterModel speed was insufficient
 
@@ -155,9 +155,9 @@ All source changes below are in `D:\Projects\House of EL\Plugin-Source`:
 
 - `HoEL-Builder\build.gradle.kts`: BetterModel compile-only API dependency.
 - `HoEL-Builder\src\main\resources\plugin.yml`: optional dependency, visual preview command and explicit test permission (default false).
-- `HoEL-Builder\src\main\resources\config.yml`: disabled-by-default custom visuals and speed/nameplate/debug settings. The speed comment explicitly exempts greeting and celebration clips; shipped speed is 2.0 and enabled remains false.
+- `HoEL-Builder\src\main\resources\config.yml`: disabled-by-default custom visuals and speed/nameplate/debug settings. The speed comment explicitly exempts idle, walk, greeting and celebration clips; shipped speed is 2.0 and enabled remains false.
 - `HoEL-Builder\src\main\java\com\houseofel\builder\visual\HelperVisuals.java`: optional visual hooks / no-op implementation.
-- Same visual package: `GroundworkerModelService.java` (Citizens lifecycle/tracker/nameplate/filter/preview), `GroundworkerAnimation.java` (session FSM, coalescing, timers and greeting/celebration speed exceptions), `GroundworkerPlayback.java` (read-only runtime adapter/completion markers).
+- Same visual package: `GroundworkerModelService.java` (Citizens lifecycle/tracker/nameplate/filter/preview), `GroundworkerAnimation.java` (session FSM, coalescing, timers and ambient/greeting/celebration speed exceptions), `GroundworkerPlayback.java` (read-only runtime adapter/completion markers).
 - `HoEL-Builder\src\main\java\com\houseofel\builder\HoELBuilder.java`: feature flag, optional dependency bootstrap and shutdown.
 - `HoEL-Builder\src\main\java\com\houseofel\builder\npc\HelperLevelService.java`: visual level-up hook, XP behavior unchanged.
 - `HoEL-Builder\src\main\java\com\houseofel\builder\job\JobManager.java`: optional visual hook wiring.

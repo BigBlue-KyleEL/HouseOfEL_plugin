@@ -141,9 +141,10 @@ public final class GroundworkerModelService implements HelperVisuals, Listener, 
                         .resolve("models").resolve(model + ".bbmodel"), renderer.animations(), animationSpeed);
                 playbackRenderer = renderer;
                 plugin.getLogger().info("Groundworker runtime playback prepared at " + animationSpeed
-                        + "x, 25ms cadence; model file read only; dig=" + playback.get("dig").length()
-                        + "s; greet=" + playback.get("greet").length() + "s; levelup="
-                        + playback.get("levelup").length() + "s; recover=" + playback.get("levelup_recover").length() + "s");
+                        + "x, 25ms cadence; model file read only; idle=" + playback.get("idle").length()
+                        + "s(1x); walk=" + playback.get("walk").length() + "s(1x); dig=" + playback.get("dig").length()
+                        + "s; greet=" + playback.get("greet").length() + "s(1x); levelup="
+                        + playback.get("levelup").length() + "s(1x); recover=" + playback.get("levelup_recover").length() + "s(1x)");
             } catch (java.io.IOException | RuntimeException ex) {
                 if (!warned) plugin.getLogger().log(java.util.logging.Level.SEVERE,
                         "Cannot prepare Groundworker runtime playback; leaving Citizens visible", ex);
@@ -270,7 +271,7 @@ public final class GroundworkerModelService implements HelperVisuals, Listener, 
             sender.sendMessage("You do not have houseofel.builder.modeltest."); return true;
         }
         if (args.length == 1 && args[0].equalsIgnoreCase("status")) {
-            sender.sendMessage("Groundworker model=" + model + "; speed=" + animationSpeed + "x; greet=1.0x; levelup=1.0x; recover=1.0x; runtime-resampled; attached=" + entries.size() + "; Java-only visuals");
+            sender.sendMessage("Groundworker model=" + model + "; speed=" + animationSpeed + "x; idle=1.0x; walk=1.0x; greet=1.0x; levelup=1.0x; recover=1.0x; runtime-resampled; attached=" + entries.size() + "; Java-only visuals");
             for (Entry e : entries.values()) {
                 sender.sendMessage("NPC #" + e.npc.getId() + " " + e.npc.getName()
                         + ": " + e.animation.clip() + "; viewer scheduler=" + e.tracker.isScheduled()
@@ -292,7 +293,13 @@ public final class GroundworkerModelService implements HelperVisuals, Listener, 
                 var clip = java.util.Arrays.stream(GroundworkerAnimation.Clip.values())
                         .filter(c -> c.name.equals(args[2])).findFirst().orElseThrow();
                 if (clip == GroundworkerAnimation.Clip.LEVELUP) e.animation.levelUp();
-                else { e.animation.preview(clip, ticks); e.previewUntil = ticks + (clip.ticks == 0 ? e.animation.scaledTicks(100) : e.animation.scaledTicks(clip)); }
+                else {
+                    e.animation.preview(clip, ticks);
+                    long window = clip.ticks == 0
+                            ? Math.max(1L, (long) Math.ceil(100 / (double) GroundworkerAnimation.speedFor(clip.name, animationSpeed)))
+                            : e.animation.scaledTicks(clip);
+                    e.previewUntil = ticks + window;
+                }
                 sender.sendMessage("Visual preview: " + clip.name + " on NPC #" + id + " (no job/level changes)");
             } catch (IllegalArgumentException ex) { sender.sendMessage("Unknown NPC id or clip."); }
             return true;

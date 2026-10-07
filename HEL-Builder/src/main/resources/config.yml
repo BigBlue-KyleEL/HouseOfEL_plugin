@@ -7,7 +7,7 @@ helpers:
     # Opt-in only; enabled in the Local Dev Server 26.1.2 config.
     enabled: false
     model: groundworker
-    # Playback multiplier and matching clip timers; greet, levelup and levelup_recover stay at 1.0x.
+    # Playback multiplier and matching clip timers; idle, walk, greet, levelup and levelup_recover stay at 1.0x.
     animation-speed: 2.0
     nameplate-height: 2.6
     debug: false
