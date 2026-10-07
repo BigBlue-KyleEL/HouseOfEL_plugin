@@ -8,5 +8,5 @@ pluginManagement {
 
 rootProject.name = "HouseOfEL"
 
-include("HoEL-Core", "HoEL-Builder", "HoEL-Encounters", "HoEL-LLM")
+include("HEL-Core", "HEL-Builder", "HEL-Encounters", "HEL-LLM")
 include("common", "fabric")

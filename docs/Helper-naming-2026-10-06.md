@@ -1,5 +1,7 @@
 # Helper recruitment naming — 6 October 2026
 
+> **Note:** "HoEL" was renamed to "HEL" on 2026-10-07. Paths and names below reflect the pre-rename state.
+
 > **Accepted by Kyle — 6 October 2026:** “everything passed” for the fork screens/recruitment fixes and Helper naming. This supersedes the historical pending-acceptance wording below. Completion report in the vault: `Plugin/Planning/House of EL — Fork GUI and Helper Naming Completion Report (2026-10-06).md`. Work remains uncommitted; no commit/release/live action was requested by the report.
 
 Implemented on dev, uncommitted at base `18e88af`. No main merge, push, release or live-server changes. This follows the fork GUI work and preserves its alignment/Coming soon behavior.

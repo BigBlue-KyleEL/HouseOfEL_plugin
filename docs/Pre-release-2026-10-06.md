@@ -1,5 +1,7 @@
 # First live deploy: pre-release implementation — 6 October 2026
 
+> **Note:** "HoEL" was renamed to "HEL" on 2026-10-07. Paths and names below reflect the pre-rename state.
+
 > **Later 6 October build:** fork screens are now implemented and locally deployed; see [the fork GUI report](Fork-GUI-2026-10-06.md) for the current Core/Builder hashes, 122-test result and acceptance checklist. This report’s earlier 100-test deployment remains historical evidence. Both sets of changes remain uncommitted.
 
 Implemented on `dev` at base `18e88af`; **uncommitted, awaiting Kyle’s in-game acceptance**. `main` remains `a4755a7`. No merge, push, release or live-server access occurred. Specification: vault `Plugin/Planning/House of EL — First Live Deploy Plan (2026-10-06).md`, pre-release section. This report supersedes older 2x greeting timings.

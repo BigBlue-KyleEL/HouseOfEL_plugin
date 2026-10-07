@@ -1,7 +1,7 @@
 // Root build config — shared across all House of EL modules.
 // Each module's own build.gradle.kts stays minimal; everything common lives here.
 //
-// Paper API is scoped to the HoEL-* plugin modules only — the common module (pure Java)
+// Paper API is scoped to the HEL-* plugin modules only — the common module (pure Java)
 // and the fabric module (uses Loom/Fabric API) must not inherit it.
 // The fabric module is excluded from the root java/toolchain config entirely — Loom
 // manages its own java plugin application and toolchain.
@@ -35,7 +35,7 @@ configure(subprojects.filter { it.name != "fabric" }) {
 }
 
 // Paper API only for plugin modules
-configure(subprojects.filter { it.name.startsWith("HoEL-") }) {
+configure(subprojects.filter { it.name.startsWith("HEL-") }) {
     dependencies {
         "compileOnly"("io.papermc.paper:paper-api:26.1.2.build.+")
     }

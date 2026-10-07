@@ -1,5 +1,7 @@
 # Groundworker — Claude Code handoff
 
+> **Note:** "HoEL" was renamed to "HEL" on 2026-10-07. Paths and names below reflect the pre-rename state.
+
 ## Pre-release update — 6 October 2026
 
 The current dev changes supersede the former 2x greeting policy: `greet`, `levelup` and `levelup_recover` use 1.0x in runtime sampling, controller deadlines and previews; other clips retain configured speed 2.0. The model and pack are unchanged. Job diagnostics now use `helpers.diagnostics.enabled: false` (graceful restart required). `/builder setlevel` and `/builder testpanel` have separate default-false permissions. See [the pre-release implementation report](Pre-release-2026-10-06.md) for configuration, command gates, audit, build and local deployment evidence. These changes remain uncommitted pending Kyle’s in-game check; the 5 October acceptance below covers the previous build.

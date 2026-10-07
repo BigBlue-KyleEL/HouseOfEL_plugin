@@ -1,5 +1,7 @@
 # Groundworker: temporary rest-key experiment and 2x speed test
 
+> **Note:** "HoEL" was renamed to "HEL" on 2026-10-07. Paths and names below reflect the pre-rename state.
+
 > **6 October pre-release policy:** `greet` joins `levelup` and `levelup_recover` at 1.0x; other clips use the configured 2.0x. This supersedes the historical accelerated-greeting timings below. No model or pack change. See [the implementation report](Pre-release-2026-10-06.md); in-game acceptance is pending.
 
 > **Current accepted state:** see [the consolidated Claude Code handoff](Groundworker-CLAUDE-CODE-HANDOFF.md). It supersedes historical hashes/timings and pending Java feedback below. Kyle accepted the final working speed, original level-up pacing and accessory fix.

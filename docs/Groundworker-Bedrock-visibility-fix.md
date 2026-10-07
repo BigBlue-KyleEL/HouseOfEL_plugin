@@ -1,5 +1,7 @@
 # Groundworker Bedrock base-villager visibility fix — 5 October 2026
 
+> **Note:** "HoEL" was renamed to "HEL" on 2026-10-07. Paths and names below reflect the pre-rename state.
+
 Kyle's Floodgate test (`.KyleEL9084`) disproved the earlier fallback claim: Montgomery had a nameplate and faint invisible-entity silhouette, but no visible villager. The previous report inferred visible fallback from an API viewer filter without a Bedrock client test. That inference was wrong.
 
 ## Exact cause in BetterModel 3.0.2

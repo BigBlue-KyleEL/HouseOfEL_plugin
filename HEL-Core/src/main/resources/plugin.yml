@@ -1,0 +1,15 @@
+name: HEL-Core
+version: 0.1.0
+main: com.houseofel.core.HELCore
+api-version: '1.13'
+author: Kyle
+description: House of EL - Core module (base /hel command, shared services)
+softdepend: [floodgate]
+commands:
+  hel:
+    description: House of EL base command
+    usage: /hel
+permissions:
+  houseofel.hel.use:
+    description: Allows use of the /hel command
+    default: false

@@ -7,10 +7,10 @@ Custom Minecraft **Paper** plugin suite for a small private family server (Java/
 ## Structure
 
 Gradle multi-module project, 4 modules:
-- `HoEL-Core` — base module, owns the `/hel` command + shared services
-- `HoEL-Builder` — Helper NPC (builder/gatherer companion) systems
-- `HoEL-Encounters` — combat/encounter systems (MythicMobs bridging)
-- `HoEL-LLM` — Gemini API bridge for lore/quest NPC dialogue
+- `HEL-Core` — base module, owns the `/hel` command + shared services
+- `HEL-Builder` — Helper NPC (builder/gatherer companion) systems
+- `HEL-Encounters` — combat/encounter systems (MythicMobs bridging)
+- `HEL-LLM` — Gemini API bridge for lore/quest NPC dialogue
 
 All shared build config (repositories, Paper API dependency, Java toolchain) lives in the **root** `build.gradle.kts` via a `subprojects { }` block. Each module's own `build.gradle.kts` is intentionally near-empty — don't add per-module repository/dependency config unless a module genuinely needs something the others don't.
 
@@ -69,7 +69,7 @@ it removed):
    unchanged, check the jar mtime against the server boot time BEFORE theorising about the
    code:
    ```
-   ls -la --time-style=full-iso plugins/HoEL-Builder-0.1.0-SNAPSHOT.jar
+   ls -la --time-style=full-iso plugins/HEL-Builder-0.1.0-SNAPSHOT.jar
    head -2 logs/latest.log
    ```
    If the jar is newer than the boot line, the running server does not have it. That is the
@@ -85,7 +85,7 @@ it removed):
 
 - Package root: `com.houseofel.<module>` (e.g. `com.houseofel.core`)
 - `plugin.yml` (legacy Bukkit format, not `paper-plugin.yml`) with `api-version: '1.13'` — this is a stable low baseline, not a stale value; don't "fix" it to match the current MC version
-- Gate meaningful commands behind real LuckPerms permission nodes with `default: false` in plugin.yml (not `default: op`) — OP status should not silently bypass permission checks. See `HoEL-Core`'s `/hel` command for the pattern.
+- Gate meaningful commands behind real LuckPerms permission nodes with `default: false` in plugin.yml (not `default: op`) — OP status should not silently bypass permission checks. See `HEL-Core`'s `/hel` command for the pattern.
 
 ## Known gotcha
 

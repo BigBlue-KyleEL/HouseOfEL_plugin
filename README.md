@@ -9,6 +9,6 @@ Repo scaffolding not yet initialized. Next steps (Phase 0):
 - `git init` here
 - Move existing loose Denizen scripts (`lore_phase_control.dsc`, `mausoleum_keeper.dsc`) in once the module structure exists
 - Add `AGENTS.md` for Codex
-- Build the four module skeletons: HoEL-Core, HoEL-Builder, HoEL-Encounters, HoEL-LLM
+- Build the four module skeletons: HEL-Core, HEL-Builder, HEL-Encounters, HEL-LLM
 
 See the Masterfile and Development Timeline in the Obsidian vault (`Plugin/Core` and `Plugin/Planning`) for full design context.
