@@ -1,1 +1,13 @@
 minimum-schema-version: 3
+
+# Per-player client-side border that shows the vanilla wall on a rectangle (overworld only).
+# Visual + collision only; ChunkyBorder enforces the same box server-side.
+rect-border:
+  enabled: true
+  world: world
+  min-x: -15000
+  max-x: 15000
+  min-z: -20000
+  max-z: 30000
+  warning-distance: 16
+  update-step: 16   # re-send only when the square's center moves at least this many blocks

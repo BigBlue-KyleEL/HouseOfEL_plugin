@@ -1,10 +1,13 @@
 package com.houseofel.core;
 
 import com.houseofel.common.net.GuiConstants;
+import com.houseofel.core.border.RectBorderMath;
+import com.houseofel.core.border.RectBorderService;
 import com.houseofel.core.gui.GuiCapabilityService;
 import com.houseofel.core.gui.ScreenService;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
+import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 
 public final class HELCore extends JavaPlugin {
@@ -13,6 +16,7 @@ public final class HELCore extends JavaPlugin {
 
     private GuiCapabilityService capabilityService;
     private ScreenService screenService;
+    private RectBorderService rectBorderService;
 
     @Override
     public void onEnable() {
@@ -52,11 +56,17 @@ public final class HELCore extends JavaPlugin {
         getServer().getPluginManager().registerEvents(capabilityService, this);
         getServer().getPluginManager().registerEvents(screenService, this);
 
+        rectBorderService = new RectBorderService(this, getLogger());
+        rectBorderService.load(getConfig().getConfigurationSection("rect-border"));
+        getServer().getPluginManager().registerEvents(rectBorderService, this);
+        rectBorderService.applyToOnline();
+
         getLogger().info("HEL-Core enabled.");
     }
 
     @Override
     public void onDisable() {
+        if (rectBorderService != null) rectBorderService.clearAll();
         var messenger = getServer().getMessenger();
         messenger.unregisterIncomingPluginChannel(
                 this, GuiConstants.HANDSHAKE_CHANNEL, capabilityService);
@@ -80,13 +90,46 @@ public final class HELCore extends JavaPlugin {
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (command.getName().equalsIgnoreCase("hel")) {
-            if (!sender.hasPermission(HEL_PERMISSION)) {
+            boolean borderStatus = args.length > 0 && args[0].equalsIgnoreCase("border");
+            // Console/RCON can't hold a LuckPerms node, so it may read the (read-only) border
+            // status; players still need the node.
+            boolean consoleBorder = borderStatus && !(sender instanceof Player);
+            if (!consoleBorder && !sender.hasPermission(HEL_PERMISSION)) {
                 sender.sendMessage("You don't have permission to use this command.");
+                return true;
+            }
+            if (borderStatus) {
+                sendBorderStatus(sender);
                 return true;
             }
             sender.sendMessage("House of EL — systems online.");
             return true;
         }
         return false;
+    }
+
+    private void sendBorderStatus(CommandSender sender) {
+        RectBorderService rb = rectBorderService;
+        if (rb == null || !rb.isEnabled()) {
+            sender.sendMessage("Rect border: disabled.");
+            return;
+        }
+        RectBorderMath m = rb.math();
+        sender.sendMessage("Rect border: enabled in '" + rb.worldName() + "'.");
+        sender.sendMessage("Box: X " + fmt(m.minX()) + " to " + fmt(m.maxX())
+                + ", Z " + fmt(m.minZ()) + " to " + fmt(m.maxZ()) + " (square side " + fmt(m.side()) + ").");
+        if (!(sender instanceof Player p)) return;
+        var border = rb.borderOf(p);
+        if (border == null) {
+            sender.sendMessage("Your border: none (you are not in '" + rb.worldName() + "').");
+            return;
+        }
+        var c = border.getCenter();
+        sender.sendMessage("Your square: center " + fmt(c.getX()) + ", " + fmt(c.getZ())
+                + ", size " + fmt(border.getSize()) + ".");
+    }
+
+    private static String fmt(double v) {
+        return v == Math.rint(v) ? Long.toString((long) v) : Double.toString(v);
     }
 }
