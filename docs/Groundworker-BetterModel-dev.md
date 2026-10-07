@@ -1,8 +1,10 @@
 # Groundworker BetterModel dev integration â€” 2026-10-04
 
+> **6 October pre-release policy:** `greet` joins `levelup` and `levelup_recover` at 1.0x; other clips use the configured 2.0x. This supersedes the historical accelerated-greeting timings below. No model or pack change. See [the implementation report](Pre-release-2026-10-06.md); in-game acceptance is pending.
+
 > **Current accepted state:** see [the consolidated Claude Code handoff](Groundworker-CLAUDE-CODE-HANDOFF.md). It supersedes historical hashes/timings and pending Java feedback below. Kyle accepted the final working speed, original level-up pacing and accessory fix.
 
-**Current official asset:** the accessory rest-key update is promoted, SHA-256 `da84343c3abbf8ea40b48187f04b99f32d8d741a7cdf0fd3aedadea6a0ef268b`. Dev uses a byte-identical copy of Final V1. Shipped animation-speed default is 2.0, feature enabled remains false; levelup/recovery remain at 1.0x. The consolidated handoff records current deployment verification; older sections below describe historical builds.
+**Current official asset:** the accessory rest-key update is promoted, SHA-256 `da84343c3abbf8ea40b48187f04b99f32d8d741a7cdf0fd3aedadea6a0ef268b`. Dev uses a byte-identical copy of Final V1. Shipped animation-speed default is 2.0, feature enabled remains false; greet/levelup/recovery remain at 1.0x. The consolidated handoff records current deployment verification; older sections below describe historical builds.
 
 Implemented on `dev` in Plugin-Source; deployed only to `D:\Projects\House of EL\Local Dev Server 26.1.2`. No merge, live-server edit, or resource-pack release was performed.
 

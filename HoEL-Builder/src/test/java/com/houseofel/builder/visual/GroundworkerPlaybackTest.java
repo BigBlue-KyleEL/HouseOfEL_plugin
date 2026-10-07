@@ -76,10 +76,10 @@ class GroundworkerPlaybackTest {
         assertEquals(-9f, endpoint.position().x);
         assertEquals(before, source.toString(), "Resampling must not mutate the source model");
     }
-    @Test void configuredSpeedDoesNotChangeEitherLevelupClip() {
+    @Test void configuredSpeedDoesNotChangeGreetingOrCelebrationClips() {
         var source = fixture();
         var raw = source.getAsJsonArray("animations").get(0).getAsJsonObject();
-        for (String name : List.of("levelup", "levelup_recover")) {
+        for (String name : List.of("greet", "levelup", "levelup_recover")) {
             raw.addProperty("name", name);
             var original = GroundworkerPlayback.prepare(source, imported(source), 1).get(name);
             var fastConfig = GroundworkerPlayback.prepare(source, imported(source), 2).get(name);
@@ -125,7 +125,7 @@ class GroundworkerPlaybackTest {
         var two = GroundworkerPlayback.load(file, imported(raw), 2);
         assertEquals(10, two.size());
         for (var clip : two.values()) {
-            int factor = clip.name().equals("levelup") || clip.name().equals("levelup_recover") ? 1 : 2;
+            int factor = Set.of("greet", "levelup", "levelup_recover").contains(clip.name()) ? 1 : 2;
             assertEquals(factor * (lastPoseTick(clip) - 2), lastPoseTick(one.get(clip.name())) - 2, clip.name());
             for (String accessory : List.of("headband", "apron", "shovel_sash")) {
                 var keys = clip.animator().get(bone(accessory)).keyframe();

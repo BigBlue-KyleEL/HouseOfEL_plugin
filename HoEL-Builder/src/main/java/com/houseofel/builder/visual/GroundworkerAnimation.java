@@ -41,9 +41,10 @@ public final class GroundworkerAnimation {
     public long scaledTicks(int baseTicks) {
         return baseTicks == 0 ? 0 : Math.max(1L, (long) Math.ceil(baseTicks / (double) animationSpeed));
     }
-    /** Level-up is an authored celebration: the working-speed setting never accelerates it. */
+    /** Greeting and celebration keep their authored pace, independent of working speed. */
     static float speedFor(String clipName, float configuredSpeed) {
-        return clipName.equals(Clip.LEVELUP.name) || clipName.equals(Clip.RECOVER.name) ? 1f : configuredSpeed;
+        return clipName.equals(Clip.GREET.name) || clipName.equals(Clip.LEVELUP.name)
+                || clipName.equals(Clip.RECOVER.name) ? 1f : configuredSpeed;
     }
     public long scaledTicks(Clip next) {
         return next.ticks == 0 ? 0 : Math.max(1L,

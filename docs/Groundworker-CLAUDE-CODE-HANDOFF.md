@@ -1,18 +1,22 @@
 # Groundworker — Claude Code handoff
 
+## Pre-release update — 6 October 2026
+
+The current dev changes supersede the former 2x greeting policy: `greet`, `levelup` and `levelup_recover` use 1.0x in runtime sampling, controller deadlines and previews; other clips retain configured speed 2.0. The model and pack are unchanged. Job diagnostics now use `helpers.diagnostics.enabled: false` (graceful restart required). `/builder setlevel` and `/builder testpanel` have separate default-false permissions. See [the pre-release implementation report](Pre-release-2026-10-06.md) for configuration, command gates, audit, build and local deployment evidence. These changes remain uncommitted pending Kyle’s in-game check; the 5 October acceptance below covers the previous build.
+
 ## Final client acceptance — 5 October 2026
 
 Kyle confirmed all client tests passed: Java visuals, levelup/recovery, the floating-accessory fix, 2x working pacing, and Bedrock visibility with both clients together. Java retains the custom model and raised label; Bedrock has a visible native villager and a single native nameplate. This supersedes pending-client-test notes in the historical sections and reports. The latest full build passed 86 tests with zero failures, errors, or skips, including the official-model probe.
 
 Kyle authorized committing only this integration's code, tests, config, and docs on `dev`. No build outputs, server files, model binaries, release, push, merge to main, or live-server changes are included.
 
-Updated 5 October 2026. This report describes the **current client-accepted dev integration**, including the subsequent fixes. Use it in preference to earlier deployment hashes, speed tables, and pending-test statements in the historical reports. Kyle's latest client feedback after the level-up pacing exemption was: **“Yeyyy noice it's perfecy.”** No additional change is requested by this handoff.
+Updated 5 October 2026. This report describes the **current client-accepted dev integration**, including the subsequent fixes. Use it in preference to earlier deployment hashes, speed tables, and pending-test statements in the historical reports. Kyle's latest client feedback after the level-up pacing exemption was: **“Yeyyy noice it's perfecy.”** The 6 October update above supersedes this historical acceptance for the newly changed greeting and diagnostics/permissions.
 
 ## Accepted result and scope
 
 The Groundworker renders through BetterModel 3.0.2 on Paper 26.1.2. Kyle confirmed that the temporary accessory-rest-key model stops the floating headband/apron/sash, the accelerated working animation now looks right, and the original-paced level-up/recovery is accepted. Preserve this behavior.
 
-- Repository: `D:\Projects\House of EL\Plugin-Source`, branch **dev**. Implementation remains **uncommitted**, including untracked visual sources/tests/reports; inspect `git status` before staging. No commit, push, main merge, live deployment, or pack release was performed for this integration.
+- Repository: `D:\Projects\House of EL\Plugin-Source`, branch **dev**. The accepted integration was subsequently committed through `18e88af`. The 6 October pre-release changes remain **uncommitted**; inspect `git status` before staging. No main merge, push, live deployment or pack release is authorized in this session.
 - Only deployment target: `D:\Projects\House of EL\Local Dev Server 26.1.2` / Voxyris-Dev. The older `Local Dev Server` folder is a different, superseded target.
 - Minecraft/Paper **26.1.2**, dev server jar `paper-26.1.2-74.jar`, NMS `V26_R1`, **Java 25**. Do not upgrade the target as part of this work.
 - BetterModel **3.0.2**, official Paper release: https://github.com/toxicity188/BetterModel/releases/tag/3.0.2 . `compileOnly("io.github.toxicity188:bettermodel-bukkit-api:3.0.2")`; `softdepend: BetterModel` in Builder's plugin descriptor.
@@ -88,7 +92,7 @@ helpers:
     debug: true
 ```
 
-**`levelup` and `levelup_recover` always use 1.0x**, regardless of the general speed setting. Kyle explicitly rejected faster celebration pacing and accepted the restored pacing. Sampling, controller deadlines and standalone previews share this exception.
+**`greet`, `levelup` and `levelup_recover` always use 1.0x**, regardless of the general speed setting. Kyle explicitly rejected faster celebration pacing and accepted the restored pacing; the 6 October deploy decision also restores the authored greeting pace. Sampling, controller deadlines and standalone previews share this exception.
 
 | Clip | Authored motion | Accepted dev motion | Timed controller deadline |
 |---|---:|---:|---:|
@@ -99,7 +103,7 @@ helpers:
 | `shovel_draw` | 3.5s | 1.75s | 35 ticks |
 | `shovel_stow` | 3.5s | 1.75s | 35 ticks |
 | `place` | 1.2s | 0.6s | 12 ticks |
-| `greet` | 2.1s | 1.05s | 21 ticks |
+| `greet` | 2.1s | **2.1s** | **42 ticks** |
 | `levelup` | 4.5s | **4.5s** | **90 ticks** |
 | `levelup_recover` | 5.5s | **5.5s** | **110 ticks** |
 
@@ -149,9 +153,9 @@ All source changes below are in `D:\Projects\House of EL\Plugin-Source`:
 
 - `HoEL-Builder\build.gradle.kts`: BetterModel compile-only API dependency.
 - `HoEL-Builder\src\main\resources\plugin.yml`: optional dependency, visual preview command and explicit test permission (default false).
-- `HoEL-Builder\src\main\resources\config.yml`: disabled-by-default custom visuals and speed/nameplate/debug settings. The speed comment explicitly exempts celebration clips; shipped speed is 2.0 and enabled remains false.
+- `HoEL-Builder\src\main\resources\config.yml`: disabled-by-default custom visuals and speed/nameplate/debug settings. The speed comment explicitly exempts greeting and celebration clips; shipped speed is 2.0 and enabled remains false.
 - `HoEL-Builder\src\main\java\com\houseofel\builder\visual\HelperVisuals.java`: optional visual hooks / no-op implementation.
-- Same visual package: `GroundworkerModelService.java` (Citizens lifecycle/tracker/nameplate/filter/preview), `GroundworkerAnimation.java` (session FSM, coalescing, timers and celebration speed exception), `GroundworkerPlayback.java` (read-only runtime adapter/completion markers).
+- Same visual package: `GroundworkerModelService.java` (Citizens lifecycle/tracker/nameplate/filter/preview), `GroundworkerAnimation.java` (session FSM, coalescing, timers and greeting/celebration speed exceptions), `GroundworkerPlayback.java` (read-only runtime adapter/completion markers).
 - `HoEL-Builder\src\main\java\com\houseofel\builder\HoELBuilder.java`: feature flag, optional dependency bootstrap and shutdown.
 - `HoEL-Builder\src\main\java\com\houseofel\builder\npc\HelperLevelService.java`: visual level-up hook, XP behavior unchanged.
 - `HoEL-Builder\src\main\java\com\houseofel\builder\job\JobManager.java`: optional visual hook wiring.
@@ -165,7 +169,7 @@ Dev-only changes include BetterModel jar/config/model/generated pack, deployed B
 
 ## Build, deployment and acceptance evidence
 
-Latest deployed Builder:
+Historical 5 October deployed Builder (current evidence is in [the 6 October report](Pre-release-2026-10-06.md)):
 
 `D:\Projects\House of EL\Local Dev Server 26.1.2\plugins\HoEL-Builder-0.1.0-SNAPSHOT.jar`
 

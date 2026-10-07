@@ -14,6 +14,12 @@ commands:
     description: Inspect or preview Groundworker visuals (no gameplay changes)
     usage: /helpermodel status|play <npcId> <clip>
 permissions:
+  houseofel.builder.setlevel:
+    description: Allows setting Helper levels for administration and testing
+    default: false
+  houseofel.builder.testpanel:
+    description: Allows opening the GUI test panel
+    default: false
   houseofel.builder.modeltest:
     description: Inspect and preview custom Helper model animations
     default: false

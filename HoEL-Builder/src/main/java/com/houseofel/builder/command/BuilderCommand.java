@@ -18,6 +18,8 @@ import net.citizensnpcs.api.npc.NPC;
 import org.bukkit.command.Command;
 import org.bukkit.command.TabExecutor;
 import org.bukkit.command.CommandSender;
+import org.bukkit.command.ConsoleCommandSender;
+import org.bukkit.command.RemoteConsoleCommandSender;
 import org.bukkit.entity.Player;
 
 import java.util.ArrayList;
@@ -29,6 +31,8 @@ import java.util.stream.Collectors;
 public final class BuilderCommand implements TabExecutor {
 
     private static final String SPAWN_PERMISSION = "houseofel.builder.spawn";
+    private static final String SET_LEVEL_PERMISSION = "houseofel.builder.setlevel";
+    private static final String TEST_PANEL_PERMISSION = "houseofel.builder.testpanel";
 
     private final SpecializationDialog specializationDialog;
     private final SpecializationForm specializationForm;
@@ -64,7 +68,7 @@ public final class BuilderCommand implements TabExecutor {
         if (args.length > 0 && "testbusy".equalsIgnoreCase(args[0])) {
             return testBusy(sender, args);
         }
-        if (args.length >= 3 && "setlevel".equalsIgnoreCase(args[0])) {
+        if (args.length > 0 && "setlevel".equalsIgnoreCase(args[0])) {
             return setLevel(sender, args);
         }
         if (!(sender instanceof Player player)) {
@@ -80,7 +84,13 @@ public final class BuilderCommand implements TabExecutor {
             case "spawn" -> spawn(player);
             case "confirm" -> regionService.confirmPending(player);
             case "cancel" -> regionService.cancelPending(player);
-            case "testpanel" -> screenService.openScreen(player, PanelTestLayout.create());
+            case "testpanel" -> {
+                if (!player.hasPermission(TEST_PANEL_PERMISSION)) {
+                    player.sendMessage("You don't have permission to preview the test panel.");
+                    return true;
+                }
+                screenService.openScreen(player, PanelTestLayout.create());
+            }
             default -> player.sendMessage("Usage: /builder spawn|confirm|cancel");
         }
         return true;
@@ -173,7 +183,9 @@ public final class BuilderCommand implements TabExecutor {
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
         boolean canPreview = !(sender instanceof Player) || sender.hasPermission(TEST_MENU_PERMISSION);
         if (args.length == 1) {
-            List<String> options = new ArrayList<>(List.of("spawn", "confirm", "cancel", "setlevel", "testpanel"));
+            List<String> options = new ArrayList<>(List.of("spawn", "confirm", "cancel"));
+            if (isConsole(sender) || sender.hasPermission(SET_LEVEL_PERMISSION)) options.add("setlevel");
+            if (sender instanceof Player && sender.hasPermission(TEST_PANEL_PERMISSION)) options.add("testpanel");
             if (canPreview) options.add("testmenu");
             if (!(sender instanceof Player) || sender.hasPermission("houseofel.builder.testbusy")) options.add("testbusy");
             return matching(options, args[0]);
@@ -212,7 +224,19 @@ public final class BuilderCommand implements TabExecutor {
         }
     }
 
+    private static boolean isConsole(CommandSender sender) {
+        return sender instanceof ConsoleCommandSender || sender instanceof RemoteConsoleCommandSender;
+    }
+
     private boolean setLevel(CommandSender sender, String[] args) {
+        if (!isConsole(sender) && !sender.hasPermission(SET_LEVEL_PERMISSION)) {
+            sender.sendMessage("You don't have permission to set Helper levels.");
+            return true;
+        }
+        if (args.length != 3) {
+            sender.sendMessage("Usage: /builder setlevel <npcId> <level>");
+            return true;
+        }
         try {
             int npcId = Integer.parseInt(args[1]);
             int targetLevel = Integer.parseInt(args[2]);

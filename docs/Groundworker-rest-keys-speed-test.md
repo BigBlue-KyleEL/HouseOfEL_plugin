@@ -1,5 +1,7 @@
 # Groundworker: temporary rest-key experiment and 2x speed test
 
+> **6 October pre-release policy:** `greet` joins `levelup` and `levelup_recover` at 1.0x; other clips use the configured 2.0x. This supersedes the historical accelerated-greeting timings below. No model or pack change. See [the implementation report](Pre-release-2026-10-06.md); in-game acceptance is pending.
+
 > **Current accepted state:** see [the consolidated Claude Code handoff](Groundworker-CLAUDE-CODE-HANDOFF.md). It supersedes historical hashes/timings and pending Java feedback below. Kyle accepted the final working speed, original level-up pacing and accessory fix.
 > **5 October update:** official rest-key model promoted and byte-identically deployed (`da84343c…268b`); experiment is historical. Shipped speed default is now 2.0, feature remains disabled by default, and levelup/recovery stay exempt at 1.0x. The consolidated handoff contains backup names, verification and deployment details.
 

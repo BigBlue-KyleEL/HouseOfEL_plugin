@@ -1,9 +1,13 @@
 helpers:
+  diagnostics:
+    # Sponge-absorption and Cofferdam debug logs only; warnings/errors are unaffected.
+    # After editing this switch, gracefully restart the server (no live reload command).
+    enabled: false
   custom-model:
     # Opt-in only; enabled in the Local Dev Server 26.1.2 config.
     enabled: false
     model: groundworker
-    # Playback multiplier and matching clip timers; levelup and levelup_recover stay at 1.0x.
+    # Playback multiplier and matching clip timers; greet, levelup and levelup_recover stay at 1.0x.
     animation-speed: 2.0
     nameplate-height: 2.6
     debug: false

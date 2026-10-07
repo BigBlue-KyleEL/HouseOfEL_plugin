@@ -72,10 +72,10 @@ class GroundworkerAnimationTest {
         assertEquals(PLACE, a.clip(), "a fresh event is accepted after the previous clip ends");
         assertEquals(2, played.stream().filter(c -> c == PLACE).count());
     }
-    @Test void doubleSpeedScalesWorkClipsButPreservesLevelupPacing() {
+    @Test void doubleSpeedScalesWorkClipsButPreservesGreetingAndLevelupPacing() {
         var a = new GroundworkerAnimation((c, h) -> {}, 2.0);
         for (var clip : GroundworkerAnimation.Clip.values()) {
-            assertEquals(clip == LEVELUP || clip == RECOVER ? clip.ticks : (clip.ticks + 1L) / 2,
+            assertEquals(clip == GREET || clip == LEVELUP || clip == RECOVER ? clip.ticks : (clip.ticks + 1L) / 2,
                     a.scaledTicks(clip), clip.name);
         }
         assertEquals(50, a.scaledTicks(100), "loop preview window also scales");
@@ -86,16 +86,17 @@ class GroundworkerAnimationTest {
         a.tick(47, true, false, false); assertEquals(PLACE, a.clip());
         a.tick(48, true, false, false); assertEquals(DIG, a.clip());
         a.greet(); a.tick(49, true, false, false);
-        a.tick(69, true, false, false); assertEquals(GREET, a.clip());
-        a.tick(70, true, false, false); assertEquals(DIG, a.clip());
-        a.tick(71, false, false, false); assertEquals(STOW, a.clip());
-        a.tick(105, false, false, false); assertEquals(STOW, a.clip());
-        a.tick(106, false, false, false); assertEquals(IDLE, a.clip());
-        a.levelUp(); a.tick(107, false, false, false);
-        a.tick(196, false, false, false); assertEquals(LEVELUP, a.clip());
-        a.tick(197, false, false, false); assertEquals(RECOVER, a.clip());
-        a.tick(306, false, false, false); assertEquals(RECOVER, a.clip());
-        a.tick(307, false, false, false); assertEquals(IDLE, a.clip());
+        a.tick(70, true, false, false); assertEquals(GREET, a.clip(), "still greeting at the old 2x deadline");
+        a.tick(90, true, false, false); assertEquals(GREET, a.clip());
+        a.tick(91, true, false, false); assertEquals(DIG, a.clip());
+        a.tick(92, false, false, false); assertEquals(STOW, a.clip());
+        a.tick(126, false, false, false); assertEquals(STOW, a.clip());
+        a.tick(127, false, false, false); assertEquals(IDLE, a.clip());
+        a.levelUp(); a.tick(128, false, false, false);
+        a.tick(217, false, false, false); assertEquals(LEVELUP, a.clip());
+        a.tick(218, false, false, false); assertEquals(RECOVER, a.clip());
+        a.tick(327, false, false, false); assertEquals(RECOVER, a.clip());
+        a.tick(328, false, false, false); assertEquals(IDLE, a.clip());
     }
     @Test void fractionalSpeedRoundsDurationsUpAndRejectsInvalidSpeed() {
         var a = new GroundworkerAnimation((c, h) -> {}, 1.5);
@@ -117,6 +118,18 @@ class GroundworkerAnimationTest {
         ready[0] = true; a.tick(128, true, false, false); assertEquals(RECOVER, a.clip());
         a.tick(238, true, false, false); assertEquals(RECOVER, a.clip());
         ready[0] = true; a.tick(239, true, false, false); assertEquals(IDLE, a.clip());
+    }
+
+    @Test void greetingPreviewKeepsAuthoredDeadlineAndWaitsForRenderedPose() {
+        boolean[] ready = {false};
+        var a = new GroundworkerAnimation((c, h) -> {}, 2, () -> ready[0]);
+        a.preview(GREET, 100);
+        a.tick(121, false, false, false); assertEquals(GREET, a.clip());
+        a.tick(141, false, false, false); assertEquals(GREET, a.clip());
+        a.tick(142, false, false, false); assertEquals(GREET, a.clip(), "must still await the final rendered pose");
+        ready[0] = true;
+        a.tick(143, false, false, false); assertEquals(IDLE, a.clip());
+        assertEquals(42, a.scaledTicks(GREET));
     }
 
 }

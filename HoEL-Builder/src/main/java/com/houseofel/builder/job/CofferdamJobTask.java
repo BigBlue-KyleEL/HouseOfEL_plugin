@@ -674,7 +674,7 @@ public final class CofferdamJobTask implements JobTask {
 
         if (waterAnchors.isEmpty() && lavaPlugs.isEmpty()) {
             int swept = drainInterior();
-            logger.info("[cofferdam-debug] drain sweep removed " + swept + " blocks, "
+            if (JobDiagnostics.enabled(plugin)) logger.info("[cofferdam-debug] drain sweep removed " + swept + " blocks, "
                     + "interior range x[" + (minX + 1) + ".." + (maxX - 1)
                     + "] y[" + (minY + 1) + ".." + (maxY - 1)
                     + "] z[" + (minZ + 1) + ".." + (maxZ - 1) + "]");
@@ -731,7 +731,7 @@ public final class CofferdamJobTask implements JobTask {
                     if (farEnough) {
                         anchors.add(block);
                         if (anchors.size() >= COFFERDAM_MAX_SPONGES_PER_WAVE) {
-                            logger.info("[cofferdam-debug] selectDrainAnchors scanned="
+                            if (JobDiagnostics.enabled(plugin)) logger.info("[cofferdam-debug] selectDrainAnchors scanned="
                                     + totalScanned + " waterFound=" + waterCount
                                     + " anchorsSelected=" + anchors.size());
                             return anchors;
@@ -740,7 +740,7 @@ public final class CofferdamJobTask implements JobTask {
                 }
             }
         }
-        logger.info("[cofferdam-debug] selectDrainAnchors scanned=" + totalScanned
+        if (JobDiagnostics.enabled(plugin)) logger.info("[cofferdam-debug] selectDrainAnchors scanned=" + totalScanned
                 + " waterFound=" + waterCount + " anchorsSelected=" + anchors.size());
         return anchors;
     }
@@ -802,7 +802,7 @@ public final class CofferdamJobTask implements JobTask {
                 }
             }
         }
-        logger.info("[cofferdam-debug] drainInterior scanned=" + scanned
+        if (JobDiagnostics.enabled(plugin)) logger.info("[cofferdam-debug] drainInterior scanned=" + scanned
                 + " removed=" + removed + " types=" + typeCounts);
         return removed;
     }

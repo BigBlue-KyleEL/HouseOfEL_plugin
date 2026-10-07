@@ -141,7 +141,8 @@ public final class GroundworkerModelService implements HelperVisuals, Listener, 
                         .resolve("models").resolve(model + ".bbmodel"), renderer.animations(), animationSpeed);
                 playbackRenderer = renderer;
                 plugin.getLogger().info("Groundworker runtime playback prepared at " + animationSpeed
-                        + "x, 25ms cadence; model file read only; dig=" + playback.get("dig").length() + "s; levelup="
+                        + "x, 25ms cadence; model file read only; dig=" + playback.get("dig").length()
+                        + "s; greet=" + playback.get("greet").length() + "s; levelup="
                         + playback.get("levelup").length() + "s; recover=" + playback.get("levelup_recover").length() + "s");
             } catch (java.io.IOException | RuntimeException ex) {
                 if (!warned) plugin.getLogger().log(java.util.logging.Level.SEVERE,
@@ -268,7 +269,7 @@ public final class GroundworkerModelService implements HelperVisuals, Listener, 
             sender.sendMessage("You do not have houseofel.builder.modeltest."); return true;
         }
         if (args.length == 1 && args[0].equalsIgnoreCase("status")) {
-            sender.sendMessage("Groundworker model=" + model + "; speed=" + animationSpeed + "x; levelup=1.0x; runtime-resampled; attached=" + entries.size() + "; Java-only visuals");
+            sender.sendMessage("Groundworker model=" + model + "; speed=" + animationSpeed + "x; greet=1.0x; levelup=1.0x; recover=1.0x; runtime-resampled; attached=" + entries.size() + "; Java-only visuals");
             for (Entry e : entries.values()) {
                 sender.sendMessage("NPC #" + e.npc.getId() + " " + e.npc.getName()
                         + ": " + e.animation.clip() + "; viewer scheduler=" + e.tracker.isScheduled()
