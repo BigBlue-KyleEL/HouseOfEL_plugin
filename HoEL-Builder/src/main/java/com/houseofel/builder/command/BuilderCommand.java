@@ -7,6 +7,7 @@ import com.houseofel.builder.gui.MainMenuLayout;
 import com.houseofel.builder.gui.JobWizardHandler;
 import com.houseofel.builder.job.JobManager;
 import com.houseofel.builder.npc.Specialization;
+import com.houseofel.builder.npc.RecruitmentAvailability;
 import com.houseofel.builder.npc.BuilderNpcService;
 import com.houseofel.builder.npc.HelperLevelService;
 import com.houseofel.builder.npc.SpecializationDialog;
@@ -70,6 +71,19 @@ public final class BuilderCommand implements TabExecutor {
         }
         if (args.length > 0 && "setlevel".equalsIgnoreCase(args[0])) {
             return setLevel(sender, args);
+        }
+        // Recruitment remains picker-based; unavailable argument shortcuts get the
+        // same refusal as a picker response and never reach any creation path.
+        if (args.length > 1 && "spawn".equalsIgnoreCase(args[0])) {
+            try {
+                Specialization requested = Specialization.valueOf(args[1].toUpperCase(Locale.ROOT));
+                if (!RecruitmentAvailability.available(requested)) {
+                    sender.sendMessage(RecruitmentAvailability.refusal());
+                    return true;
+                }
+            } catch (IllegalArgumentException ignored) {
+                // Unknown arguments continue to the existing usage response.
+            }
         }
         if (!(sender instanceof Player player)) {
             sender.sendMessage("This command can only be used in-game.");

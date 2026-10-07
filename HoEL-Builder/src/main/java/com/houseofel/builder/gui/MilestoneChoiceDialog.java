@@ -23,8 +23,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Java's native-Dialog picker for a specialization's Choice-slot milestones (level 8,
- * eventually 16 too) — shown from {@code BuilderNpcListener}'s right-click branch when a
+ * Java's custom-GUI picker with native-Dialog fallback for a specialization's Choice-slot milestones (levels 8
+ * and 16) — shown from {@code BuilderNpcListener}'s right-click branch when a
  * pending choice exists, or from the {@code "<Name> respec"} chat trigger once one's
  * already been made. Mirrors {@link com.houseofel.builder.npc.SpecializationDialog}'s
  * shape closely; the actual pick/respec guard chain lives in {@link MilestoneChoiceService}
@@ -32,11 +32,13 @@ import java.util.List;
  */
 public final class MilestoneChoiceDialog {
 
+    private final ForkScreenHandler forkScreens;
     private final Plugin plugin;
     private final MilestoneChoiceStore choiceStore;
     private final MilestoneChoiceService choiceService;
 
-    public MilestoneChoiceDialog(Plugin plugin, MilestoneChoiceStore choiceStore, MilestoneChoiceService choiceService) {
+    public MilestoneChoiceDialog(Plugin plugin, MilestoneChoiceStore choiceStore, MilestoneChoiceService choiceService, ForkScreenHandler forkScreens) {
+        this.forkScreens = forkScreens;
         this.plugin = plugin;
         this.choiceStore = choiceStore;
         this.choiceService = choiceService;
@@ -46,6 +48,20 @@ public final class MilestoneChoiceDialog {
         MilestoneChoiceRecord existing = choiceStore.find(npc.getUniqueId(), level);
         String name = BuilderNpcService.baseNameOf(npc);
         String title = existing == null ? name + " — Choose a Path" : name + " — Reconsider Your Path";
+
+        List<ForkScreenLayout.Option> customOptions = new ArrayList<>();
+        java.util.Map<String, Runnable> actions = new java.util.HashMap<>();
+        for (MilestoneChoiceOption option : options) {
+            boolean current = existing != null && existing.choice().equals(option.storedValue());
+            String action = "pick:" + option.storedValue();
+            customOptions.add(new ForkScreenLayout.Option(action,
+                    option.label() + (current ? " (current)" : ""), option.description()));
+            actions.put(action, () -> {
+                NPC live = net.citizensnpcs.api.CitizensAPI.getNPCRegistry().getByUniqueId(npc.getUniqueId());
+                if (live != null) choiceService.attempt(player, live, level, option);
+            });
+        }
+        if (forkScreens.open(player, title, customOptions, actions)) return;
 
         // Descriptions also go in the body, not just each button's hover tooltip below —
         // a tooltip is real per-button text on Java, but hover-only, so this keeps both

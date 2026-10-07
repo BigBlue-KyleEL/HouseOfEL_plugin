@@ -17,6 +17,7 @@ import com.houseofel.builder.death.RecruitmentCost;
 import com.houseofel.builder.death.WorkLedgerBook;
 import com.houseofel.builder.death.WorkLedgerRecoveryListener;
 import com.houseofel.builder.gui.BedrockJobForm;
+import com.houseofel.builder.gui.ForkScreenHandler;
 import com.houseofel.builder.gui.JavaJobDialog;
 import com.houseofel.builder.gui.JobWizardHandler;
 import com.houseofel.builder.gui.MilestoneChoiceDialog;
@@ -77,7 +78,6 @@ public final class HoELBuilder extends JavaPlugin {
         toilDatabase = new ToilDatabase(this);
         DeathRecordStore deathRecordStore = new DeathRecordStore(toilDatabase, getLogger());
         MilestoneChoiceStore choiceStore = new MilestoneChoiceStore(toilDatabase, getLogger());
-        MilestoneChoiceService choiceService = new MilestoneChoiceService(deathRecordStore, choiceStore);
         DailyTaperStore dailyTaperStore = new DailyTaperStore(toilDatabase, getLogger());
         VarietyTracker varietyTracker = new VarietyTracker();
         PresenceTracker presenceTracker = new PresenceTracker();
@@ -86,6 +86,7 @@ public final class HoELBuilder extends JavaPlugin {
         HelperTitleService titleService = new HelperTitleService();
         levelService = new HelperLevelService(this, toilDatabase, titleService, deathRecordStore,
                 choiceStore, varietyTracker, presenceTracker, dailyTaperStore);
+        MilestoneChoiceService choiceService = new MilestoneChoiceService(deathRecordStore, choiceStore, levelService);
         RecruitmentCost recruitmentCost = new RecruitmentCost(deathRecordStore);
         BuilderNpcService npcService = new BuilderNpcService(levelService, titleService, recruitmentCost, deathRecordStore);
         WorkLedgerBook ledgerBook = new WorkLedgerBook(this);
@@ -107,18 +108,23 @@ public final class HoELBuilder extends JavaPlugin {
         RegionSelectionService regionService = new RegionSelectionService(this, rod, jobExecutionService);
         JavaJobDialog javaDialog = new JavaJobDialog(this, regionService, deathRecordStore, choiceStore, levelService);
         BedrockJobForm bedrockForm = new BedrockJobForm(this, regionService, deathRecordStore, choiceStore, levelService);
-        SpecializationDialog specializationDialog = new SpecializationDialog(this, npcService);
-        SpecializationForm specializationForm = new SpecializationForm(this, npcService);
-        MilestoneChoiceDialog choiceDialog = new MilestoneChoiceDialog(this, choiceStore, choiceService);
-        MilestoneChoiceForm choiceForm = new MilestoneChoiceForm(this, choiceStore, choiceService);
-
         HoELCore core = (HoELCore) getServer().getPluginManager().getPlugin("HoEL-Core");
         GuiCapabilityService capabilityService = core.getCapabilityService();
         ScreenService screenService = core.getScreenService();
+        ForkScreenHandler forkScreens = new ForkScreenHandler(this, screenService, capabilityService);
+        getServer().getPluginManager().registerEvents(forkScreens, this);
+
+        SpecializationDialog specializationDialog = new SpecializationDialog(this, npcService, forkScreens);
+        SpecializationForm specializationForm = new SpecializationForm(this, npcService);
+        MilestoneChoiceDialog choiceDialog = new MilestoneChoiceDialog(this, choiceStore, choiceService, forkScreens);
+        MilestoneChoiceForm choiceForm = new MilestoneChoiceForm(this, choiceStore, choiceService);
 
         JobWizardHandler wizardHandler = new JobWizardHandler(this, screenService,
                 regionService, deathRecordStore, choiceStore, levelService);
-        screenService.setDispatchHandler(wizardHandler);
+        screenService.setDispatchHandler((player, screenId, action, values) -> {
+            if (ForkScreenHandler.handles(screenId)) forkScreens.onDispatch(player, screenId, action, values);
+            else wizardHandler.onDispatch(player, screenId, action, values);
+        });
         getServer().getPluginManager().registerEvents(wizardHandler, this);
 
         BuilderCommand builderCommand = new BuilderCommand(specializationDialog, specializationForm,

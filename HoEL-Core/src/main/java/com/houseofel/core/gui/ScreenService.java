@@ -66,7 +66,7 @@ public final class ScreenService implements PluginMessageListener, Listener {
                 }
             } else if (channel.equals(GuiConstants.SCREEN_CLOSED_CHANNEL)) {
                 ScreenClosedPayload closed = ScreenClosedPayload.fromBytes(message);
-                openScreens.remove(player.getUniqueId());
+                openScreens.remove(player.getUniqueId(), closed.screenId());
                 logger.info("Screen '" + closed.screenId()
                         + "' closed by " + player.getName());
             }

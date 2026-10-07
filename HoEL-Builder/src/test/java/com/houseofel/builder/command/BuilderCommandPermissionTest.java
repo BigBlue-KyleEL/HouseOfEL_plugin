@@ -98,4 +98,16 @@ class BuilderCommandPermissionTest {
             }
         }
     }
+    @Test void unavailableSpawnArgumentsUseSameRefusalWithoutCreatingAnything() {
+        var player = sender(Player.class,Set.of("houseofel.builder.spawn"));
+        for (String spec : List.of("lumberjack","FARMER")) {
+            command.onCommand(player,null,"builder",new String[]{"spawn",spec});
+            assertEquals(com.houseofel.builder.npc.RecruitmentAvailability.MESSAGE,messages.getLast());
+        }
+        var console = sender(ConsoleCommandSender.class,Set.of());
+        command.onCommand(console,null,"builder",new String[]{"spawn","farmer"});
+        assertEquals(com.houseofel.builder.npc.RecruitmentAvailability.MESSAGE,messages.getLast());
+        assertEquals(0,packets);
+    }
+
 }

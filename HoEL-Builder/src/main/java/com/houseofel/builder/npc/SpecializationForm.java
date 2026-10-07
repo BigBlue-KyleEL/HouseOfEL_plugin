@@ -35,7 +35,7 @@ public final class SpecializationForm {
                 .title("New Helper — Specialization")
                 .content("Pick this Helper's specialization.");
         for (Specialization specialization : Specialization.values()) {
-            builder.button(specialization.label());
+            builder.button(optionLabel(specialization));
         }
         builder.validResultHandler(response ->
                         onPick(player, location, Specialization.values()[response.clickedButtonId()]))
@@ -44,10 +44,20 @@ public final class SpecializationForm {
         floodgatePlayer.sendForm(builder.build());
     }
 
+    public static String optionLabel(Specialization specialization) {
+        return RecruitmentAvailability.label(specialization);
+    }
+
     private void onPick(Player player, Location location, Specialization specialization) {
         // The form response arrives off the main thread — recruitHelper() creates a real
         // NPC/entity (on success), which needs to happen on it.
         Bukkit.getScheduler().runTask(plugin, () -> {
+            if (!player.isOnline()) return;
+            if (!RecruitmentAvailability.available(specialization)) {
+                player.sendMessage(RecruitmentAvailability.refusal());
+                open(player,location);
+                return;
+            }
             NPC npc = npcService.recruitHelper(player, location, specialization);
             if (npc == null) {
                 // RecruitmentCost already told the player exactly what they're short on.

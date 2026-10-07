@@ -51,6 +51,10 @@ public final class BuilderNpcService {
      * {@link RecruitmentCost#tryCharge}) if they can't afford it.
      */
     public NPC recruitHelper(Player owner, Location location, Specialization specialization) {
+        if (!RecruitmentAvailability.available(specialization)) {
+            owner.sendMessage(RecruitmentAvailability.refusal());
+            return null;
+        }
         if (!recruitmentCost.tryCharge(owner, specialization)) {
             return null;
         }
@@ -60,6 +64,7 @@ public final class BuilderNpcService {
     }
 
     public NPC spawnHelper(Location location, Specialization specialization) {
+        if (!RecruitmentAvailability.available(specialization)) throw new IllegalArgumentException(RecruitmentAvailability.MESSAGE);
         String baseName = nextName();
         NPC npc = CitizensAPI.getNPCRegistry().createNPC(EntityType.VILLAGER, baseName);
         npc.data().setPersistent(ROLE_KEY, ROLE_VALUE);

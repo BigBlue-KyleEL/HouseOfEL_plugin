@@ -2,6 +2,8 @@ package com.houseofel.builder.choice;
 
 import com.houseofel.builder.death.DeathRecordStore;
 import com.houseofel.builder.npc.BuilderNpcService;
+import com.houseofel.builder.npc.HelperLevelService;
+import com.houseofel.builder.npc.Specialization;
 import net.citizensnpcs.api.npc.NPC;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
@@ -22,10 +24,12 @@ public final class MilestoneChoiceService {
     private static final int RESPEC_COST = 200;
     private static final long RESPEC_COOLDOWN_MILLIS = 7L * 24 * 60 * 60 * 1000;
 
+    private final HelperLevelService levelService;
     private final DeathRecordStore deathRecordStore;
     private final MilestoneChoiceStore choiceStore;
 
-    public MilestoneChoiceService(DeathRecordStore deathRecordStore, MilestoneChoiceStore choiceStore) {
+    public MilestoneChoiceService(DeathRecordStore deathRecordStore, MilestoneChoiceStore choiceStore, HelperLevelService levelService) {
+        this.levelService = levelService;
         this.deathRecordStore = deathRecordStore;
         this.choiceStore = choiceStore;
     }
@@ -40,6 +44,12 @@ public final class MilestoneChoiceService {
             return;
         }
 
+        MilestoneChoiceRecord parent = level > 8 ? choiceStore.find(npcUuid, 8) : null;
+        if (!isEligible(levelService.specializationOf(npc), levelService.levelOf(npc), level,
+                parent == null ? null : parent.choice(), chosen)) {
+            player.sendMessage(Component.text("That path is no longer available for " + name + ".", NamedTextColor.RED));
+            return;
+        }
         MilestoneChoiceRecord existing = choiceStore.find(npcUuid, level);
         long now = System.currentTimeMillis();
 
@@ -75,4 +85,11 @@ public final class MilestoneChoiceService {
         player.sendMessage(Component.text(
                 name + " will take the " + chosen.label() + " path instead.", NamedTextColor.GOLD));
     }
+    /** Revalidate current level, specialization and L8 parent after any screen delay. */
+    static boolean isEligible(Specialization specialization, int currentLevel, int choiceLevel,
+                              String parentChoice, MilestoneChoiceOption chosen) {
+        return currentLevel >= choiceLevel && (choiceLevel <= 8 || parentChoice != null)
+                && MilestoneChoiceRegistry.optionsFor(specialization, choiceLevel, parentChoice).contains(chosen);
+    }
+
 }
